@@ -198,8 +198,12 @@ def parse_format3_mod(path: Path) -> tuple[str, list[Format3Intent]]:
             raise ValueError(
                 f"intent #{i} is not a JSON object"
             )
-        # Required keys per the v3 spec example file
-        for required in ("entry", "key", "field", "op"):
+        # Required keys per the v3 spec example file. NattKh's newer
+        # skill .field.json variant (e.g. skill_inf_stamina_mod) drops
+        # 'op' since 'set' is implicit. Default to 'set' when absent,
+        # to match the only op CDUMM's apply path supports anyway.
+        # GitHub #66.
+        for required in ("entry", "key", "field"):
             if required not in raw:
                 raise ValueError(
                     f"intent #{i} is missing required key '{required}'"
@@ -222,7 +226,7 @@ def parse_format3_mod(path: Path) -> tuple[str, list[Format3Intent]]:
             entry=str(raw["entry"]),
             key=raw_key,
             field=str(raw["field"]),
-            op=str(raw["op"]),
+            op=str(raw.get("op", "set")),
             new=raw["new"],
         ))
 
