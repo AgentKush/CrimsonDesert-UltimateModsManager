@@ -1057,6 +1057,12 @@ def _apply_byte_patches(data: bytearray, changes: list[dict],
             if offset + len(patched_bytes) > len(data):
                 logger.warning("Patch at offset %d exceeds file size %d, skipping",
                                offset, len(data))
+                # Record so the all-or-nothing filter taints the mod
+                # and the user sees the skip in the post-apply toast.
+                # /systematic-debugging finding 2026-05-05.
+                _record_skip(
+                    change, offset, None,
+                    f"offset {offset} exceeds file size {len(data)}")
                 continue
 
             if "original" in change:
