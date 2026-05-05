@@ -477,6 +477,25 @@ def _make_format3_vanilla_extractor(
                     return None
                 chosen_entry = live_entry
                 using_live = True
+                # Lazy backup so the next Format 3 apply finds the
+                # backup directly. Mirrors the behavior in
+                # ``resolve_vanilla_source`` for the v2 path.
+                # GitHub #68.
+                try:
+                    backup_paz = vanilla_dir / paz_rel
+                    if not backup_paz.exists():
+                        backup_paz.parent.mkdir(
+                            parents=True, exist_ok=True)
+                        _backup_copy(paz_path, backup_paz)
+                        sibling_pamt = paz_path.with_suffix(".pamt")
+                        if sibling_pamt.exists():
+                            backup_pamt = backup_paz.with_suffix(".pamt")
+                            if not backup_pamt.exists():
+                                _backup_copy(sibling_pamt, backup_pamt)
+                except Exception as e:
+                    logger.debug(
+                        "Lazy vanilla backup failed for %s: %s",
+                        paz_rel, e)
             pamt_dir = _derive_pamt_dir(chosen_entry.paz_file)
             if not pamt_dir:
                 return None
@@ -846,6 +865,30 @@ def resolve_vanilla_source(
             f"live PAZ '{paz_rel}' diverged from snapshot "
             "\u2014 cannot safely patch (user has modded the base install)")
 
+    # Lazy backup: copy the verified-vanilla live PAZ + sibling PAMT
+    # into vanilla_dir so the next apply finds the backup directly and
+    # skips the warn path entirely. Otherwise the warning fires on
+    # every apply forever, and the recommended "Run Fix Everything"
+    # action doesn't actually create the missing backup (it only
+    # backs up archives critical for currently-enabled JSON mods).
+    # GitHub #68 (mit999sif).
+    try:
+        backup_paz = vanilla_dir / paz_rel
+        if not backup_paz.exists():
+            backup_paz.parent.mkdir(parents=True, exist_ok=True)
+            _backup_copy(paz_path, backup_paz)
+            sibling_pamt = paz_path.with_suffix(".pamt")
+            if sibling_pamt.exists():
+                backup_pamt = backup_paz.with_suffix(".pamt")
+                if not backup_pamt.exists():
+                    _backup_copy(sibling_pamt, backup_pamt)
+    except Exception as e:
+        # Backup failure is non-fatal \u2014 the apply itself can still
+        # proceed with the verified-live bytes, the warning just
+        # fires again next apply.
+        logger.debug(
+            "Lazy vanilla backup failed for %s: %s", paz_rel, e)
+
     if warn_callback is not None:
         warn_callback(paz_rel)
     return live_entry
@@ -1189,8 +1232,9 @@ class ApplyWorker(QObject):
                 return
             warned_once.add(paz_rel)
             msg = (f"Vanilla backup missing for {paz_rel}, "
-                   "using hash-verified live copy. "
-                   "Run Settings \u2192 Fix Everything to refresh backups.")
+                   "using hash-verified live copy and creating the "
+                   "backup now. Subsequent applies will use the "
+                   "backup directly.")
             logger.warning("mount-time: %s", msg)
             self._soft_warnings.append(msg)
             self.warning.emit(msg)
