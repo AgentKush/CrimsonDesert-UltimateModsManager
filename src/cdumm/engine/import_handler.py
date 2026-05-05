@@ -2560,7 +2560,8 @@ def import_from_zip(
         if len(f3_jsons) == 1:
             return import_from_natt_format_3(
                 json_path=f3_jsons[0], game_dir=game_dir, db=db,
-                snapshot=snapshot, deltas_dir=deltas_dir)
+                snapshot=snapshot, deltas_dir=deltas_dir,
+                existing_mod_id=existing_mod_id)
         if len(f3_jsons) > 1:
             # Variant pack (CrimsonWings: 10pct/25pct/50pct/75pct/
             # infinite of one mod) is detected via stem prefix +
@@ -2994,7 +2995,8 @@ def import_from_folder(
     if len(f3_jsons) == 1:
         return import_from_natt_format_3(
             json_path=f3_jsons[0], game_dir=game_dir, db=db,
-            snapshot=snapshot, deltas_dir=deltas_dir)
+            snapshot=snapshot, deltas_dir=deltas_dir,
+            existing_mod_id=existing_mod_id)
     if len(f3_jsons) > 1:
         result = ModImportResult(mod_name)
         f3_pack = _scan_format3_variant_pack(folder_path)
