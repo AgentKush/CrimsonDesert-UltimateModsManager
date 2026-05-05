@@ -164,6 +164,79 @@ _VARIANT_TAIL_SIZES: dict[int, int] = {
 }
 
 
+# Per-tag variant tail field layout. For each tag whose body is
+# purely fixed-width primitives (no BuffDataValueBlock or other
+# variable-length sub-records), this maps the tag to the variant
+# name plus the (field_name, dtype, offset, size) of each field.
+# Generated from the engine's variant struct definitions and
+# cross-validated against the empirical tail sizes in
+# ``_VARIANT_TAIL_SIZES``.
+#
+# Tags listed in _VARIANT_TAIL_SIZES but absent from this table
+# have a variable-length body or a structure not yet decoded ,
+# locate_buff_field returns None for body.fXX paths on those tags.
+_VARIANT_BODY_FIELDS: dict[int, tuple[str, list[tuple[str, str, int, int]]]] = {
+    2: ("VaryCollectDropRateBuffData",
+        [("f00", "u32", 0, 4), ("f01", "u64", 4, 8)]),
+    3: ("VaryStaticStatBuffData",
+        [("f00", "u32", 0, 4), ("f01", "u64", 4, 8)]),
+    7: ("VaryStaticStatRateBuffData",
+        [("f00", "u32", 0, 4), ("f01", "u64", 4, 8),
+         ("f02", "u64", 12, 8)]),
+    12: ("VaryDataDefinedStatBuffData",
+         [("f00", "u32", 0, 4), ("f01", "u64", 4, 8),
+          ("f02", "u64", 12, 8), ("f03", "u64", 20, 8)]),
+    14: ("VaryDataDefinedRegenerateValueBuffData",
+         [("f00", "u32", 0, 4), ("f01", "u64", 4, 8)]),
+    19: ("VaryDataDefinedStatMaxValueBuffData",
+         [("f00", "u32", 0, 4), ("f01", "u64", 4, 8),
+          ("f02", "u8", 12, 1)]),
+    24: ("ChangeElementalStatSpeedBuffData",
+         [("f00", "u32", 0, 4), ("f01", "u32", 4, 4),
+          ("f02", "u32", 8, 4), ("f03", "u8", 12, 1)]),
+    54: ("VarySkillDamagePercentStatBuffData",
+         [("f00", "u32", 0, 4), ("f01", "u16", 4, 2),
+          ("f02", "u64", 6, 8)]),
+    59: ("SetStatMinRateBuffData",
+         [("f00", "u8", 0, 1), ("f01", "u64", 1, 8),
+          ("f02", "u64", 9, 8)]),
+    65: ("StealthBuffData",
+         [("f00", "u32", 0, 4), ("f01", "u32", 4, 4),
+          ("f02", "u32", 8, 4)]),
+    70: ("DampMovementBuffData",
+         [("f00", "u32", 0, 4), ("f01", "u32", 4, 4)]),
+    80: ("ChangeBuffLevelBuffData",
+         [("f00", "u32", 0, 4), ("f01", "u32", 4, 4)]),
+    82: ("ChangeAnimationSpeedBuffData",
+         [("f00", "u32", 0, 4), ("f01", "u32", 4, 4),
+          ("f02", "u32", 8, 4), ("f03", "u32", 12, 4)]),
+    89: ("ClimbSlipBuffData",
+         [("f00", "u32", 0, 4)]),
+    90: ("DetectBrightnessBuffData",
+         [("f00", "u32", 0, 4), ("f01", "u32", 4, 4),
+          ("f02", "u32", 8, 4)]),
+    104: ("AddPercentInGameContentsBuffData",
+          [("f00", "u8", 0, 1), ("f01", "u64", 1, 8)]),
+    105: ("VaryCustomIntInGameContentsBuffData",
+          [("f00", "u8", 0, 1), ("f01", "u32", 1, 4)]),
+    106: ("TribeAdditionalDamageRateBuffData",
+          [("f00", "u32", 0, 4), ("f01", "u64", 4, 8)]),
+    107: ("AdditionalBreakingImpulseDamageBuffData",
+          [("f00", "u8", 0, 1), ("f01", "u8", 1, 1)]),
+    109: ("AddDamageBonusFromComboBuffData",
+          [("f00", "u32", 0, 4)]),
+    116: ("AddCritiacalRateByMaterialKeyBuffData",
+          [("f00", "u32", 0, 4), ("f01", "u64", 4, 8)]),
+}
+
+# Reverse: variant name -> tag. Used to detect no-op
+# ``data.variant.type`` writes (mod sets type to a name whose tag
+# already matches the entry's current tag).
+_VARIANT_NAME_TO_TAG: dict[str, int] = {
+    name: tag for tag, (name, _) in _VARIANT_BODY_FIELDS.items()
+}
+
+
 @dataclass(frozen=True)
 class BuffItemHeader:
     """Header that precedes each entry in the ``buff_data_list``
@@ -938,6 +1011,34 @@ def locate_buff_field(
             payload = parse_payload_common(
                 entry_bytes, header.payload_offset)
             return getattr(payload, offset_attr), width, dtype
+        # ``data.variant.type`` resolves to the tag byte itself ,
+        # the variant tag IS the type discriminator. Apply path uses
+        # this to detect no-op confirmation writes.
+        if tail == ".data.variant.type":
+            if header.absent_flag != 0:
+                return None
+            payload = parse_payload_common(
+                entry_bytes, header.payload_offset)
+            return payload.tag_offset, 1, "u8"
+        # ``data.variant.body.fXX`` resolves to the field's offset
+        # inside the variant tail. Variant tail starts at the end of
+        # the common payload (payload.end_offset) and its layout is
+        # tag-specific. We only support tags whose body is purely
+        # fixed-width primitives.
+        if tail.startswith(".data.variant.body."):
+            if header.absent_flag != 0:
+                return None
+            leaf = tail[len(".data.variant.body."):]
+            payload = parse_payload_common(
+                entry_bytes, header.payload_offset)
+            variant = _VARIANT_BODY_FIELDS.get(payload.tag)
+            if variant is None:
+                return None
+            _name, fields = variant
+            for fname, ftype, foff, fsize in fields:
+                if fname == leaf:
+                    return payload.end_offset + foff, fsize, ftype
+            return None
         return None
 
     return None

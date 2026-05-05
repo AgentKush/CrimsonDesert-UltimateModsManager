@@ -673,16 +673,75 @@ def _buffinfo_intents_to_changes(
         if located is None:
             continue
         rel_in_entry, width, dtype = located
+        if dtype == "cstring":
+            # Length-preserving asset_path write: the located offset
+            # points at the u32 length prefix. The string body sits 4
+            # bytes later. We only support same-byte-length writes ,
+            # changing the length would shift every subsequent byte
+            # in the entry and require whole-entry re-encoding (which
+            # then ripples through PAMT/PAPGT integrity hashes).
+            if not isinstance(intent.new, str):
+                continue
+            length_pos = entry_off + rel_in_entry
+            if length_pos + 4 > entry_end:
+                continue
+            current_len = struct.unpack_from(
+                "<I", vanilla_body, length_pos)[0]
+            new_b = intent.new.encode("utf-8")
+            if len(new_b) != current_len:
+                continue  # length change not supported here
+            body_pos = length_pos + 4
+            if body_pos + current_len > entry_end:
+                continue
+            original_bytes = bytes(
+                vanilla_body[body_pos:body_pos + current_len])
+            # Emit a change covering the body bytes only , length
+            # prefix is unchanged.
+            eid_size = 4
+            name_len = struct.unpack_from(
+                "<I", vanilla_body, entry_off + eid_size)[0]
+            name_end = entry_off + eid_size + 4 + name_len
+            try:
+                entry_name = vanilla_body[
+                    entry_off + eid_size + 4:name_end].decode("utf-8")
+            except UnicodeDecodeError:
+                entry_name = intent.entry
+            out.append({
+                "entry": entry_name or intent.entry,
+                "rel_offset": body_pos - name_end,
+                "original": original_bytes.hex(),
+                "patched": new_b.hex(),
+                "label": f"{intent.entry}.{intent.field}",
+            })
+            continue
         spec = _BUFFINFO_DTYPE_PACK.get(dtype)
         if spec is None:
-            # cstring or other variable-length leaf , not a primitive
-            # write target; needs the per-tag decoder.
             continue
         fmt, expected_width = spec
         if width != expected_width:
             continue
+        # ``data.variant.type`` paths arrive as strings (the variant
+        # name like "AddPercentInGameContentsBuffData"). Translate to
+        # the tag int via the name table. If the name's tag matches
+        # the current tag byte, this is a no-op confirmation: emit
+        # the same byte as both original and patched. If the names
+        # disagree, skip , changing the variant type would require
+        # re-encoding the whole tail with a different layout.
+        new_value = intent.new
+        if (isinstance(new_value, str)
+                and intent.field.endswith(".data.variant.type")):
+            from cdumm._vendor.buffinfo_parser import (
+                _VARIANT_NAME_TO_TAG,
+            )
+            new_tag = _VARIANT_NAME_TO_TAG.get(new_value)
+            if new_tag is None:
+                continue  # unknown variant name
+            current_tag = vanilla_body[entry_off + rel_in_entry]
+            if new_tag != current_tag:
+                continue  # type change not supported (different layout)
+            new_value = current_tag  # no-op, write current byte
         try:
-            new_bytes = struct.pack(f"<{fmt}", intent.new)
+            new_bytes = struct.pack(f"<{fmt}", new_value)
         except (struct.error, TypeError):
             continue
         abs_off = entry_off + rel_in_entry
