@@ -409,6 +409,97 @@ def aggregate_json_mods_into_synthetic_patches(
     return synth_patch_data, per_mod_summary
 
 
+def _make_format3_vanilla_extractor(
+    *, vanilla_dir, game_dir, snapshot_mgr,
+    get_vanilla_entry_content, extract_sibling_entry,
+):
+    """Build the ``vanilla_extractor`` callable used by
+    ``expand_format3_into_aggregated``.
+
+    Resolution order mirrors the v2 ``resolve_vanilla_source`` path:
+      1. ``vanilla_dir`` backup PAMT entry — return its bytes.
+      2. ``game_dir`` live PAMT entry — return its bytes ONLY when
+         the live PAZ's hash matches the snapshot fingerprint. If the
+         live file is modded, return None so the caller surfaces a
+         clean "vanilla bytes unavailable" warning instead of feeding
+         modded bytes to a downstream parser (GitHub #62/#68).
+
+    Without the hash check, a Format 3 iteminfo mod applied on top of
+    a previously-applied v2 iteminfo mod hands the writer the modded
+    bytes; the writer hits "CArray count exceeds remaining bytes" and
+    crashes the apply.
+    """
+    from cdumm.engine.json_patch_handler import (
+        _derive_pamt_dir, _find_pamt_entry,
+    )
+    from cdumm.engine.snapshot_manager import hash_file
+
+    def _extractor(target):
+        try:
+            backup_entry = _find_pamt_entry(target, vanilla_dir)
+            chosen_entry = None
+            using_live = False
+            if backup_entry is not None and Path(
+                    backup_entry.paz_file).exists():
+                chosen_entry = backup_entry
+            else:
+                live_entry = _find_pamt_entry(target, game_dir)
+                if live_entry is None:
+                    return None
+                paz_path = Path(live_entry.paz_file)
+                if not paz_path.exists():
+                    return None
+                # Hash-verify before trusting live bytes.
+                try:
+                    paz_rel = str(paz_path.relative_to(
+                        game_dir)).replace("\\", "/")
+                except ValueError:
+                    paz_rel = paz_path.name
+                snap_hash = snapshot_mgr.get_file_hash(paz_rel)
+                if snap_hash is None:
+                    logger.warning(
+                        "Format 3 vanilla extraction refused for %s: "
+                        "no snapshot hash for %s. Run Settings -> "
+                        "Fix Everything to refresh.",
+                        target, paz_rel)
+                    return None
+                try:
+                    live_hash, _size = hash_file(paz_path)
+                except FileNotFoundError:
+                    return None
+                if live_hash != snap_hash:
+                    logger.warning(
+                        "Format 3 vanilla extraction refused for %s: "
+                        "live PAZ %s diverged from snapshot (already "
+                        "modded). Run Settings -> Fix Everything or "
+                        "revert before re-applying.",
+                        target, paz_rel)
+                    return None
+                chosen_entry = live_entry
+                using_live = True
+            pamt_dir = _derive_pamt_dir(chosen_entry.paz_file)
+            if not pamt_dir:
+                return None
+            file_path = f"{pamt_dir}/{Path(chosen_entry.paz_file).name}"
+            body = get_vanilla_entry_content(file_path, target)
+            if body is None:
+                return None
+            header_path = target
+            if header_path.endswith(".pabgb"):
+                header_path = header_path[:-len(".pabgb")] + ".pabgh"
+            header = extract_sibling_entry(pamt_dir, header_path)
+            if header is None:
+                return None
+            return body, header
+        except Exception:
+            logger.debug(
+                "Format 3 vanilla extraction failed for %s",
+                target, exc_info=True)
+            return None
+
+    return _extractor
+
+
 def _expand_format3_into_synth_data(
     synth_data: dict, db, vanilla_dir, game_dir,
     get_vanilla_entry_content, extract_sibling_entry,
@@ -429,38 +520,16 @@ def _expand_format3_into_synth_data(
     InfoBar.
     """
     from cdumm.engine.format3_apply import expand_format3_into_aggregated
-    from cdumm.engine.json_patch_handler import (
-        _derive_pamt_dir, _find_pamt_entry,
-    )
+    from cdumm.engine.snapshot_manager import SnapshotManager
 
-    def _vanilla_extractor(target):
-        """Resolve vanilla bytes for a Format 3 mod's target file.
-        Returns (body, header) or None on any failure."""
-        try:
-            entry = _find_pamt_entry(target, vanilla_dir)
-            if entry is None:
-                entry = _find_pamt_entry(target, game_dir)
-            if entry is None:
-                return None
-            pamt_dir = _derive_pamt_dir(entry.paz_file)
-            if not pamt_dir:
-                return None
-            file_path = f"{pamt_dir}/{Path(entry.paz_file).name}"
-            body = get_vanilla_entry_content(file_path, target)
-            if body is None:
-                return None
-            header_path = target
-            if header_path.endswith(".pabgb"):
-                header_path = header_path[:-len(".pabgb")] + ".pabgh"
-            header = extract_sibling_entry(pamt_dir, header_path)
-            if header is None:
-                return None
-            return body, header
-        except Exception:
-            logger.debug(
-                "Format 3 vanilla extraction failed for %s",
-                target, exc_info=True)
-            return None
+    snapshot_mgr = SnapshotManager(db)
+    _vanilla_extractor = _make_format3_vanilla_extractor(
+        vanilla_dir=vanilla_dir,
+        game_dir=game_dir,
+        snapshot_mgr=snapshot_mgr,
+        get_vanilla_entry_content=get_vanilla_entry_content,
+        extract_sibling_entry=extract_sibling_entry,
+    )
 
     # Decompose synth_data → mutable dicts the expansion mutates
     aggregated = {p["game_file"]: list(p.get("changes", []))
