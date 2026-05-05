@@ -279,6 +279,60 @@ def _vanilla_entries():
     return out
 
 
+def test_locate_buff_field_walks_to_index_one_via_known_variant():
+    """Build an entry whose item 0 uses variant tag 17 (zero-byte
+    tail per the empirical table), then resolve a path on item 1.
+    The walker must skip past item 0's payload and land on item 1
+    correctly."""
+    payload_tag17 = _build_payload_bytes(tag=17)
+    payload_item1 = _build_payload_bytes(tag=80, by58=99)
+    name = b"X"
+    raw = (
+        struct.pack("<I", 1)
+        + struct.pack("<I", len(name)) + name
+        + bytes([0])
+        + struct.pack("<I", 2)  # 2 items
+        # item 0: header + payload (tag 17 has 0-byte tail)
+        + struct.pack("<I", 0xAA) + bytes([0x00]) + payload_tag17
+        # item 1: header + payload (tag 80 has 8-byte tail, but we
+        # don't need to walk past it, so any tail works)
+        + struct.pack("<I", 0xBB) + bytes([0x00]) + payload_item1
+        + b"\x00" * 8  # tag 80 tail bytes
+        # wrapper trailer
+        + struct.pack("<I", 1) + struct.pack("<I", 5)
+        + struct.pack("<I", 0) + bytes([0])
+        + struct.pack("<I", 0) * 3 + bytes([0, 0])
+    )
+    res = locate_buff_field(
+        raw, "buff_data_list[1].data.base.by58")
+    assert res is not None, (
+        "walker should have found item 1 by skipping item 0 "
+        "(tag 17 has known 0-byte tail)")
+    off, _, _ = res
+    assert raw[off] == 99
+
+
+def test_locate_buff_field_returns_none_when_intermediate_tag_unknown():
+    """If item 0 has a tag NOT in the variant size table, we can't
+    walk past it , item 1+ paths must return None gracefully."""
+    payload_unknown = _build_payload_bytes(tag=200)  # not in table
+    payload_item1 = _build_payload_bytes(tag=80)
+    name = b"X"
+    raw = (
+        struct.pack("<I", 1)
+        + struct.pack("<I", len(name)) + name
+        + bytes([0]) + struct.pack("<I", 2)
+        + struct.pack("<I", 0) + bytes([0x00]) + payload_unknown
+        + struct.pack("<I", 0) + bytes([0x00]) + payload_item1
+        + b"\x00" * 8
+        + struct.pack("<I", 1) + struct.pack("<I", 5)
+        + struct.pack("<I", 0) + bytes([0])
+        + struct.pack("<I", 0) * 3 + bytes([0, 0])
+    )
+    assert locate_buff_field(
+        raw, "buff_data_list[1].data.base.tag") is None
+
+
 def test_real_vanilla_first_item_payload_decodes():
     """For every vanilla entry whose first item is present, decode
     the BuffPayloadCommon and confirm sane field values + offsets

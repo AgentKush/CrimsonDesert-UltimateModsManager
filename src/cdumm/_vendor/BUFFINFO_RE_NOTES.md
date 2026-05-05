@@ -157,6 +157,49 @@ Shipping speculative offsets would corrupt user game files.
 Stopping at Phase 2 is the right move until an oracle becomes
 available.
 
+## What's shipped (sessions 1-3)
+
+| Phase | Coverage |
+|-------|----------|
+| 1, 2 | Entry prefix: key, name, is_blocked, buff_data_count |
+| 3a | Full BuffinfoEntry wrapper round-trips byte-perfectly across all 280 vanilla entries |
+| 3b | BuffItemHeader decoder (5-byte preamble: prefix_id + absent_flag) |
+| 3c | BuffPayloadCommon decoder: 28 fields including 1 cstring + 2 length-prefixed u32 arrays |
+
+Public ``locate_buff_field`` paths that resolve today:
+- All 10 wrapper fields (min_level, max_level, ui_*, *_status_info, etc.)
+- ``buff_data_list[0].absent_flag``
+- ``buff_data_list[0].leading_lookup``
+- ``buff_data_list[0].data.base.<28 fields>``
+
+## What's left (Phase 3d+)
+
+Items at index > 0 still need a per-variant size lookup so the
+parser can walk past each item to the next. The variant family is
+120 variants wide. Vanilla buffinfo uses 39 distinct tags
+(empirically scanned), with tag 17 covering 95/280 entries. Most
+common tags by count: 17, 80, 3, 7, 63, 12, 104, 37, 106, 2, 95.
+
+Variant tail also carries the ``data.variant.type`` and
+``data.variant.body.f00 / f01`` paths the mod uses (3 leaves out of
+31).
+
+A practical approach, in priority order:
+
+1. Build a per-tag size table by walking each entry forward through
+   its items. Use vanilla as the oracle: an entry of count=N
+   should have its items_region span exactly to min_level_offset.
+   For entries where the first item's tail size is the only
+   unknown (single-item entries), we can derive the tail size by
+   subtraction. Repeat across single-item entries to gather one
+   sample per variant tag observed.
+2. Cross-check by walking N-item entries and confirming the
+   table-derived sizes sum correctly.
+3. Decode variant body fields ``type`` (first byte of tail) and
+   ``f00 / f01`` (next two u32s).
+
+Estimated effort: 1-2 sessions of careful walking + verification.
+
 ## How to resume
 
 ```bash

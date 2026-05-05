@@ -104,6 +104,33 @@ _AFTER_SECOND_ARRAY_BY132 = 0
 _AFTER_SECOND_ARRAY_U32_AT136 = 1
 _DBASE_FIXED_TAIL_BYTES = 5  # by132 + u32_at136
 
+# Per-variant tail size in bytes (the bytes that follow the 28-field
+# common payload prefix, before the next item begins). Derived
+# empirically from single-item vanilla entries by subtracting the
+# common payload size from the items-region size:
+#
+#     tail_size[tag] = (min_level_offset - body_start) - 5 - common_size
+#
+# Tags not in this table can't yet be walked past, so item indices
+# beyond the first present-and-known-tag item return None from
+# ``locate_buff_field``. Future passes will extend coverage by
+# walking multi-item entries and back-solving for unknown tag
+# sizes.
+#
+# Tags missing from this table that DO appear in vanilla:
+#   0, 1, 2, 4, 5, 6, 12, 14, 19, 20, 24, 30, 34, 52, 59, 63, 71,
+#   72, 74, 78, 89, 90, 95, 98, 104, 105, 106, 107, 109, 116
+_VARIANT_TAIL_SIZES: dict[int, int] = {
+    3: 12,
+    7: 20,
+    17: 0,
+    54: 14,
+    65: 12,
+    70: 8,
+    80: 8,
+    82: 16,
+}
+
 
 @dataclass(frozen=True)
 class BuffItemHeader:
@@ -788,7 +815,6 @@ def locate_buff_field(
         return getattr(entry, offset_attr), width, dtype
 
     # Item-level paths of the shape ``buff_data_list[N].leaf``.
-    # Only N=0 + leaf=absent_flag is decodable today.
     if field_path.startswith("buff_data_list["):
         try:
             close_bracket = field_path.index("]")
@@ -796,11 +822,31 @@ def locate_buff_field(
             tail = field_path[close_bracket + 1:]
         except (ValueError, IndexError):
             return None
-        if n != 0:
-            return None
         entry = parse_entry(entry_bytes)
-        header = parse_item_header(
-            entry_bytes, entry.buff_data_list_offset)
+        if n >= entry.buff_data_count:
+            return None  # past the end of the list
+        # Walk forward through items 0..n-1 to find item n's start.
+        position = entry.buff_data_list_offset
+        for _ in range(n):
+            try:
+                hdr = parse_item_header(entry_bytes, position)
+            except ValueError:
+                return None
+            if hdr.absent_flag != 0:
+                # Absent items have no payload, just the 5-byte header.
+                position += _ITEM_HEADER_BYTES
+                continue
+            try:
+                common = parse_payload_common(
+                    entry_bytes, hdr.payload_offset)
+            except ValueError:
+                return None
+            tag_size = _VARIANT_TAIL_SIZES.get(common.tag)
+            if tag_size is None:
+                # Unknown variant , can't safely walk past it.
+                return None
+            position = common.end_offset + tag_size
+        header = parse_item_header(entry_bytes, position)
         if tail == ".absent_flag":
             return header.absent_flag_offset, 1, "u8"
         if tail == ".leading_lookup":
