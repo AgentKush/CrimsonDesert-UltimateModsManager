@@ -180,10 +180,14 @@ def expand_format3_into_aggregated(
                 if warnings_out is not None:
                     warnings_out.append(
                         f"Format 3 mod '{mod_name}' produced 0 byte "
-                        f"changes: could not extract vanilla bytes for "
-                        f"'{target}'. The target file may not exist in "
-                        f"your game's PAZ archives, check the spelling "
-                        f"or run Steam Verify if the file is missing."
+                        f"changes: vanilla bytes for '{target}' are "
+                        f"unavailable. Most common cause: the live "
+                        f"PAZ has been modded by another tool and "
+                        f"the vanilla backup is missing. Revert to "
+                        f"vanilla first (Settings -> Fix Everything), "
+                        f"then re-apply. If the file is genuinely "
+                        f"missing from your install, check the "
+                        f"target name spelling or run Steam Verify."
                     )
                 continue
             vanilla_body, vanilla_header = vanilla
@@ -269,8 +273,12 @@ def expand_format3_into_aggregated(
                 warnings_out.append(
                     f"Format 3 mod(s) {', '.join(repr(n) for n in contributing_mods)} "
                     f"could not apply: vanilla bytes for '{target}' "
-                    f"could not be extracted from your game's PAZ "
-                    f"archives. Run Steam Verify if the file is missing."
+                    f"are unavailable. Most common cause: the live "
+                    f"PAZ has been modded by another tool and the "
+                    f"vanilla backup is missing. Revert to vanilla "
+                    f"first (Settings -> Fix Everything), then "
+                    f"re-apply. If the file is genuinely missing "
+                    f"from your install, run Steam Verify."
                 )
             continue
         vanilla_body, vanilla_header = vanilla
