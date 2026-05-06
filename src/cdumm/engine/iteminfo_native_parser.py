@@ -663,7 +663,21 @@ def _read_PrefabDataTribe(r: _Reader, elem_index: int = 0, total_count: int = 1)
     if elem_index > 0 or total_count > 1:
         return _read_PrefabDataTribe_shapeA(r)
     if r.data[r.pos:r.pos + 4] == b"\x00\x00\x00\x00":
-        return _read_PrefabDataTribe_shapeA(r)
+        # Family E (53 records): Shape A's list_a/list_b parses fine but
+        # list_c carries FooterOuter-typed entries instead of TribeStat.
+        # Try Shape A first; on any failure (or if list_c count looks
+        # bogus mid-parse), fall back to forward-walk to GVP needle.
+        snap = r.pos
+        try:
+            return _read_PrefabDataTribe_shapeA(r)
+        except Exception:
+            r.pos = snap
+            if total_count == 1 and elem_index == 0:
+                opaque = _shapeA2_forward_walk(r)
+                if opaque is not None:
+                    return opaque
+            r.pos = snap
+            return _read_PrefabDataTribe_shapeA(r)  # re-raise original
     # Shape A2 candidate: first u32 != 0 AND bytes 4..8 = 00 00 00 00
     # (unk_b == 0). chain_outer_cnt at bytes 8..12 may be any small value
     # in {1, 2, 3, 4, 5} per SHAPE_A2_findings_v3.md (Families B/D/F/G with
@@ -679,8 +693,51 @@ def _read_PrefabDataTribe(r: _Reader, elem_index: int = 0, total_count: int = 1)
             return _read_PrefabDataTribe_shapeA2(r)
         except Exception:
             r.pos = snap
+            # cnt_outer != 1 case: Family B/D/F/G layout per
+            # SHAPE_A2_findings_v3.md (~71 records). Single-tribe forward-
+            # walk fallback: scan ahead for the GVP-needle (3 × float 1.0
+            # at scale[3] of next field's first entry) and consume bytes
+            # opaquely to that boundary.
+            if total_count == 1 and elem_index == 0:
+                opaque = _shapeA2_forward_walk(r)
+                if opaque is not None:
+                    return opaque
+            r.pos = snap
             # Fall through to Shape B
     return _read_PrefabDataTribe_shapeB(r)
+
+
+def _shapeA2_forward_walk(r: _Reader) -> dict | None:
+    """Forward-walk fallback for Shape A2 cnt_outer != 1 (Families B/D/F/G).
+
+    Scans ahead from the current cursor for the GVP scale needle
+    (3 x float 1.0 = b'\\x00\\x00\\x80\\x3f' x 3) which sits 8 bytes into
+    a gimmick_visual_prefab_data_list element when count >= 1. The tribe
+    bytes between the cursor and (needle_pos - 8) are consumed opaquely.
+
+    Returns a dict with shape='A2_opaque' on success, None if no needle
+    is found within a sane range (avoid runaway scans).
+    """
+    needle = b"\x00\x00\x80\x3f\x00\x00\x80\x3f\x00\x00\x80\x3f"
+    snap = r.pos
+    # Cap scan to avoid runaway (tribes observed up to ~1100 bytes per
+    # SHAPE_A2_findings_v3 sample data; allow a generous 4096-byte cap).
+    scan_end = min(snap + 4096, len(r.data))
+    needle_pos = r.data.find(needle, snap, scan_end)
+    if needle_pos < 0:
+        return None
+    # GVP entry layout: u32 tag_hash + 3*f32 scale + carray<u32> + carray<u32> + u8
+    # The needle is at offset +4 of the entry. So entry starts at needle_pos - 4.
+    # Before the entry is the GVP carray count (u32). So gvp_start = needle_pos - 8.
+    end = needle_pos - 8
+    if end < snap:
+        return None
+    opaque = bytes(r.data[snap:end])
+    r.pos = end
+    return {
+        "shape": "A2_opaque",
+        "bytes": opaque,
+    }
 
 
 def _read_PrefabDataTribe_shapeA(r: _Reader) -> dict:
@@ -832,20 +889,13 @@ def _read_PrefabDataTribe_shapeA2(r: _Reader) -> dict:
     chain_outer_cnt = r.u32()
     chain: list[dict] = []
     depth = 0
-    # Walk chain entries until 10-byte zero terminator. Terminator
-    # alignment: the terminator's first 10 bytes are zero. Probe by
-    # checking 10 bytes of zero at current position.
     while True:
         if r.pos + 10 > len(r.data):
             raise IndexError("ShapeA2 chain ran past buffer")
         if r.data[r.pos:r.pos + 10] == b"\x00" * 10:
             r.pos += 10
             break
-        # Empirically depth 0 is ODD(9), depth 1 EVEN(12), alternating.
-        # Verified on rec5031 (chain depth 1, all ODD), rec1977/rec1978
-        # (depth 7+, alternating starting ODD).
         if depth % 2 == 0:
-            # ODD: 9 bytes  u32 hash + u8 zero + u32 cnt
             entry = {
                 "depth": depth,
                 "kind": "odd",
@@ -854,7 +904,6 @@ def _read_PrefabDataTribe_shapeA2(r: _Reader) -> dict:
                 "cnt": r.u32(),
             }
         else:
-            # EVEN: 12 bytes  u32 hash + u32 zero + u32 cnt
             entry = {
                 "depth": depth,
                 "kind": "even",
@@ -936,6 +985,8 @@ def _write_PrefabDataTribe(w: _Writer, v: dict) -> None:
         w.carray(v["list_c"], _write_TribeStat)
     elif shape == "A2":
         _write_PrefabDataTribe_shapeA2(w, v)
+    elif shape == "A2_opaque":
+        w.buf += bytes(v["bytes"])
     else:
         w.u32(v["unk_a"])
         w.u64(v["unk_b"])
