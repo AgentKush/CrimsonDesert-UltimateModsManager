@@ -728,6 +728,30 @@ def _read_PrefabDataTribe(r: _Reader, elem_index: int = 0, total_count: int = 1)
                 raise ValueError(
                     f"Shape A2 consumed {r.pos - snap} bytes"
                 )
+            # Boundary check: when single-tribe and last (only) PrefabData
+            # entry, the next field is gimmick_visual_prefab_data_list.
+            # If GVP isn't right after our cursor, we've under-consumed
+            # the tribe (rare cnt_outer=1 records with extra trailing
+            # carray<TribeStat>). Force forward-walk.
+            if total_count == 1 and elem_index == 0:
+                gvp_needle = b"\x00\x00\x80\x3f\x00\x00\x80\x3f\x00\x00\x80\x3f"
+                if r.data[r.pos + 8:r.pos + 20] != gvp_needle:
+                    # Either GVP is empty (count=0) or we under-consumed.
+                    # If a needle exists nearby (within 256 bytes), forward
+                    # walk to it.
+                    nearby = r.data.find(
+                        gvp_needle, r.pos, min(r.pos + 256, len(r.data))
+                    )
+                    if nearby > 0:
+                        end = nearby - 8
+                        if end > r.pos:
+                            extra = bytes(r.data[r.pos:end])
+                            r.pos = end
+                            return {
+                                "shape": "A2_padded",
+                                "inner": result,
+                                "extra": extra,
+                            }
             return result
         except Exception:
             r.pos = snap
@@ -1022,6 +1046,9 @@ def _write_PrefabDataTribe(w: _Writer, v: dict) -> None:
         _write_PrefabDataTribe_shapeA2(w, v)
     elif shape == "A2_opaque":
         w.buf += bytes(v["bytes"])
+    elif shape == "A2_padded":
+        _write_PrefabDataTribe_shapeA2(w, v["inner"])
+        w.buf += bytes(v["extra"])
     else:
         w.u32(v["unk_a"])
         w.u64(v["unk_b"])
