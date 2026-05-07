@@ -1,24 +1,27 @@
 """Iteminfo Format 3 list-of-dict field writer.
 
-Uses the vendored crimson_rs Rust extension (NattKh's parser) to
-parse the full iteminfo.pabgb table to dicts, apply Format 3
+Uses CDUMM's native iteminfo parser (cdumm.engine.iteminfo_native_parser)
+to parse the full iteminfo.pabgb table to dicts, apply Format 3
 intents in-memory, and serialize the result back to bytes.
 
 Whole-table approach: the iteminfo binary is 5+ MB with 6300+
-records and inter-record offset/index dependencies. Per-record
-serialize would require crimson_rs to expose record boundaries,
-which it doesn't. Whole-table parse + apply + serialize processes
-the full vanilla file in ~0.3 seconds.
+records and inter-record offset/index dependencies. Whole-table
+parse + apply + serialize processes the full vanilla file in a
+few seconds in Python.
 
 Bug from UnLuckyLust on GitHub #55: enchant_data_list and other
 list-of-dict fields on iteminfo were skipped at validation time
-with a "list writer needed" message. Now writable.
+with a "list writer needed" message. Now writable. v3.2.10 swapped
+the parser to a clean-room native implementation that handles the
+post-2026-04-29 game patch layout.
 """
 from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Optional
 
-from cdumm.engine.crimson_rs_loader import get_crimson_rs
+from cdumm.engine.iteminfo_native_parser import (
+    parse_iteminfo_from_bytes, serialize_iteminfo,
+)
 
 if TYPE_CHECKING:
     from cdumm.engine.format3_handler import Format3Intent
@@ -26,8 +29,8 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-# Iteminfo fields the writer accepts. crimson_rs's ItemInfo dict
-# carries all of these as native Python types we can replace
+# Iteminfo fields the writer accepts. The native parser's ItemInfo
+# dict carries all of these as native Python types we can replace
 # wholesale via dict assignment. List shapes match the JSON
 # Format 3 intent's `new` value verbatim.
 SUPPORTED_FIELDS = {
@@ -53,11 +56,11 @@ SUPPORTED_FIELDS = {
 
 
 def _resolve_field_name(intent_field: str, item: dict) -> Optional[str]:
-    """Map a Format 3 intent field name to a key in crimson_rs's
-    ItemInfo dict, or None if no match.
+    """Map a Format 3 intent field name to a key in the native
+    parser's ItemInfo dict, or None if no match.
 
     Field-names dialect exports use snake_case-without-underscore-
-    prefix (`enchant_data_list`, `is_blocked`); crimson_rs's
+    prefix (`enchant_data_list`, `is_blocked`); the parser's
     TypedDict matches that convention. Other tools may emit
     schema-style underscore-prefixed camelCase (`_isBlocked`); we
     bridge both.
@@ -83,20 +86,15 @@ def build_iteminfo_intent_change(
     """Apply all provided intents to a parsed copy of vanilla
     iteminfo.pabgb and return a single whole-file v2 change dict.
 
-    Returns None if crimson_rs is unavailable, no intents touched
-    a real record, or all intents failed (so the caller can fall
-    back to the regular per-intent path).
+    Returns None if no intents touched a real record or all intents
+    failed (so the caller can fall back to the regular per-intent
+    path).
 
     Per-intent failures (unknown key, unsupported field) are logged
     and skipped; surviving intents still produce their effect.
     """
-    crimson_rs = get_crimson_rs()
-    if crimson_rs is None:
-        logger.warning("iteminfo writer unavailable (crimson_rs not loaded)")
-        return None
-
     try:
-        items = crimson_rs.parse_iteminfo_from_bytes(vanilla_body)
+        items = parse_iteminfo_from_bytes(vanilla_body)
     except Exception as e:
         logger.error("iteminfo parse failed: %s", e, exc_info=True)
         return None
@@ -160,7 +158,7 @@ def build_iteminfo_intent_change(
         return None
 
     try:
-        new_bytes = crimson_rs.serialize_iteminfo(items)
+        new_bytes = serialize_iteminfo(items)
     except Exception as e:
         logger.error("iteminfo serialize failed: %s", e, exc_info=True)
         return None
