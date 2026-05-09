@@ -184,49 +184,14 @@ def build_iteminfo_intent_change(
                 intent.op, intent.key, intent.field)
             continue
         item = by_key[intent.key]
-        # Defensive guard: the parser's cooltime / unk_post_cooltime_a /
-        # unk_post_cooltime_b offsets are 13 bytes off-disk for records
-        # where some upstream variable-length field consumes fewer bytes
-        # than reality. The parser is byte-roundtrip consistent within
-        # itself, but a Format 3 intent on those fields would write at
-        # the parser's claimed offset (13 bytes too early), corrupting
-        # other game data and crashing the engine on launch.
-        # Bug confirmed 2026-05-08 against hhkbble's My_ItemBuffs_Mod
-        # on item 1001250 (thief gloves cooltime).
-        # Heuristic: when unk_post_cooltime_a or unk_post_cooltime_b
-        # holds a non-zero value, the parser misread those bytes from
-        # an upstream field. Records where both are zero AND prefab
-        # parsed cleanly are aligned correctly. Until the parser's
-        # layout is fully corrected, refuse cooltime-family intents on
-        # records that fail this alignment check. Other intents
-        # (max_stack_count, enchant_data_list, etc.) still apply.
-        if intent.field in ("cooltime", "unk_post_cooltime_a",
-                              "unk_post_cooltime_b"):
-            misaligned = False
-            if isinstance(item.get("prefab_data_list"), dict) \
-                    and item["prefab_data_list"].get("_opaque"):
-                misaligned = True
-            else:
-                # Non-zero unk_post_cooltime_a/b is the marker that the
-                # parser read those 8 bytes from a wrong on-disk
-                # position (a high-value u64 from an upstream field).
-                # Vanilla cooltime values are small (milliseconds), so
-                # a non-zero unk field reaching into u64 territory
-                # almost certainly means misalignment.
-                if (item.get("unk_post_cooltime_a", 0) != 0
-                        or item.get("unk_post_cooltime_b", 0) != 0):
-                    misaligned = True
-            if misaligned:
-                skipped_field += 1
-                logger.warning(
-                    "iteminfo writer: refusing intent on key=%d "
-                    "field=%r — parser cooltime offset is 13 bytes "
-                    "off-disk for this record (upstream field "
-                    "alignment issue). Writing here would crash the "
-                    "game on launch. Other intents on this mod "
-                    "still apply.",
-                    intent.key, intent.field)
-                continue
+        # The v3.2.12 defensive guard for misaligned cooltime intents
+        # is no longer needed: the parser's _read_DefaultSubItem now
+        # consumes the trailing 13-byte block (i64 + u32 + u8) that
+        # used to be misattributed to sharpness_data.p_prefix on PW
+        # shape. cooltime / unk_post_cooltime_a / unk_post_cooltime_b
+        # now read at the correct on-disk byte offsets across all
+        # 6235 vanilla records (byte-perfect round-trip verified).
+        # Format 3 intents on these fields land at the right bytes.
         # Nested path (dotted / indexed): walk the parsed dict to the
         # assignment target. Used for prefab_data_list[N].xxx,
         # drop_default_data.xxx, etc. The path-resolver returns

@@ -245,7 +245,15 @@ def _disk_free(path: Path) -> str:
 
 
 def _is_program_files(path: Path) -> bool:
-    s = str(path).lower()
+    # Resolve junctions/symlinks first. A path like C:\Program Files
+    # (x86)\Steam\steamapps\... can be a junction to the user's
+    # Documents folder where write permissions are fine. Bug
+    # 2026-05-09 #69 (DemonBigj781). Falls back to the unresolved
+    # string if resolve fails (nonexistent path, etc.).
+    try:
+        s = str(Path(path).resolve(strict=False)).lower()
+    except (OSError, ValueError):
+        s = str(path).lower()
     return "program files" in s
 
 

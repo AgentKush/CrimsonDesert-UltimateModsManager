@@ -562,23 +562,24 @@ def _write_InspectAction(w: _Writer, v: dict) -> None:
 
 
 def _read_ItemInfoSharpnessData(r: _Reader, dsi_type: int = 15) -> dict:
-    """Post-1.0.4.1 sharpness layout (per SHARPNESS_findings.md).
+    """Post-1.0.4.1 sharpness layout.
 
-    Two on-disk shapes coexist, dispatched by ``default_sub_item.type_id``:
+    Single shape (W): 13-byte W-header + u32 stat_count + N*12 stats +
+    3-byte tail. Empty = 20 bytes.
 
-    * **W** (dsi_type == 15): 13-byte W-header + u32 stat_count + N*12 stats
-      + 3-byte tail. Empty = 20 bytes.
-    * **PW** (dsi_type == 0): 13-byte P-prefix prepended to W. Empty = 33
-      bytes, N stats = 33 + 12*N.
+    The pre-2026-05-08 parser had a "PW" variant that prepended a
+    13-byte p_prefix when default_sub_item.type_id == 0. Those 13
+    bytes were actually a TRAILING field of default_sub_item, NOT a
+    prefix of sharpness_data. The misattribution shifted cooltime/
+    unk_post_cooltime_a/b 13 bytes earlier on disk than where mod
+    authors target them, which made Format 3 cooltime intents corrupt
+    the trailing block and crash the game on launch (hhkbble's
+    My_ItemBuffs_Mod on item 1001250 / thief gloves). The 13 bytes
+    are now read by _read_DefaultSubItem when type_id < 14.
 
-    For unknown dsi_type values we default to W (no P-prefix) since the
-    fixture only ever pairs PW with dsi=0 and W with dsi=15.
+    The dsi_type parameter is retained for backward compatibility but
+    no longer affects sharpness parsing.
     """
-    p_prefix: bytes | None = None
-    if dsi_type == 0:
-        # PW shape: 13-byte P-prefix
-        p_prefix = bytes(r.data[r.pos:r.pos + 13])
-        r.pos += 13
     # W-header: 13 bytes (u8 unk_a + u16 max_sharpness + u32 craft_tool_info
     # + 6 trailing bytes; trailing bytes empirically zero, treated as opaque)
     w_unk_a = r.u8()
@@ -595,8 +596,8 @@ def _read_ItemInfoSharpnessData(r: _Reader, dsi_type: int = 15) -> dict:
     tail = bytes(r.data[r.pos:r.pos + 3])
     r.pos += 3
     return {
-        "shape": "PW" if dsi_type == 0 else "W",
-        "p_prefix": p_prefix,
+        "shape": "W",
+        "p_prefix": None,
         "w_unk_a": w_unk_a,
         "max_sharpness": max_sharpness,
         "craft_tool_info": craft_tool_info,
@@ -607,9 +608,11 @@ def _read_ItemInfoSharpnessData(r: _Reader, dsi_type: int = 15) -> dict:
 
 
 def _write_ItemInfoSharpnessData(w: _Writer, v: dict) -> None:
-    if v.get("shape") == "PW":
-        prefix = v.get("p_prefix") or b"\x00" * 13
-        w.buf += bytes(prefix)
+    # PW shape no longer exists; the 13-byte p_prefix is now part of
+    # default_sub_item. For mods authored under the pre-fix parser
+    # whose data still carries a populated p_prefix, write it through
+    # default_sub_item.unk_a/b/c instead. Raw write here would
+    # double-count the 13 bytes.
     w.u8(v.get("w_unk_a", 0))
     w.u16(v.get("max_sharpness", 0))
     w.u32(v.get("craft_tool_info", 0))
@@ -1412,14 +1415,33 @@ def _write_SubItem(w: _Writer, v: dict) -> None:
 def _read_DefaultSubItem(r: _Reader) -> dict:
     """Standalone default_sub_item field on the ItemInfo record.
 
-    Different from the SubItem nested inside DropDefaultData. In the
-    post-1.0.4.1 layout, this field reads a u32 value only for valid
-    item-key type_ids (< 14). The sentinels 14 (None), 15 (None alt),
-    and 255 (None alt 2) carry no payload.
+    Post-1.0.4.1 layout for the populated form (type_id < 14):
+        u8 type_id + u32 value + i64 unk_a + u32 unk_b + u8 unk_c
+
+    Total: 18 bytes when populated, 1 byte when type_id is the
+    sentinel value (14, 15, or 255 — the None forms).
+
+    Pre-2026-05-08 the parser stopped at the u32 value and treated
+    the trailing 13-byte block (i64 + u32 + u8) as a p_prefix on
+    sharpness_data PW shape. That misattribution was byte-conservative
+    on round-trip (parser was internally consistent) but it shifted
+    cooltime / unk_post_cooltime_a / unk_post_cooltime_b 13 bytes
+    earlier on disk than where mod authors target them via Format 3.
+    Cooltime intents at the pre-fix offset corrupted the trailing
+    block, which the engine validates on load, and the game crashed
+    on launch. Bug confirmed against hhkbble's My_ItemBuffs_Mod on
+    item 1001250 (thief gloves cooldown).
     """
     type_id = r.u8()
     if type_id < 14:
-        return {"type_id": type_id, "value": r.u32()}
+        value = r.u32()
+        unk_a = r.i64()
+        unk_b = r.u32()
+        unk_c = r.u8()
+        return {
+            "type_id": type_id, "value": value,
+            "unk_a": unk_a, "unk_b": unk_b, "unk_c": unk_c,
+        }
     return {"type_id": type_id, "value": None}
 
 
@@ -1427,6 +1449,9 @@ def _write_DefaultSubItem(w: _Writer, v: dict) -> None:
     w.u8(v["type_id"])
     if v["type_id"] < 14:
         w.u32(v["value"])
+        w.i64(v.get("unk_a", 0))
+        w.u32(v.get("unk_b", 0))
+        w.u8(v.get("unk_c", 0))
 
 
 def _read_DropDefaultData(r: _Reader) -> dict:

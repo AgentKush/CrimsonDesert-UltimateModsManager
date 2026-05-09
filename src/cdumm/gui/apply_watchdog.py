@@ -40,8 +40,21 @@ def is_game_in_program_files(game_dir) -> bool:
     if not game_dir:
         return False
     import os
-    path = str(game_dir)
-    # Normalize to forward slashes and lower-case for matching.
+    from pathlib import Path
+    # Resolve the path through any junction or symlink first. Bug 2026
+    # -05-09 #69 (DemonBigj781): Steam's steamapps under Program Files
+    # is often a junction to a user-writable location (e.g.
+    # Documents\steamapps), in which case Windows write permissions
+    # apply to the *target* dir, not Program Files. We need to
+    # check where the data actually lives, not where the path string
+    # spells out. Path.resolve(strict=False) follows junctions on
+    # Windows; falls back to the original path on resolve errors so
+    # nonexistent / mid-construction paths still get a string check.
+    try:
+        resolved = Path(game_dir).resolve(strict=False)
+        path = str(resolved)
+    except (OSError, ValueError):
+        path = str(game_dir)
     norm = os.path.normpath(path).lower()
     parts = norm.replace("\\", "/").split("/")
     return ("program files" in parts
