@@ -3128,7 +3128,10 @@ class CdummWindow(FluentWindow):
         # forced through the single-import path so the binding survives
         # — the batch worker doesn't accept per-file mod_ids.
         if len(self._import_queue) > 1:
-            from cdumm.gui.preset_picker import find_json_presets, find_folder_variants
+            from cdumm.gui.preset_picker import (
+                find_json_presets, find_folder_variants,
+                _detect_preset_groups, _detect_mutex_offset_groups,
+            )
             prebound = getattr(self, "_existing_mod_id_map", {})
             batch = []
             deferred = []  # multi-preset mods that need dialog
@@ -3142,6 +3145,32 @@ class CdummWindow(FluentWindow):
                     if len(presets) > 1:
                         needs_dialog = True
                     elif len(find_folder_variants(p)) >= 2:
+                        needs_dialog = True
+                elif p.is_file() and p.suffix.lower() == ".json":
+                    # Zowbaid GitHub #92: a loose JSON mod that ships
+                    # mutex preset radios at the same byte offset (e.g.
+                    # Unlimited Dragon Flying's five Ride Duration
+                    # variants at one offset) used to go straight into
+                    # the batch worker with no picker, because the
+                    # batch-time dialog gate only checked directories
+                    # and archives. Result: every variant got applied
+                    # silently and the cog later showed the "all
+                    # enabled" state. Peek the JSON content here and
+                    # defer to single-import if the file has a real
+                    # mutex / preset-group choice the user needs to
+                    # make. Plain offset patches (the common case)
+                    # still batch normally so dropping 50 unrelated
+                    # JSON mods at once does not prompt 50 times.
+                    try:
+                        import json as _json_peek
+                        with open(p, "r", encoding="utf-8") as _jf:
+                            _jdata = _json_peek.load(_jf)
+                    except Exception:
+                        _jdata = None
+                    if _jdata is not None and (
+                        _detect_mutex_offset_groups(_jdata) is not None
+                        or _detect_preset_groups(_jdata) is not None
+                    ):
                         needs_dialog = True
                 elif p.is_file() and p.suffix.lower() in (".zip", ".7z", ".rar"):
                     if _archive_likely_needs_dialog(p):

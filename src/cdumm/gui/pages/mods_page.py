@@ -1060,13 +1060,27 @@ class ModsPage(QWidget):
     # ------------------------------------------------------------------
 
     def _on_select_all(self) -> None:
-        """Toggle all visible mod cards. Simple: checked=enable all, unchecked=disable all."""
+        """Toggle all visible mod cards: enable/disable AND mark for batch ops.
+
+        Zowbaid on GitHub #92 reported the obvious user-facing problem:
+        clicking the "Select all" checkbox and then right-clicking did not
+        surface the batch context menu, because "Select all" only flipped
+        each card's enable/disable state without marking it as selected.
+        Users expect "Select all" on a list to mean exactly what it says.
+        Now it does both — enables/disables in the same pass and also sets
+        ``is_selected`` so the next right-click shows the batch menu with
+        Enable N / Disable N / Reimport N / Uninstall N actions.
+        """
         checked = self._select_all_cb.isChecked()
         _dbg(f"SELECT ALL: checked={checked}")
         self._pause_db_watcher()
         for card in self._mod_cards:
             if card.isVisible():
                 card.set_checked(checked)
+                # Visual selection mirrors the checkbox so the right-click
+                # batch menu fires on multi when checked. When unchecking
+                # we clear selection so the user gets a clean slate.
+                card.set_selected(checked)
                 if self._mod_manager:
                     self._mod_manager.set_enabled(card.mod_id, checked)
                 is_applied = self._applied_state.get(card.mod_id) is True
