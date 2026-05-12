@@ -153,18 +153,33 @@ class SetupDialog(MessageBoxBase):
     def game_directory(self) -> Path | None:
         return self._selected_path
 
-    def done(self, result: int) -> None:  # noqa: D401 — Qt slot
-        """Tear down the temp parent on close (accept OR reject).
+    def exec(self) -> int:  # noqa: D401 — Qt slot override
+        """Run the dialog modally and tear down the temp parent AFTER
+        the modal result is set, not during ``done()``.
 
-        Qt's ``QDialog`` calls ``done()`` for both ``accept()`` and
-        ``reject()``, so a single override covers cleanup regardless
-        of how the user dismissed the dialog. Without this, the
-        screen-sized transparent temp parent would linger as an
-        invisible top-level widget after the modal returned and
-        keep the Qt event loop holding refs.
+        Faisal 2026-05-12 GitHub #104 (Ze-del) + #106 (GoGOD7): the
+        wizard accepted the path in green, user clicked OK, CDUMM
+        exited silently with "No game directory selected". Root
+        cause: SetupDialog used to tear down ``_temp_parent`` from
+        inside ``done(result)`` (running BEFORE ``MaskDialogBase``'s
+        async 100ms fade-out animation finished and called the real
+        ``QDialog.done()``). Destroying the parent mid-animation
+        implicitly hid the dialog (a child of temp_parent), which
+        cancelled the running animation, prevented the parent's
+        ``finished`` signal from firing, and left the modal result
+        unset. The call returned the default Rejected=0 no matter
+        what the user clicked.
+
+        Verified locally: with an explicit parent passed in (no
+        auto-created ``_temp_parent``), the modal correctly returns
+        Accepted=1. With the auto-created temp_parent torn down
+        from ``done()``, returns Rejected=0. Moving cleanup to AFTER
+        the modal call returns breaks the race: by then the result
+        is already set on the dialog, no animation is running, and
+        hiding the temp_parent has no effect on anything.
         """
-        super().done(result)
+        result = super().exec()
         if self._temp_parent is not None:
             self._temp_parent.hide()
-            self._temp_parent.deleteLater()
             self._temp_parent = None
+        return result
