@@ -4968,16 +4968,22 @@ class CdummWindow(FluentWindow):
                     _staging_parents: set[_P] = set()
                     for asi_path in asi_staged:
                         p = _P(asi_path)
-                        if p.exists() and p.suffix.lower() == ".asi":
+                        if not p.exists():
+                            continue
+                        ext = p.suffix.lower()
+                        if ext in (".asi", ".addon64"):
+                            # GitHub #120 OneBluePumpkin: .addon64 is a
+                            # ReShade addon, lands in bin64 the same
+                            # way as a CDUMM-installed .asi plugin.
                             import shutil
                             shutil.copy2(str(p), str(_asi_mgr._bin64 / p.name))
                             asi_count += 1
                             _staging_parents.add(p.parent)
-                        elif p.exists() and p.suffix.lower() == ".ini":
+                        elif ext == ".ini":
                             import shutil
                             shutil.copy2(str(p), str(_asi_mgr._bin64 / p.name))
                             _staging_parents.add(p.parent)
-                    logger.info("Installed %d ASI plugin(s) from mixed ZIP", asi_count)
+                    logger.info("Installed %d loose-loader plugin(s) from mixed ZIP", asi_count)
                     # Clean up the per-import staging subdir(s) so they
                     # don't pile up under deltas_dir/_asi_staging/.
                     import shutil as _sh

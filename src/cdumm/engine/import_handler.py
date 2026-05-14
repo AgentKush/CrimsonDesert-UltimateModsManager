@@ -331,7 +331,13 @@ def install_companion_asis(extract_dir: Path, asi_mgr) -> list:
         return []
     extract_dir = Path(extract_dir)
     asi_files = [p for p in extract_dir.rglob("*.asi") if p.is_file()]
-    if not asi_files:
+    # GitHub #120 OneBluePumpkin: ReShade addons (.addon64) live in
+    # bin64 alongside ASI plugins and import through the same staging
+    # path. Pick them up here so a mixed zip (Format 3 + .addon64, or
+    # bare .addon64 only) does not silently drop the addon.
+    addon64_files = [
+        p for p in extract_dir.rglob("*.addon64") if p.is_file()]
+    if not asi_files and not addon64_files:
         return []
     try:
         import tempfile as _tmp
@@ -344,6 +350,8 @@ def install_companion_asis(extract_dir: Path, asi_mgr) -> list:
                 companion = asi.with_suffix(".ini")
                 if companion.is_file():
                     _sh.copy2(companion, staging / companion.name)
+            for addon in addon64_files:
+                _sh.copy2(addon, staging / addon.name)
             return asi_mgr.install(staging) or []
         finally:
             _sh.rmtree(staging, ignore_errors=True)
@@ -1990,6 +1998,16 @@ def import_from_7z(
             mod_name, existing_mod_id)
         if asi_staged and not result.asi_staged:
             result.asi_staged = list(asi_staged)
+        # GitHub #120: bare loose-loader 7z (only .asi or .addon64).
+        if asi_staged and result.error and result.mod_id is None:
+            result.error = None
+            result.info = (
+                f"Imported {len(asi_staged)} loose loader file(s) "
+                f"into bin64 ("
+                f"{', '.join(sorted({Path(p).suffix.lstrip('.') for p in asi_staged}))}"
+                f"). This archive did not ship any PAZ patches, "
+                f"JSON intents, or other game data."
+            )
         return result
 
 
@@ -2342,6 +2360,12 @@ def _stage_asi_files(tmp_path: Path, deltas_dir: Path) -> list[str]:
         ext = f.suffix.lower()
         if ext == ".asi":
             pass
+        elif ext == ".addon64":
+            # ReShade addon (GitHub #120 OneBluePumpkin). Stages
+            # alongside ASI files because the bin64 install pipeline
+            # already handles ReShade addons after the AsiManager
+            # changes that added .addon64 to install / scan paths.
+            pass
         elif ext == ".ini" and f.stem.lower() in _asi_stems:
             pass
         else:
@@ -2351,9 +2375,9 @@ def _stage_asi_files(tmp_path: Path, deltas_dir: Path) -> list[str]:
             import shutil
             shutil.move(str(f), str(asi_staging / f.name))
             staged.append(str(asi_staging / f.name))
-            logger.info("Staged ASI file for GUI install: %s", f.name)
+            logger.info("Staged loose-loader file for GUI install: %s", f.name)
         except OSError as e:
-            logger.warning("ASI staging failed for %s: %s", f.name, e)
+            logger.warning("Loose-loader staging failed for %s: %s", f.name, e)
     return staged
 
 
@@ -2411,6 +2435,16 @@ def import_from_rar(
             mod_name, existing_mod_id)
         if asi_staged and not result.asi_staged:
             result.asi_staged = list(asi_staged)
+        # GitHub #120: bare loose-loader rar (only .asi or .addon64).
+        if asi_staged and result.error and result.mod_id is None:
+            result.error = None
+            result.info = (
+                f"Imported {len(asi_staged)} loose loader file(s) "
+                f"into bin64 ("
+                f"{', '.join(sorted({Path(p).suffix.lstrip('.') for p in asi_staged}))}"
+                f"). This archive did not ship any PAZ patches, "
+                f"JSON intents, or other game data."
+            )
         return result
 
 
@@ -3166,6 +3200,24 @@ def import_from_zip(
         # handler still gets the install list.
         if _carryover_asi_staged:
             result.asi_staged = list(_carryover_asi_staged)
+            # GitHub #120 OneBluePumpkin: when the only thing the archive
+            # shipped was loose loader files (.asi or .addon64) and the
+            # _process_extracted_files pass found no PAZ / JSON / DDS /
+            # XML content to mount, the error from that pass is not the
+            # right outcome — the loader files ARE valid CDUMM content.
+            # Suppress the rejection and surface an info banner so the
+            # asi_staged install loop in fluent_window runs normally and
+            # the user does not see a red toast for a successful
+            # loose-loader install.
+            if result.error and result.mod_id is None:
+                result.error = None
+                result.info = (
+                    f"Imported {len(_carryover_asi_staged)} loose "
+                    f"loader file(s) into bin64 ("
+                    f"{', '.join(sorted({Path(p).suffix.lstrip('.') for p in _carryover_asi_staged}))}"
+                    f"). This archive did not ship any PAZ patches, "
+                    f"JSON intents, or other game data."
+                )
 
     return result
 

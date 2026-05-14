@@ -12,6 +12,30 @@ logger = logging.getLogger(__name__)
 ASI_SUFFIX = ".asi"
 DISABLED_SUFFIX = ".asi.disabled"
 
+# ReShade addons (GitHub #120 OneBluePumpkin). These live in bin64
+# alongside ASI plugins but are loaded by ReShade at runtime, not by
+# Ultimate ASI Loader. Same install / uninstall plumbing works for
+# them since we only need to drop the file in bin64 and track it
+# through the same sidecar manifest. Enable / disable is currently
+# all-or-nothing (no .disabled suffix yet) — that lands later when a
+# user asks for per-addon toggling.
+ADDON64_SUFFIX = ".addon64"
+LOOSE_LOADER_SUFFIXES = (ASI_SUFFIX, ADDON64_SUFFIX)
+
+
+def _classify_loader_suffix(name: str) -> str | None:
+    """Return the suffix that classifies this name as a loose-loader
+    file CDUMM should treat as a plugin/addon, or None.
+    """
+    lo = name.lower()
+    if lo.endswith(ADDON64_SUFFIX):
+        return ADDON64_SUFFIX
+    if lo.endswith(DISABLED_SUFFIX):
+        return ASI_SUFFIX
+    if lo.endswith(ASI_SUFFIX):
+        return ASI_SUFFIX
+    return None
+
 
 def _stem_from_installed(name: str) -> str | None:
     """Return the bare plugin stem from an installed file name, or
@@ -47,6 +71,12 @@ class AsiPlugin:
     enabled: bool
     ini_path: Path | None
     hook_targets: list[str] = field(default_factory=list)
+    # "asi" (Ultimate ASI Loader plugin) or "addon64" (ReShade addon).
+    # GitHub #120 OneBluePumpkin: ReShade addons live next to ASI
+    # plugins in bin64 but are loaded by ReShade at runtime, not by
+    # the ASI loader. The kind flag lets UI distinguish the two and
+    # skip operations that do not apply (ini lookup, hook parsing).
+    kind: str = "asi"
 
 
 @dataclass
@@ -75,7 +105,7 @@ class AsiManager:
                 hooks = self._parse_hook_targets(ini) if ini else []
                 plugins.append(AsiPlugin(
                     name=f.stem, path=f, enabled=True,
-                    ini_path=ini, hook_targets=hooks,
+                    ini_path=ini, hook_targets=hooks, kind="asi",
                 ))
             elif f.name.lower().endswith(DISABLED_SUFFIX):
                 base_name = f.name[: -len(DISABLED_SUFFIX)]
@@ -83,7 +113,15 @@ class AsiManager:
                 hooks = self._parse_hook_targets(ini) if ini else []
                 plugins.append(AsiPlugin(
                     name=base_name, path=f, enabled=False,
-                    ini_path=ini, hook_targets=hooks,
+                    ini_path=ini, hook_targets=hooks, kind="asi",
+                ))
+            elif f.suffix.lower() == ADDON64_SUFFIX:
+                # ReShade addons. No ini lookup, no hook targets, no
+                # disabled-form handling for now (uninstall removes them
+                # outright via the sidecar manifest). GitHub #120.
+                plugins.append(AsiPlugin(
+                    name=f.stem, path=f, enabled=True,
+                    ini_path=None, hook_targets=[], kind="addon64",
                 ))
 
         return plugins
@@ -196,6 +234,17 @@ class AsiManager:
                             created_paths.append(self._bin64 / f.name)
                             installed.append(f.name)
                             # NOT owned — shared between mods.
+            elif source.is_file() and source.suffix.lower() == ADDON64_SUFFIX:
+                # ReShade addon (GitHub #120). Plain copy into bin64 with
+                # sidecar tracking so uninstall picks it up. No .ini /
+                # loader-DLL companion handling — ReShade addons ship
+                # standalone.
+                target = self._bin64 / source.name
+                shutil.copy2(source, target)
+                created_paths.append(target)
+                installed.append(target.name)
+                owned.append(target.name)
+                plugin_name = source.stem
             elif source.is_dir():
                 for f in source.rglob("*"):
                     if not f.is_file():
@@ -207,6 +256,15 @@ class AsiManager:
                         created_paths.append(dest)
                         installed.append(dest.name)
                         owned.append(dest.name)
+                        if plugin_name is None:
+                            plugin_name = f.stem
+                    elif ext == ADDON64_SUFFIX:
+                        # ReShade addon, plain copy. GitHub #120.
+                        target = self._bin64 / f.name
+                        shutil.copy2(f, target)
+                        created_paths.append(target)
+                        installed.append(target.name)
+                        owned.append(target.name)
                         if plugin_name is None:
                             plugin_name = f.stem
                     elif ext == ".ini":
