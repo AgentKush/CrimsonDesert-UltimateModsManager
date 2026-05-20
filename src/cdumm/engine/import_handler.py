@@ -1756,41 +1756,67 @@ def _match_game_files(
         parts = f.relative_to(extracted_dir).parts
         matched = False
 
-        # Build candidate paths
-        for i in range(len(parts)):
-            candidate = "/".join(parts[i:])
+        # Build candidate paths. parts[i:] for ascending i strips one
+        # leading wrapper directory at a time, so a mod that ships
+        # gamedata/character/model/foo.pac yields candidates
+        # "gamedata/character/...", "character/...", "model/...", etc.
+        candidates = ["/".join(parts[i:]) for i in range(len(parts))]
 
-            # Skip meta/0.papgt from standalone mods (CDUMM rebuilds it)
-            if candidate == "meta/0.papgt" and standalone_remap:
-                matched = True
-                break
+        # meta/0.papgt from standalone mods is dropped (CDUMM rebuilds).
+        if standalone_remap and "meta/0.papgt" in candidates:
+            continue
 
-            # Remap standalone mod directories to their assigned number
-            if standalone_remap:
+        # Standalone-mod directory remap takes priority.
+        if standalone_remap:
+            for candidate in candidates:
+                remapped = None
                 for old_dir, new_dir in standalone_remap.items():
                     if candidate.startswith(old_dir + "/"):
-                        candidate = new_dir + candidate[len(old_dir):]
-                        matches.append((candidate, f, True))
-                        matched = True
+                        remapped = new_dir + candidate[len(old_dir):]
                         break
-                if matched:
+                if remapped is not None:
+                    matches.append((remapped, f, True))
+                    matched = True
                     break
+            if matched:
+                continue
 
-            # Try exact match against snapshot (existing vanilla files)
+        # Pass 1: snapshot exact-match across ALL candidate slices.
+        # GitHub #146 Axlred: a mesh mod that wraps its files in a
+        # gamedata/ folder (gamedata/character/model/.../foo.pac)
+        # used to match the gamedata-prefixed candidate against
+        # _GAME_FILE_RE first and get imported as a NEW file at the
+        # wrong path, so the real character/model/.../foo.pac vanilla
+        # file was never replaced. Trying the snapshot match for every
+        # slice BEFORE any regex fallback means the correctly-stripped
+        # candidate (the one that names a real vanilla file) always
+        # wins, regardless of how many wrapper dirs the author nested.
+        for candidate in candidates:
             if snapshot.get_file_hash(candidate) is not None:
                 matches.append((candidate, f, False))
                 matched = True
                 break
+        if matched:
+            continue
 
-            # Check if it looks like a game file by pattern
+        # Pass 2: regex fallback for files that look like game files
+        # but are not in the vanilla snapshot (mod adds a new file).
+        # Prefer the most-stripped slice that resolves to an existing
+        # game file on disk; otherwise take the first regex hit.
+        regex_hit = None
+        for candidate in candidates:
             if _GAME_FILE_RE.match(candidate):
                 game_file = game_dir / candidate.replace("/", os.sep)
-                is_new = not game_file.exists()
-                matches.append((candidate, f, is_new))
-                matched = True
-                break
-
+                if game_file.exists():
+                    matches.append((candidate, f, False))
+                    matched = True
+                    break
+                if regex_hit is None:
+                    regex_hit = candidate
         if matched:
+            continue
+        if regex_hit is not None:
+            matches.append((regex_hit, f, True))
             continue
 
     # If no matches found, check for unnumbered PAZ/PAMT mods
