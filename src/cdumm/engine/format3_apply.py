@@ -489,6 +489,16 @@ def _intents_to_v2_changes(
         return _buffinfo_intents_to_changes(
             vanilla_body, vanilla_header, intents)
 
+    # characterinfo.pabgb has a CDUMM PABGB schema, but it is a
+    # positional name-less decompiled structure, so the generic walker
+    # can't resolve a field by name. Route through the clean-room
+    # characterinfo writer, which walks each record to the action-chart
+    # block and writes the five fields Format 3 character-swap mods use
+    # (GitHub #150).
+    if table_name == "characterinfo":
+        return _characterinfo_intents_to_changes(
+            vanilla_body, vanilla_header, intents)
+
     has_cdumm_schema = has_schema(table_name)
     # Tables without a CDUMM PABGB schema are still processable when
     # intents route through either:
@@ -1104,6 +1114,29 @@ def _buffinfo_intents_to_changes(
             "label": f"{intent.entry}.{intent.field}",
         })
     return out
+
+
+def _characterinfo_intents_to_changes(
+    vanilla_body: bytes, vanilla_header: bytes,
+    intents: list[Format3Intent],
+) -> list[dict]:
+    """Resolve characterinfo intents through the clean-room
+    characterinfo writer (GitHub #150).
+
+    The writer walks each record to the action-chart / skeleton block
+    and resolves the five supported fields by name. Intents on
+    unsupported fields, missing records, or out-of-range values are
+    dropped inside the writer with a logged warning; the expand_format3
+    caller surfaces a "0 byte changes" warning for whole-mod dropouts.
+    """
+    from cdumm.engine.characterinfo_writer import (
+        build_characterinfo_changes,
+    )
+    tuples = [
+        (i.entry, i.key, i.field, i.new) for i in intents
+    ]
+    return build_characterinfo_changes(
+        vanilla_body, vanilla_header, tuples)
 
 
 def _build_list_writer_change(

@@ -118,10 +118,30 @@ def parse_entry(data, offset, end):
         p += 4 + 2
 
         p += 4
+        # Action-chart / skeleton package block: seven consecutive u32
+        # name-hash keys. The block sits at a record-dependent offset
+        # (variable-length CStrings precede it), so it is located by
+        # walking, not a fixed offset. Field positions verified against
+        # vanilla 1.07.00: the Damian record holds the exact hashes the
+        # Female Animations mod (GitHub #150) copies onto Kliff.
+        result['_upperActionChartPackageGroupName_offset'] = p
+        result['_upperActionChartPackageGroupName_key'] = struct.unpack_from('<I', data, p)[0]
+        result['_lowerActionChartPackageGroupName_offset'] = p + 4
+        result['_lowerActionChartPackageGroupName_key'] = struct.unpack_from('<I', data, p + 4)[0]
         result['_appearanceName_stream_offset'] = p + 12
         result['_appearanceName_key'] = struct.unpack_from('<I', data, p + 12)[0]
         result['_characterPrefabPath_stream_offset'] = p + 16
         result['_characterPrefabPath_key'] = struct.unpack_from('<I', data, p + 16)[0]
+        result['_skeletonName_offset'] = p + 20
+        result['_skeletonName_key'] = struct.unpack_from('<I', data, p + 20)[0]
+        result['_skeletonVariationName_offset'] = p + 24
+        result['_skeletonVariationName_key'] = struct.unpack_from('<I', data, p + 24)[0]
+        # _flagC: a u8 enum (only ever 0/1/2 across all 7027 vanilla
+        # records) 62 bytes past the block start, inside the post-block
+        # fixed-field run. Damian holds 2, the value #150 sets on Kliff.
+        if p + 63 <= len(data):
+            result['_flagC_offset'] = p + 62
+            result['_flagC'] = data[p + 62]
         p += 28
         p += 4
         p += 8

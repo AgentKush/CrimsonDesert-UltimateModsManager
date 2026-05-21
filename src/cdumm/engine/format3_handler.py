@@ -694,6 +694,12 @@ def _diagnose_unsupported_intent(
         if tn == "multichangeinfo" and (field or "").startswith(
                 "fixed_material_data_list["):
             return None
+        # GitHub #150 (Female Animations): characterinfo
+        # upper_chart.group_lookup / lower_chart.group_lookup are
+        # resolved by the clean-room characterinfo writer.
+        if tn == "characterinfo" and field in (
+                "upper_chart.group_lookup", "lower_chart.group_lookup"):
+            return None
         return (
             f"field '{field}' targets a nested struct sub-field "
             f"(dotted path). Format 3 nested-field writes are not "
@@ -840,6 +846,21 @@ def _classify_intent(
     # warning, mirroring the iteminfo nested-path early-accept above.
     if tn_norm == "multichangeinfo" and intent.field.startswith(
             "fixed_material_data_list["):
+        return None
+
+    # GitHub #150 (Female Animations): characterinfo's PABGB schema is
+    # a positional name-less decompiled structure, so the schema walker
+    # can't resolve these field names. The clean-room characterinfo
+    # writer (characterinfo_writer.build_characterinfo_changes) locates
+    # them by walking each record to the action-chart block. Keep this
+    # set in sync with characterinfo_writer.SUPPORTED_FIELDS.
+    if tn_norm == "characterinfo" and intent.field in {
+        "upper_chart.group_lookup",
+        "lower_chart.group_lookup",
+        "skeleton_name",
+        "lookup_25",
+        "flag_c",
+    }:
         return None
 
     # List writer dispatch: this (table, field) pair has a registered

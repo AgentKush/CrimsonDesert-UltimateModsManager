@@ -1,0 +1,166 @@
+"""Tests for the characterinfo.pabgb field writer (GitHub #150).
+
+These build a synthetic characterinfo record to the exact shape the
+parser walk expects, so the test is fast and self-contained. The
+real-file verification (all 7027 records parse, the Female Animations
+mod's 15 intents apply to the exact bytes the Damian record proves)
+was done against the vanilla 1.07.00 dump during development.
+
+The five fields the writer supports all sit relative to the
+action-chart / skeleton block:
+  upper_chart.group_lookup  block + 0   u32
+  lower_chart.group_lookup  block + 4   u32
+  skeleton_name             block + 20  u32
+  lookup_25                 block + 24  u32
+  flag_c                    block + 62  u8
+"""
+from __future__ import annotations
+
+import struct
+
+from cdumm.engine.characterinfo_writer import build_characterinfo_changes
+
+
+def _make_record(key: int, name: str, *, upper: int, lower: int,
+                 gameplay: int, appearance: int, prefab: int,
+                 skeleton: int, skelvar: int, flag_c: int) -> bytes:
+    """Build one characterinfo record matching the parser walk in
+    characterinfo_full_parser.parse_entry."""
+    nb = name.encode("latin-1")
+    r = bytearray()
+    r += struct.pack("<I", key)               # entry_key
+    r += struct.pack("<I", len(nb)) + nb      # name CString
+    r += b"\x00"                              # _isBlocked u8
+    r += b"\x00" + b"\x00" * 8 + b"\x00" * 4  # locstr 1 (len 0)
+    r += b"\x00" + b"\x00" * 8 + b"\x00" * 4  # locstr 2 (len 0)
+    r += b"\x00" * 4 + b"\x00" * 4            # two u32
+    r += b"\x00" * 4                          # CString (len 0)
+    r += b"\x00" + b"\x00"                    # two u8
+    r += b"\x00" * 4 + b"\x00" * 4            # two u32
+    r += struct.pack("<H", 0)                 # _vehicleInfo u16
+    r += struct.pack("<Q", 0)                 # _callMercenaryCoolTime
+    r += struct.pack("<Q", 0)                 # _callMercenarySpawnDuration
+    r += b"\x00"                              # _mercenaryCoolTimeType u8
+    r += b"\x00" * 6                          # u32 + u16
+    r += b"\x00" * 6                          # u32 + u16
+    r += b"\x00" * 4                          # u32
+    # action-chart / skeleton block: 7 u32
+    r += struct.pack("<IIIIIII", upper, lower, gameplay, appearance,
+                     prefab, skeleton, skelvar)
+    # post-block fixed run: u32 + u64 + 5*u32 = 32 bytes
+    r += b"\x00" * 32
+    # four u8: flag_c is index 2
+    r += bytes([0, 0, flag_c & 0xFF, 0])
+    r += b"\x00" + b"\x00" * 8 + b"\x00" * 4  # locstr (len 0)
+    r += b"\x00" * 4                          # u32
+    r += b"\x00"                              # u8
+    r += b"\x00" * 2                          # u16
+    r += b"\x00" * 40                         # bool block
+    return bytes(r)
+
+
+def _make_table(records: list[bytes]) -> tuple[bytes, bytes]:
+    pabgb = bytearray()
+    entries: list[tuple[int, int]] = []
+    for rec in records:
+        key = struct.unpack_from("<I", rec, 0)[0]
+        entries.append((key, len(pabgb)))
+        pabgb += rec
+    pabgh = bytearray(struct.pack("<H", len(entries)))
+    for key, off in entries:
+        pabgh += struct.pack("<II", key, off)
+    return bytes(pabgb), bytes(pabgh)
+
+
+def _apply(body: bytes, changes: list[dict]) -> bytes:
+    work = bytearray(body)
+    for c in changes:
+        off = c["offset"]
+        orig = bytes.fromhex(c["original"])
+        patched = bytes.fromhex(c["patched"])
+        assert work[off:off + len(orig)] == orig, "original mismatch"
+        work[off:off + len(patched)] = patched
+    return bytes(work)
+
+
+def _vanilla_kwargs() -> dict:
+    return dict(upper=11, lower=22, gameplay=33, appearance=44,
+                prefab=55, skeleton=66, skelvar=77, flag_c=1)
+
+
+def test_writer_locates_and_patches_all_five_fields():
+    rec = _make_record(1, "Kliff", **_vanilla_kwargs())
+    pabgb, pabgh = _make_table([rec])
+    intents = [
+        ("Kliff", 0, "upper_chart.group_lookup", 1767116530),
+        ("Kliff", 0, "lower_chart.group_lookup", 3755051597),
+        ("Kliff", 0, "skeleton_name", 2831867940),
+        ("Kliff", 0, "lookup_25", 3511542393),
+        ("Kliff", 0, "flag_c", 2),
+    ]
+    changes = build_characterinfo_changes(pabgb, pabgh, intents)
+    assert len(changes) == 5
+    patched = _apply(pabgb, changes)
+    assert len(patched) == len(pabgb), "writes must not resize the record"
+    # block starts at a known offset for this synthetic record; verify
+    # by re-reading every field through the parser instead.
+    from cdumm.archive.format_parsers.characterinfo_full_parser import (
+        parse_pabgh_index, parse_entry,
+    )
+    idx = parse_pabgh_index(pabgh)
+    r = parse_entry(patched, idx[1], len(patched))
+    assert r["_upperActionChartPackageGroupName_key"] == 1767116530
+    assert r["_lowerActionChartPackageGroupName_key"] == 3755051597
+    assert r["_skeletonName_key"] == 2831867940
+    assert r["_skeletonVariationName_key"] == 3511542393
+    assert r["_flagC"] == 2
+
+
+def test_writer_resolves_by_numeric_key_when_name_misses():
+    rec = _make_record(4242, "Real_Name", **_vanilla_kwargs())
+    pabgb, pabgh = _make_table([rec])
+    intents = [("Wrong_Name", 4242, "skeleton_name", 999)]
+    changes = build_characterinfo_changes(pabgb, pabgh, intents)
+    assert len(changes) == 1
+    from cdumm.archive.format_parsers.characterinfo_full_parser import (
+        parse_pabgh_index, parse_entry,
+    )
+    patched = _apply(pabgb, changes)
+    r = parse_entry(patched, parse_pabgh_index(pabgh)[4242], len(patched))
+    assert r["_skeletonName_key"] == 999
+
+
+def test_writer_only_touches_targeted_records():
+    recs = [
+        _make_record(1, "Kliff", **_vanilla_kwargs()),
+        _make_record(2, "Untouched", **_vanilla_kwargs()),
+    ]
+    pabgb, pabgh = _make_table(recs)
+    intents = [("Kliff", 0, "flag_c", 2)]
+    changes = build_characterinfo_changes(pabgb, pabgh, intents)
+    assert len(changes) == 1
+    patched = _apply(pabgb, changes)
+    # record 2 is byte-identical
+    assert patched[len(recs[0]):] == pabgb[len(recs[0]):]
+
+
+def test_writer_skips_unsupported_field_and_bad_value():
+    rec = _make_record(1, "Kliff", **_vanilla_kwargs())
+    pabgb, pabgh = _make_table([rec])
+    intents = [
+        ("Kliff", 0, "not_a_real_field", 5),
+        ("Kliff", 0, "flag_c", "two"),          # non-integer
+        ("Kliff", 0, "flag_c", 999),            # out of u8 range
+        ("Kliff", 0, "skeleton_name", 12345),   # the one good intent
+    ]
+    changes = build_characterinfo_changes(pabgb, pabgh, intents)
+    assert len(changes) == 1
+    assert changes[0]["label"] == "Kliff.skeleton_name"
+
+
+def test_writer_skips_intent_for_missing_record():
+    rec = _make_record(1, "Kliff", **_vanilla_kwargs())
+    pabgb, pabgh = _make_table([rec])
+    intents = [("Ghost", 9999, "skeleton_name", 1)]
+    changes = build_characterinfo_changes(pabgb, pabgh, intents)
+    assert changes == []
