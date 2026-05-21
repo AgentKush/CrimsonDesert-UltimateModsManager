@@ -103,3 +103,53 @@ def test_detector_does_not_pick_up_unrelated_extensions(tmp_path):
     assert results == [], (
         f"non-XML-family files leaked into the detector: {results!r}"
     )
+
+
+# ── Mixed-mod guard (GitHub #146 / #153) ────────────────────────────
+#
+# DragonSlayer-Berserk (Nexus 1430) ships a .pac_xml mesh sidecar next
+# to a .pac mesh and several .dds textures. The zip / 7z import paths
+# saw the .pac_xml, routed the whole drop through the XML-only
+# importer, and dropped the mesh and every texture. The folder import
+# path has no XML-only branch, so the same mod imported correctly as a
+# folder. ``_has_non_xml_game_content`` is the guard that makes the
+# zip / 7z paths fall through to the normal matcher for mixed mods.
+
+
+def test_mixed_mesh_mod_is_flagged_as_non_xml_content(tmp_path):
+    from cdumm.engine.import_handler import (
+        _detect_plain_xml_replacements, _has_non_xml_game_content,
+    )
+    root = tmp_path / "DragonSlayer-Berserk-V1" / "gamedata" / "character"
+    root.mkdir(parents=True)
+    (root / "cd_phm_02_sword_0015.pac_xml").write_bytes(b"<root/>")
+    (root / "cd_phm_02_sword_0015.pac").write_bytes(b"MESHDATA")
+    (root / "cd_phm_02_handle_0015.dds").write_bytes(b"DDS ")
+    drop = tmp_path
+    xml = _detect_plain_xml_replacements(drop)
+    assert xml, "the .pac_xml sidecar should be detected"
+    assert _has_non_xml_game_content(drop, xml) is True, (
+        "a drop with a .pac mesh and a .dds texture must be flagged "
+        "as mixed so the XML-only importer does not eat those files"
+    )
+
+
+def test_pure_xml_mod_is_not_flagged(tmp_path):
+    """A genuine XML-only mod (XML files plus docs / metadata) must
+    NOT be flagged, so the XML-only import path still runs for it."""
+    from cdumm.engine.import_handler import (
+        _detect_plain_xml_replacements, _has_non_xml_game_content,
+    )
+    drop = tmp_path / "GamepadTweak"
+    drop.mkdir()
+    (drop / "inputmap_common.xml").write_bytes(b"<root/>")
+    (drop / "hud.app_xml").write_bytes(b"<root/>")
+    (drop / "modinfo.json").write_bytes(b"{}")
+    (drop / "readme.txt").write_bytes(b"hello")
+    (drop / "preview.png").write_bytes(b"\x89PNG")
+    xml = _detect_plain_xml_replacements(drop)
+    assert xml
+    assert _has_non_xml_game_content(drop, xml) is False, (
+        "an XML-only mod with just docs and metadata alongside must "
+        "not be flagged as mixed"
+    )

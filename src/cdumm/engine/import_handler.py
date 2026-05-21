@@ -619,6 +619,47 @@ def _detect_plain_xml_replacements(extracted_dir: Path) -> list[dict]:
     return results
 
 
+# Extensions that are documentation / images / metadata, not game
+# content. A drop made up of only these plus XML-family files is a
+# genuine XML-only mod; anything else means the drop also ships
+# non-XML game content.
+_NON_CONTENT_EXTS = frozenset({
+    ".txt", ".md", ".rtf", ".json", ".ini", ".png", ".jpg", ".jpeg",
+    ".webp", ".gif", ".bmp", ".url", ".pdf", ".doc", ".docx", ".html",
+})
+
+
+def _has_non_xml_game_content(
+    root: Path, xml_results: list[dict]
+) -> bool:
+    """True when ``root`` ships game-content files beyond the XML-family
+    files in ``xml_results``.
+
+    GitHub #146 / #153 (Axlred, xenoi60): a mixed mesh mod ships an XML
+    sidecar (cd_phm_..._sword.pac_xml) next to a .pac mesh and several
+    .dds textures. The zip / 7z import paths route any drop containing a
+    plain XML-family file straight through the XML-only importer, which
+    only imports the XML and silently drops the mesh and textures. The
+    folder import path has no such branch, which is why the same mod
+    imports correctly as a folder but not as a zip.
+
+    This guard lets the caller fall through to the normal matcher when
+    the drop is a mixed mod, so every file gets imported.
+    """
+    xml_srcs = {d["source_path"] for d in xml_results}
+    for f in root.rglob("*"):
+        if not f.is_file() or f in xml_srcs:
+            continue
+        # ASI / loader files are staged out separately before this runs.
+        if "_asi_staging" in f.parts:
+            continue
+        ext = f.suffix.lower()
+        if ext in _NON_CONTENT_EXTS or ext in _XML_FAMILY_EXTS:
+            continue
+        return True
+    return False
+
+
 def _detect_raw_file_replacements_via_pamt(
     extracted_dir: Path,
     game_dir: Path,
@@ -2701,7 +2742,12 @@ def _import_from_extracted(
             for d in tmp_path.rglob("*") if d.is_dir()
         )
         has_json_patches = detect_json_patch(tmp_path) is not None
-        if not has_paz_dirs and not has_json_patches:
+        # Mixed-mod guard (#146/#153): a drop that also ships .pac
+        # meshes / .dds textures must fall through to the normal
+        # matcher, otherwise the XML-only importer drops everything
+        # but the XML sidecar.
+        mixed = _has_non_xml_game_content(tmp_path, plain_xml)
+        if not has_paz_dirs and not has_json_patches and not mixed:
             plain_modinfo = _read_modinfo(tmp_path)
             plain_result = _import_og_xml_as_mod(
                 plain_xml, game_dir, db, deltas_dir, mod_name,
@@ -3014,7 +3060,12 @@ def import_from_zip(
                 for d in tmp_path.rglob("*") if d.is_dir()
             )
             has_json_patches = detect_json_patch(tmp_path) is not None
-            if not has_paz_dirs and not has_json_patches:
+            # Mixed-mod guard (#146/#153): a drop that also ships .pac
+            # meshes / .dds textures must fall through to the normal
+            # matcher, otherwise the XML-only importer drops everything
+            # but the XML sidecar.
+            mixed = _has_non_xml_game_content(tmp_path, plain_xml)
+            if not has_paz_dirs and not has_json_patches and not mixed:
                 plain_modinfo = _read_modinfo(tmp_path)
                 plain_result = _import_og_xml_as_mod(
                     plain_xml, game_dir, db, deltas_dir, mod_name,
