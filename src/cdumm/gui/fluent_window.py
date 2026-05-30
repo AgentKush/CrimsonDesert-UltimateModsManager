@@ -2446,7 +2446,8 @@ class CdummWindow(FluentWindow):
                         "Application-Name": "CDUMM",
                         "Application-Version": __version__,
                     })
-                with urllib.request.urlopen(req, timeout=60) as resp, \
+                from cdumm.engine.ssl_ctx import make_ssl_context as _make_ssl_ctx
+                with urllib.request.urlopen(req, timeout=60, context=_make_ssl_ctx()) as resp, \
                         open(dest, "wb") as f:
                     # Bug #29: content-length sanity check up front.
                     cl_raw = resp.headers.get("Content-Length")
