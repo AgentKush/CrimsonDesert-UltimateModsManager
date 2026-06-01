@@ -6177,6 +6177,14 @@ class CdummWindow(FluentWindow):
         from cdumm.storage.game_finder import is_steam_install, is_xbox_install
         steam = is_steam_install(self._game_dir)
         xbox = is_xbox_install(self._game_dir)
+        # #186 (lupo1190) was reported with a CDUMM log that contained
+        # zero entries from the launch click because every branch below
+        # was silent. Log which channel we're handing the launch off to,
+        # and the AppID for Steam, so the next person who hits a launch
+        # regression can attach a useful diff without us having to ask.
+        logger.info(
+            "_on_launch_game: game_dir=%s steam=%s xbox=%s exe=%s",
+            self._game_dir, steam, xbox, exe)
         try:
             if steam:
                 # Launch through Steam for proper overlay/DRM.
@@ -6184,11 +6192,15 @@ class CdummWindow(FluentWindow):
                 # and falls back to the verified Crimson Desert AppID (3321460).
                 from cdumm.engine.game_monitor import get_steam_app_id
                 app_id = get_steam_app_id(self._game_dir)
-                open_path(f"steam://rungameid/{app_id}")
+                uri = f"steam://rungameid/{app_id}"
+                logger.info("Launching via Steam URI: %s", uri)
+                open_path(uri)
             elif xbox:
                 # Xbox Game Pass -- launch through the Xbox app
+                logger.info("Launching via Xbox shell URI")
                 open_path("shell:AppsFolder\\PearlAbyss.CrimsonDesert_8wekyb3d8bbwe!Game")
             else:
+                logger.info("Launching direct exe (non-storefront): %s", exe)
                 subprocess.Popen([str(exe)], cwd=str(self._game_dir / "bin64"))
             InfoBar.success(
                 title=tr("main.game_launched"), content=tr("main.game_launched_msg"),
