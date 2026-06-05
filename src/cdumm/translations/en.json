@@ -687,6 +687,7 @@
   "tools.culprit.title": "Find Culprit Mod",
   "tools.culprit.desc": "Automatically launches the game through Steam, monitors for crashes, and uses binary search to identify which mod(s) cause problems. Requires at least 2 enabled mods. Do not interact with the game during testing.",
   "tools.culprit.run": "Start",
+  "tools.culprit.windows_only": "Find Culprit Mod is only available on Windows. It detects game crashes using Windows crash dumps that do not exist on Linux or macOS, so it cannot tell a crashing mod from a working one on this system.",
   "tools.culprit.enabled_mods": "Enabled Mods",
   "tools.culprit.estimated_rounds": "Estimated Rounds",
   "tools.culprit.stop": "Stop",
