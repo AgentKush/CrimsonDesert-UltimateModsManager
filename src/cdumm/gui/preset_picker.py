@@ -156,6 +156,45 @@ def find_folder_variants(path: Path) -> list[Path]:
     return variants if len(variants) >= 2 else []
 
 
+def has_structural_folder_variants(path: Path, max_depth: int = 4) -> bool:
+    """Whether ``path`` (or a single wrapper folder inside it) holds two
+    or more variant folders, each carrying its own game content (a PAZ /
+    PAMT or a numbered data dir).
+
+    This is the race/gender/body-type structure of character-creator
+    style mods (mod 837 ships HumanFemale/, GoblinMale/, OrcFemale/ ...
+    each with a 0036/0.paz). Such a mod usually ALSO ships a few loose
+    Format-3 ``.json`` modules at its root, which the JSON-preset picker
+    would otherwise grab first and import before the variant picker ever
+    runs, so the user could never pick their race (#190).
+
+    Descends single wrapper folders (a ZIP that wraps everything in one
+    ``CharacterCreator/`` directory) before checking, because
+    ``find_folder_variants`` only sees the wrapper at the top level.
+    Deliberately keys on folder variants only, NOT loose-file or
+    Format-3 variant packs, so pure JSON variant packs (e.g. CrimsonWings'
+    five ``.field.json`` levels) keep flowing through the normal
+    preset-picker path.
+    """
+    import re
+    probe = path
+    for _ in range(max_depth):
+        if not probe.is_dir():
+            return False
+        if len(find_folder_variants(probe)) >= 2:
+            return True
+        subs = [
+            d for d in probe.iterdir()
+            if d.is_dir() and not d.name.startswith(('.', '_'))
+            and not re.match(r'^\d{4}$', d.name)
+            and d.name.lower() != 'meta'
+        ]
+        if len(subs) != 1:
+            return False
+        probe = subs[0]  # descend the single wrapper folder and retry
+    return False
+
+
 def folder_variant_game_files(folders: list[Path]) -> dict[Path, set[str]]:
     """For each folder, collect the set of game_file targets its JSONs
     declare. Used by the picker to decide whether the folders behave

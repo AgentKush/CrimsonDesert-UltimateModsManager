@@ -4047,7 +4047,19 @@ class CdummWindow(FluentWindow):
                 check_path = tmp_extract
 
             presets = find_json_presets(check_path) if check_path.is_dir() else []
-            if len(presets) > 1:
+            # Character-creator style mods (mod 837) ship both loose
+            # Format-3 JSON modules AND per-race PAZ variant folders. The
+            # JSON-preset picker below would grab the modules and import
+            # them before the race picker (section 5b) ever runs, so the
+            # user could never pick their gender/race. When the same drop
+            # also carries structural variant folders, that choice comes
+            # first: skip the JSON-preset shortcut and let 5b surface the
+            # race picker. (#190, lurkser/woowoots)
+            from cdumm.gui.preset_picker import has_structural_folder_variants
+            _has_structural_variants = (
+                check_path.is_dir()
+                and has_structural_folder_variants(check_path))
+            if len(presets) > 1 and not _has_structural_variants:
                 # Mark as configurable so user can re-pick preset later
                 self._configurable_source = str(path)
                 dialog = PresetPickerDialog(presets, self)
@@ -4225,7 +4237,8 @@ class CdummWindow(FluentWindow):
                     self._process_next_import()
                     return
 
-            if tmp_extract and not (len(presets) > 1):
+            if tmp_extract and not (len(presets) > 1
+                                    and not _has_structural_variants):
                 import shutil
                 shutil.rmtree(tmp_extract, ignore_errors=True)
         except ImportError:
