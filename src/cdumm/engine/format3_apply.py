@@ -386,21 +386,66 @@ def expand_format3_into_aggregated(
             continue
 
         # storeinfo.pabgb (GitHub #183) and equipslotinfo.pabgb
-        # (GitHub #190): same two-file contract as multichangeinfo —
+        # (GitHub #190): same two-file contract as multichangeinfo,
         # the writer rebuilds the targeted entry's record list (which
         # grows when a mod adds items/hashes) plus the companion
         # .pabgh offsets in one pass.
+        #
+        # Only the writer-supported list fields divert here; every
+        # other intent on these targets falls through to the standard
+        # path below (storeinfo has a PABGB schema for its scalar
+        # fields, and equipslotinfo intents carrying `old` hex use the
+        # raw-replacement branch). Without the partition, a mod mixing
+        # stock_data_list with scalar storeinfo edits silently lost
+        # the scalars (release-review finding, 2026-06-10). The list
+        # replaces and the scalar changes cannot overlap: scalars live
+        # in the entry head before the record list, and the apply
+        # pipeline's cumulative shift covers offsets after a grown
+        # entry, same as multichangeinfo's per-record growth.
         if target in ("storeinfo.pabgb", "equipslotinfo.pabgb"):
             if target == "equipslotinfo.pabgb":
                 from cdumm.engine.equipslotinfo_writer import (
                     EquipslotWriteRefused as StoreinfoWriteRefused,
                     build_equipslotinfo_changes as build_storeinfo_changes,
                 )
+                import re as _re
+                def _writer_supported(i):
+                    return _re.match(
+                        r"^entries\[\d+\]\.etl_hashes$",
+                        (getattr(i, "field", "") or "")) is not None
             else:
                 from cdumm.engine.storeinfo_writer import (
                     StoreinfoWriteRefused, build_storeinfo_changes,
                 )
+                def _writer_supported(i):
+                    return (getattr(i, "field", "") or "").strip() in (
+                        "stock_data_list", "_exchangeItemInfoListForSell")
             _companion = target.replace(".pabgb", ".pabgh")
+            writer_batch = [i for i in batched if _writer_supported(i)]
+            passthrough = [i for i in batched if not _writer_supported(i)]
+            if passthrough:
+                extra = _intents_to_v2_changes(
+                    target, vanilla_body, vanilla_header, passthrough)
+                if extra:
+                    contrib_ids_pt = list(
+                        whole_table_mod_ids.get(target, []))
+                    for c in extra:
+                        c["_target_file"] = target
+                        if contrib_ids_pt:
+                            c["_source_mod_ids"] = list(contrib_ids_pt)
+                    aggregated.setdefault(target, []).extend(extra)
+                    for c in extra:
+                        n_bytes_changed += len(c.get("patched", "")) // 2
+                    if participating_mod_ids is not None:
+                        for mid in whole_table_mod_ids.get(target, []):
+                            participating_mod_ids.add(mid)
+                    logger.info(
+                        "Format 3 %s: %d non-list intent(s) handled by "
+                        "the standard path (%d change(s))",
+                        target, len(passthrough), len(extra))
+            if not writer_batch:
+                continue
+            batched = writer_batch
             try:
                 pabgb_changes, pabgh_change = build_storeinfo_changes(
                     vanilla_body, vanilla_header, batched)

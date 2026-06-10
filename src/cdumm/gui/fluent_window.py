@@ -550,14 +550,14 @@ def _merge_nexus_updates(prev: dict, new: dict) -> dict:
     actually fetched this cycle; mods skipped by the 1-week feed
     optimisation are absent from ``new``. Replacing the state dict
     wholesale therefore WIPED known-outdated entries whenever a later
-    cycle skipped them — the user's red pills flipped back to
+    cycle skipped them, so the user's red pills flipped back to
     "up-to-date" ~30s after a check that had just found updates,
     because the first check stamped nexus_last_checked_at and the
     second cycle feed-skipped everything (#194, GabrielNunesIT).
 
     Skipped mods keep their last known state (that is the feed-skip's
     own premise), freshly checked mods get overwritten, and failure
-    cycles (auth error / rate limit / transport — ``new`` is empty)
+    cycles (auth error / rate limit / transport, ``new`` is empty)
     leave the previous state untouched. Returns a new dict; neither
     input is mutated.
     """
@@ -6378,7 +6378,7 @@ class CdummWindow(FluentWindow):
                     # Steam integrity check bypassed)" in its binary),
                     # which proves Themida/Denuvo tolerate a direct
                     # spawn while the Steam client is running. Opt-in
-                    # only — the Steam handoff stays the default so
+                    # only; the Steam handoff stays the default so
                     # overlay/cloud behaviour is unchanged for everyone
                     # else.
                     logger.info(

@@ -7,7 +7,7 @@ read and rewrite that list natively.
 
 Layout (verified by byte-exact round-trip of 192/293 entries of the
 CD v1.10 vanilla storeinfo.pabgb, including all 37 records of entry
-3101 "Store_Her_General" — the decode scripts live in
+3101 "Store_Her_General"; the decode scripts live in
 ``issue_repro/183/``):
 
 - Entry body: u16 entry_id + u32 name_len + name + NUL, then fixed

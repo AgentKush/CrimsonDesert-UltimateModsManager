@@ -657,7 +657,7 @@ def _read_ItemInfoSharpnessData(r: _Reader, dsi_type: int = 15) -> dict:
 
     CD 1.09 (GitHub #182): when default_sub_item is POPULATED
     (type_id < 14) one extra u8 precedes the W-header. Located by
-    correlation — under the 1.09 base schema exactly the records with
+    correlation: under the 1.09 base schema exactly the records with
     dsi.type_id == 0 misparsed (349/349) while every type_id == 15
     record parsed exact, and consuming one byte here realigns all of
     them (6314/6314 on the 1.09 fixture). The byte is stored as

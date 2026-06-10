@@ -18,7 +18,7 @@ storeinfo_native_parser):
   versions, which must NOT be written over current vanilla data.
 * NEW records are built from the pinned fields plus sub_data, with the
   unmapped value interior zeroed. If a new record carries a NON-zero
-  value in any unmapped interior field, the whole intent is refused —
+  value in any unmapped interior field, the whole intent is refused,
   we cannot place the value, and a wrong placement corrupts the table
   (the game crashes on store open).
 * Non-empty ``effect_list`` refuses (element layout not decoded).
@@ -82,11 +82,18 @@ def _check_new_record_buildable(j: dict, idx: int) -> None:
     # value.raw_e and raw_g ARE mapped but currently only validated
     # against the defaults seen in every ground-truth record; anything
     # else would be a silent guess about semantics, so surface it.
-    if v.get("raw_q") is not None and _record_identity(j) != int(v["raw_q"]):
-        raise StoreinfoWriteRefused(
-            f"new stock record [{idx}]: value.raw_q={v['raw_q']!r} "
-            f"differs from value.payload.body; in every ground-truth "
-            f"record they are the same value")
+    if v.get("raw_q") is not None:
+        try:
+            raw_q = int(v["raw_q"])
+        except (TypeError, ValueError):
+            raise StoreinfoWriteRefused(
+                f"new stock record [{idx}]: value.raw_q={v['raw_q']!r} "
+                f"is not an integer")
+        if _record_identity(j) != raw_q:
+            raise StoreinfoWriteRefused(
+                f"new stock record [{idx}]: value.raw_q={v['raw_q']!r} "
+                f"differs from value.payload.body; in every "
+                f"ground-truth record they are the same value")
 
 
 def _build_new_record(j: dict, idx: int) -> StockRecord:
@@ -222,6 +229,8 @@ def build_storeinfo_changes(
     deltas: list[tuple[int, int]] = []  # (vanilla_offset, size_delta)
     for key in sorted(replacements, key=lambda k: replacements[k][0]):
         start, end, blob = replacements[key]
+        if vanilla_body[start:end] == blob:
+            continue  # no-op set (mod matches vanilla exactly)
         pabgb_changes.append({
             "offset": start,
             "original": vanilla_body[start:end].hex(),
@@ -229,6 +238,9 @@ def build_storeinfo_changes(
             "label": f"store {key}.stock_data_list",
         })
         deltas.append((offsets[key], len(blob) - (end - start)))
+
+    if not pabgb_changes:
+        return [], None
 
     # Rebuild the pabgh: every entry whose offset lies after a grown
     # entry shifts by the accumulated delta.
