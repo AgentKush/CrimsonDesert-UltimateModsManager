@@ -131,6 +131,35 @@ def fix_xml_format(
     return fixed
 
 
+def _uncompressed_entry_is_encrypted_text(paz_src: Path, entry) -> bool:
+    """Whether an uncompressed PAZ entry holds ChaCha20-encrypted text.
+
+    GitHub #199: CD 1.10 stores the technique/*.material files
+    uncompressed but encrypted, and ``.material`` is not in the
+    encrypted-extension heuristic, so the repack stored mod plaintext
+    where the game expects cipher bytes and the materials silently
+    failed to load. An uncompressed slot is treated as encrypted text
+    when its raw bytes do NOT start like text (UTF-8 BOM or '<') but
+    their ChaCha20 decryption DOES. Errors return False so the caller
+    keeps the old behaviour.
+    """
+    text_sig = (b"\xef\xbb\xbf", b"<")
+    try:
+        with open(paz_src, "rb") as probe_f:
+            probe_f.seek(entry.offset)
+            probe_raw = probe_f.read(entry.comp_size)
+        if not probe_raw or probe_raw.startswith(text_sig):
+            return False
+        from cdumm.archive.paz_crypto import decrypt
+        bname = entry.path.rsplit("/", 1)[-1]
+        return decrypt(probe_raw, bname).startswith(text_sig)
+    except Exception as e:
+        logger.debug(
+            "Uncompressed-encryption probe failed for %s: %s",
+            entry.path, e)
+        return False
+
+
 def detect_crimson_browser(path: Path) -> dict | None:
     """Check if path contains a Crimson Browser format mod.
 
@@ -507,6 +536,19 @@ def convert_to_paz_mod(
                     # Decompress failed → file is encrypted
                     entry._encrypted_override = True
                     logger.info("Detected encryption for %s (flag was False)", entry.path)
+            elif (not entry.encrypted and not entry.compressed
+                    and plaintext.startswith((b"\xef\xbb\xbf", b"<"))):
+                # GitHub #199 (lupo1190, VAXIS Water Physics): CD 1.10
+                # encrypts some UNCOMPRESSED text entries (the
+                # technique/*.material files). comp_size == orig_size
+                # means the LZ4 probe above never runs, so the mod's
+                # plaintext was stored where the game expects ChaCha20
+                # bytes and the material failed to load in game.
+                if _uncompressed_entry_is_encrypted_text(paz_src, entry):
+                    entry._encrypted_override = True
+                    logger.info(
+                        "Detected encryption for %s (uncompressed "
+                        "text entry, flag was False)", entry.path)
 
             # BNK soundbanks must be stored raw (no compression, no encryption)
             # Clear compression type bits (16-19) in flags so repack treats as raw
