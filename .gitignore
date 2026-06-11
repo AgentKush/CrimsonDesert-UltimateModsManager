@@ -4,8 +4,6 @@ __pycache__/
 *.egg-info/
 dist/
 build/
-# Keep cdmm.spec tracked (needed for builds)
-!cdmm.spec
 .eggs/
 *.egg
 .venv/
@@ -30,6 +28,7 @@ tests/_test_mods_external/
 
 # Local investigation scratch
 .tmp_*
+tmp_*.py
 reviewcode_diff.patch
 
 # Runtime logs. The worker subprocess writes cdumm_worker.log relative

@@ -1,14 +1,14 @@
 # -*- mode: python ; coding: utf-8 -*-
 # PyInstaller spec for the macOS build of Crimson Desert Ultimate Mods
-# Manager. Parallel to ``cdumm.spec`` (Windows) — the Windows spec stays
+# Manager. Parallel to ``cdumm.spec`` (Windows), the Windows spec stays
 # untouched. Differences from the Windows build:
 #
 #   * Drops ``cdumm.ico`` (Windows tray icon, replaced by ``cdumm.icns``).
-#   * Drops the ASI loader payload (``asi_loader/winmm.dll``) — ASI is
+#   * Drops the ASI loader payload (``asi_loader/winmm.dll``), ASI is
 #     a Win32-only mod format and the page is hidden from the macOS
 #     navigation at runtime.
 #   * Drops the vendored ``crimson_rs`` Windows ``.pyd`` and the
-#     NattKh skill-info parser sidecar — the loader at
+#     NattKh skill-info parser sidecar, the loader at
 #     ``engine/crimson_rs_loader.py`` returns ``None`` gracefully when
 #     the binary fails to import, so iteminfo / skill list-of-dict
 #     writers become unavailable on macOS but everything else works.
@@ -38,7 +38,7 @@ sys.path.insert(0, _src_root)
 from cdumm import __version__ as VERSION  # noqa: E402
 
 # cdumm_native Rust extension. On macOS the artifact is a ``.so``
-# (despite the name — Python uses .so on POSIX regardless of dlopen
+# (despite the name, Python uses .so on POSIX regardless of dlopen
 # semantics). maturin build --release puts it at
 # native/target/wheels/, but `pip install` of that wheel into the
 # build environment lands the .so under
@@ -57,9 +57,15 @@ elif _native_spec and _native_spec.origin:
 # qfluentwidgets resources (icons, stylesheets, compiled Qt resources)
 _qfw_datas = collect_data_files('qfluentwidgets')
 
-# qframelesswindow — collect everything (binaries, datas, hidden imports)
+# qframelesswindow, collect everything (binaries, datas, hidden imports)
 _qflw_datas, _qflw_binaries, _qflw_hiddenimports = collect_all(
     'qframelesswindow')
+
+# certifi cacert.pem, bundled so cdumm.engine.ssl_ctx can build a fresh
+# SSL context at runtime instead of trusting Python's frozen CA store
+# (GitHub #175 / #178 / #179: CERTIFICATE_VERIFY_FAILED). Mirrors the
+# Windows spec.
+_certifi_datas = collect_data_files('certifi')
 
 
 a = Analysis(
@@ -70,7 +76,9 @@ a = Analysis(
         ('src/cdumm/translations', 'cdumm/translations'),
         ('schemas/pabgb_complete_schema.json', 'schemas'),
         ('schemas/pabgb_type_overrides.json', 'schemas'),
+        ('schemas/NOTICE', 'schemas'),
         ('field_schema/README.md', 'field_schema'),
+        ('field_schema/skill.json', 'field_schema'),
         ('assets/fonts/Oxanium-VariableFont_wght.ttf', 'assets/fonts'),
         ('assets/cdumm-logo.png', 'assets'),
         ('assets/cdumm-logo-light.png', 'assets'),
@@ -81,20 +89,14 @@ a = Analysis(
         ('assets/store-steam-white.svg', 'assets'),
         ('assets/store-xbox-white.svg', 'assets'),
         ('assets/store-epic-white.svg', 'assets'),
-    ] + _qfw_datas + _qflw_datas,
+    ] + _qfw_datas + _qflw_datas + _certifi_datas,
     hiddenimports=[
         'cdumm.cli',
         'cdumm.platform',
         'cdumm.worker_process',
-        'cdumm.gui.main_window',
         'cdumm.gui.setup_dialog',
-        'cdumm.gui.import_widget',
         'cdumm.gui.conflict_view',
         'cdumm.gui.conflicts_dialog',
-        'cdumm.gui.mod_list_model',
-        'cdumm.gui.asi_panel',
-        'cdumm.gui.test_mod_dialog',
-        'cdumm.gui.workers',
         'cdumm.gui.bug_report',
         # v3 Fluent UI
         'cdumm.gui.fluent_window',
@@ -103,12 +105,10 @@ a = Analysis(
         'cdumm.gui.pages.activity_page',
         'cdumm.gui.pages.about_page',
         'cdumm.gui.pages.settings_page',
-        'cdumm.gui.pages.tools_page',
         'cdumm.gui.pages.tool_page',
         'cdumm.gui.components.mod_card',
         'cdumm.gui.components.summary_bar',
         'cdumm.gui.components.config_panel',
-        'cdumm.gui.components.conflict_card',
         'cdumm.gui.components.drop_overlay',
         'cdumm.gui.import_context',
         'cdumm.gui.recovery_flow',
@@ -149,7 +149,6 @@ a = Analysis(
         'cdumm.semantic.differ',
         'cdumm.semantic.merger',
         'cdumm.semantic.engine',
-        'cdumm.engine.offset_collision',
         'cdumm.archive.paz_parse',
         'cdumm.archive.paz_crypto',
         'cdumm.archive.paz_repack',
@@ -162,8 +161,7 @@ a = Analysis(
         'cdumm.engine.texture_mod_handler',
         'cdumm.archive.pathc_handler',
         'cdumm.engine.mod_health_check',
-        'cdumm.gui.health_check_dialog',
-        # Imported by the GUI even though the page is hidden on macOS —
+        # Imported by the GUI even though the page is hidden on macOS , 
         # the AsiManager class is still referenced at module load time
         # via cdumm.gui.fluent_window. Excluding it crashes startup.
         'cdumm.asi.asi_manager',
@@ -171,7 +169,6 @@ a = Analysis(
         'cdumm.storage.config',
         'cdumm.storage.game_finder',
         'cdumm.gui.splash',
-        'cdumm.gui.mod_contents_dialog',
         'cdumm.gui.profile_dialog',
         'cdumm.gui.welcome_wizard',
         'cdumm.engine.update_checker',
@@ -181,15 +178,13 @@ a = Analysis(
         'cdumm.gui.update_overlay',
         'cdumm.gui.changelog',
         'cdumm.gui.preset_picker',
-        'cdumm.gui.verify_dialog',
-        'cdumm.gui.activity_panel',
         'cdumm.engine.activity_log',
         'cdumm.engine.binary_search',
         'cdumm.engine.nexus_api',
+        'certifi',
         'cdumm.engine.game_monitor',
         'cdumm.engine.launcher',
         'cdumm.gui.binary_search_dialog',
-        'cdumm.gui.patch_toggle_dialog',
         'py7zr',
         # XML XPath patch support (JMM XmlPatchApplier parity)
         'lxml',
@@ -213,7 +208,7 @@ a = Analysis(
         'cryptography.hazmat.backends',
         # macOS uses psutil for the cross-platform _check_game_running
         # branch (the Windows build uses ctypes.windll.psapi instead).
-        # Listing it here matches the Windows runtime dep — psutil is
+        # Listing it here matches the Windows runtime dep, psutil is
         # already in pyproject.toml so PyInstaller picks it up
         # automatically, but the explicit hidden-import is defensive.
         'psutil',
@@ -251,12 +246,12 @@ a = Analysis(
         'PySide6.QtQuick3D', 'PySide6.QtShaderTools',
         'PySide6.QtSpatialAudio', 'PySide6.QtHttpServer',
         'PySide6.QtTest', 'PySide6.QtDBus', 'PySide6.QtConcurrent',
-        # scipy/numpy — only needed for acrylic blur (disabled)
+        # scipy/numpy, only needed for acrylic blur (disabled)
         'scipy', 'numpy', 'numpy.core', 'numpy.linalg',
-        # PIL/Pillow — not imported by CDUMM (colorthief dep, unused)
+        # PIL/Pillow, not imported by CDUMM (colorthief dep, unused)
         'PIL', 'PIL._imaging', 'PIL._avif', 'PIL._webp', 'PIL.Image',
         'Pillow', 'colorthief',
-        # brotli — not used by CDUMM (transitive dep from py7zr)
+        # brotli, not used by CDUMM (transitive dep from py7zr)
         'brotli', '_brotli', 'brotlicffi',
         # cryptography used by privatebin for AES-GCM + PBKDF2. Keep minimal subset.
         'cryptography.x509', 'cryptography.fernet',
@@ -291,7 +286,7 @@ pyz = PYZ(a.pure)
 # notarisation requirements and will become an error in PyInstaller
 # v7.0). Onedir is the canonical macOS pattern: PyInstaller emits a
 # directory of files, BUNDLE wraps it in a .app. The end-user
-# experience is unchanged — they still see a single ``CDUMM.app`` —
+# experience is unchanged, they still see a single ``CDUMM.app`` , 
 # but the internals match what Apple's tooling expects.
 exe = EXE(
     pyz,
@@ -304,7 +299,7 @@ exe = EXE(
     # ``strip`` removes debug symbols from binaries; PyInstaller delegates
     # to /usr/bin/strip on macOS. Saves ~10-20 MB on the .app.
     strip=True,
-    # UPX disabled — same heuristic-AV concern as Windows. macOS Gatekeeper
+    # UPX disabled, same heuristic-AV concern as Windows. macOS Gatekeeper
     # also flags UPX-packed binaries. Trade ~50% size for distribution
     # cleanliness.
     upx=False,
@@ -317,7 +312,7 @@ exe = EXE(
     # ARM64 only. Crimson Desert macOS is Apple-Silicon-exclusive; an
     # Intel build would just bloat downloads for users who can't run
     # the game anyway. Setting target_arch is what makes maturin's
-    # arm64 .so the only architecture in the .app — a universal build
+    # arm64 .so the only architecture in the .app, a universal build
     # would need both targets pre-built and ``target_arch='universal2'``.
     target_arch='arm64',
     codesign_identity=None,    # ad-hoc sign happens after PyInstaller
@@ -338,7 +333,7 @@ coll = COLLECT(
 # Wrap the COLLECT output in a macOS .app bundle. CFBundleIdentifier
 # matches the repo owner's namespace (faisalkindi on GitHub). The
 # Info.plist keys below are the minimum needed for a
-# Gatekeeper-acceptable ad-hoc-signed .app on macOS 11+ — no
+# Gatekeeper-acceptable ad-hoc-signed .app on macOS 11+, no
 # NSDocumentClass, no URL schemes, no file-type associations yet
 # (those come later when nxm:// support lands).
 app = BUNDLE(
@@ -355,20 +350,20 @@ app = BUNDLE(
         'CFBundleShortVersionString': VERSION,
         'CFBundleExecutable': 'CDUMM',
         'CFBundleIconFile': 'cdumm.icns',
-        # macOS 15 (Sequoia) is what Crimson Desert itself requires —
+        # macOS 15 (Sequoia) is what Crimson Desert itself requires , 
         # advertising any lower in our Info.plist would be a lie and
         # also wouldn't help, since the game can't run on older macOS.
         # Matches the Nexus page's "macOS 15 Sequoia or later" line.
         # The build script (scripts/build-macos.sh) post-processes
-        # every bundled Mach-O with vtool to enforce this — without
+        # every bundled Mach-O with vtool to enforce this, without
         # that, setup-python on macos-26-arm64 ships a Python with
         # minos=26 which dyld refuses to load on Sequoia.
         'LSMinimumSystemVersion': '15.0',
-        # Retina rendering — without this, Qt apps look fuzzy on HiDPI.
+        # Retina rendering, without this, Qt apps look fuzzy on HiDPI.
         'NSHighResolutionCapable': True,
         'LSApplicationCategoryType': 'public.app-category.utilities',
         'NSPrincipalClass': 'NSApplication',
-        # No NSDocumentTypes / CFBundleURLTypes yet — nxm:// URL handler
+        # No NSDocumentTypes / CFBundleURLTypes yet, nxm:// URL handler
         # registration is on the macOS roadmap (see MACOS.md) but needs
         # the .app to exist (which it now does) before we can register
         # via LSSetDefaultHandlerForURLScheme.
