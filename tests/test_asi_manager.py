@@ -180,3 +180,51 @@ def test_parse_hook_targets_handles_utf8_bom(tmp_path: Path) -> None:
     target = next(p for p in plugins if p.name == "SuperAxiomForce")
     assert target.hook_targets, "BOM INI produced no hook targets"
     assert any("xinput1_3.dll" in t for t in target.hook_targets)
+
+
+def test_contains_asi_detects_bare_addon64(tmp_path: Path) -> None:
+    """#202: a bare ReShade ``.addon64`` is a loose-loader file that
+    installs into bin64 like an ``.asi``. ``contains_asi`` gates whether
+    a drop/import is routed to the ASI-install path, so it must accept
+    ``.addon64`` -- otherwise the addon is detected/staged but never
+    copied into bin64.
+    """
+    addon = tmp_path / "CrimsonWeather.addon64"
+    addon.write_bytes(b"DLL_DATA")
+    assert AsiManager.contains_asi(addon) is True
+
+
+def test_contains_asi_detects_addon64_only_zip(tmp_path: Path) -> None:
+    """#202: a zip whose only loader content is a ``.addon64`` (no
+    ``.asi``, no PAZ/JSON) must still be recognised as ASI/addon content.
+    """
+    import zipfile
+    z = tmp_path / "crimson_weather.zip"
+    with zipfile.ZipFile(z, "w") as zf:
+        zf.writestr("CrimsonWeather.addon64", b"DLL_DATA")
+        zf.writestr("CrimsonWeather.ini", b"[General]\n")
+    assert AsiManager.contains_asi(z) is True
+
+
+def test_contains_asi_detects_addon64_in_dir(tmp_path: Path) -> None:
+    """#202: a folder whose only loader content is a ``.addon64`` must
+    be detected (mixed-extract drops land as a directory)."""
+    d = tmp_path / "moddir"
+    d.mkdir()
+    (d / "CrimsonWeather.addon64").write_bytes(b"DLL_DATA")
+    assert AsiManager.contains_asi(d) is True
+
+
+def test_contains_asi_still_matches_asi(tmp_path: Path) -> None:
+    """Regression guard: broadening for #202 must not lose ``.asi``
+    detection."""
+    asi = tmp_path / "Foo.asi"
+    asi.write_bytes(b"DLL_DATA")
+    assert AsiManager.contains_asi(asi) is True
+
+
+def test_contains_asi_rejects_non_loader(tmp_path: Path) -> None:
+    """A plain file with no loose-loader content is not ASI/addon."""
+    txt = tmp_path / "readme.txt"
+    txt.write_text("hi")
+    assert AsiManager.contains_asi(txt) is False

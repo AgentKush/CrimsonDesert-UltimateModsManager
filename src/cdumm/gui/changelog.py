@@ -15,6 +15,7 @@ from cdumm.i18n import tr
 # move them up under a real {"version": "X.Y.Z", "date": "..."} block.
 # This keeps __version__ stable until you actually cut a release.
 _UNRELEASED_NOTES: list[str] = [
+    "<b>Bare ReShade <code>.addon64</code> mods now import and install into bin64 instead of being detected but never applied.</b> The loose-loader gate <code>AsiManager.contains_asi()</code> still only recognised <code>.asi</code>, even though staging, install and scan were all extended to handle <code>.addon64</code> via <code>LOOSE_LOADER_SUFFIXES</code>. A bare <code>.addon64</code> drop, or a zip/7z whose only loader content was a ReShade addon, therefore failed the gate and was never routed to install -- the addon showed up as detected/staged but never landed in bin64. The gate now counts both loose-loader suffixes. Reported on GitHub (#202).",
 ]
 
 CHANGELOG = [
