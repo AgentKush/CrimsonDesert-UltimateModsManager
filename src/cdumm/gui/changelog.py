@@ -15,6 +15,7 @@ from cdumm.i18n import tr
 # move them up under a real {"version": "X.Y.Z", "date": "..."} block.
 # This keeps __version__ stable until you actually cut a release.
 _UNRELEASED_NOTES: list[str] = [
+    "<b>A mod's folder group is no longer lost when you update it.</b> Updating a mod (dropping a new version, or click-to-update) dup-removes the old row and re-imports; the post-import state restore re-applied <code>priority</code> and <code>enabled</code> but not the user's folder <code>group_id</code>, so updated mods silently fell out of their group. The group is now snapshotted with the rest of the update state and restored. Reported on GitHub (#161).",
 ]
 
 CHANGELOG = [
