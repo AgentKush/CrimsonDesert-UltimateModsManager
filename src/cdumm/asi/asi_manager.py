@@ -475,16 +475,31 @@ class AsiManager:
 
     @staticmethod
     def contains_asi(path: Path) -> bool:
-        """Check if a path contains ASI plugin files (searches subdirectories and archives)."""
+        """Check if a path contains ASI plugin or ReShade addon files
+        (searches subdirectories and archives).
+
+        #202: ReShade ``.addon64`` mods are loose-loader files that
+        install into bin64 exactly like ``.asi`` plugins (hence
+        ``LOOSE_LOADER_SUFFIXES``); scan(), install() and the import
+        staging path already treat both. This gate did not -- it only
+        matched ``.asi``, so a bare ``.addon64`` drop, or a zip/7z whose
+        only loader content was a ReShade addon, failed the check and was
+        never routed to install. The addon showed as detected/staged but
+        never landed in bin64. Both loose-loader suffixes now count.
+        """
+        def _is_loader(name: str) -> bool:
+            lo = name.lower()
+            return any(lo.endswith(s) for s in LOOSE_LOADER_SUFFIXES)
+
         if path.is_file():
-            if path.suffix.lower() == ASI_SUFFIX:
+            if _is_loader(path.name):
                 return True
             # Check inside zip files
             if path.suffix.lower() == ".zip":
                 import zipfile
                 try:
                     with zipfile.ZipFile(path) as zf:
-                        return any(n.lower().endswith(ASI_SUFFIX) for n in zf.namelist())
+                        return any(_is_loader(n) for n in zf.namelist())
                 except (zipfile.BadZipFile, Exception):
                     return False
             # Check inside 7z files
@@ -492,11 +507,13 @@ class AsiManager:
                 try:
                     import py7zr
                     with py7zr.SevenZipFile(path, 'r') as zf:
-                        return any(n.lower().endswith(ASI_SUFFIX) for n in zf.getnames())
+                        return any(_is_loader(n) for n in zf.getnames())
                 except Exception:
                     return False
         if path.is_dir():
-            return any(path.rglob(f"*{ASI_SUFFIX}"))
+            return any(
+                _is_loader(p.name)
+                for p in path.rglob("*") if p.is_file())
         return False
 
     def open_config(self, plugin: AsiPlugin) -> bool:

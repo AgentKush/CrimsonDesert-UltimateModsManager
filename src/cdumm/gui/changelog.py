@@ -16,6 +16,7 @@ from cdumm.i18n import tr
 # This keeps __version__ stable until you actually cut a release.
 _UNRELEASED_NOTES: list[str] = [
     "<b>Equipment unlock mods that edit equipable_hash now actually apply.</b> The previous fix taught the writer the field name, but the importer was still skipping every one of these edits before they reached the writer, so the mod imported with nothing to apply and came back with a '0 byte changes' result. The importer now passes these edits through. Verified on AbyssGearUnlock (all 190 edits land and the item table stays valid). Found via pinapana's retest on GitHub (#191).",
+    "<b>Bare ReShade <code>.addon64</code> mods now import and install into bin64 instead of being detected but never applied.</b> The loose-loader gate <code>AsiManager.contains_asi()</code> still only recognised <code>.asi</code>, even though staging, install and scan were all extended to handle <code>.addon64</code> via <code>LOOSE_LOADER_SUFFIXES</code>. A bare <code>.addon64</code> drop, or a zip/7z whose only loader content was a ReShade addon, therefore failed the gate and was never routed to install -- the addon showed up as detected/staged but never landed in bin64. The gate now counts both loose-loader suffixes. Reported on GitHub (#202).",
 ]
 
 CHANGELOG = [
