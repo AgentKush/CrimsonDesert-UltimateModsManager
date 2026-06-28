@@ -24,7 +24,7 @@ on:
 jobs:
   test:
     runs-on: windows-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
 
     steps:
       - name: Checkout
@@ -73,4 +73,4 @@ jobs:
         # No filtering — full suite. Quiet mode so the log isn't
         # buried in PASSED lines; -ra shows reasons for any
         # skip / xfail.
-        run: python -m pytest tests/ -q -ra
+        run: python -m pytest tests/ -q -ra --durations=40
