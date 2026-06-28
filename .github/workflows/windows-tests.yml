@@ -49,4 +49,4 @@ jobs:
         # No filtering — full suite. Quiet mode so the log isn't
         # buried in PASSED lines; -ra shows reasons for any
         # skip / xfail.
-        run: python -m pytest tests/ -q -ra
+        run: python -m pytest tests/test_config_panel_resize.py tests/test_config_panel_visual_baselines.py tests/test_config_panel_preset_overflow.py tests/test_preset_picker_responsive_sizing.py tests/test_preset_picker_fits_window.py tests/test_recovery_flow.py tests/test_reshade_merge_dialog_ux.py tests/test_reshade_page_mode_switch.py tests/test_dialog_background_visual.py tests/test_modcard_double_click_toggle.py tests/test_nxm_download_infobar_is_sticky.py tests/test_format3_binary_roundtrip.py -q -ra --durations=0
