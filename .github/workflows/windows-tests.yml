@@ -37,6 +37,22 @@ jobs:
           cache: pip
           cache-dependency-path: pyproject.toml
 
+      - name: Set up Rust toolchain
+        # cdumm_native (native/) is a maturin/pyo3 crate. windows-latest
+        # ships the MSVC toolchain the linker needs; this action adds
+        # stable Rust + cargo to PATH.
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo + native target
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            native/target
+          key: cargo-windows-${{ hashFiles('native/Cargo.lock') }}
+          restore-keys: cargo-windows-
+
       - name: Install CDUMM + dev deps
         # Editable install so test imports resolve to the source tree.
         # The .[dev] extras pull pytest + pytest-qt + pyinstaller so
@@ -44,6 +60,14 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -e ".[dev]"
+
+      - name: Build + install cdumm_native (Rust extension)
+        # pip drives the maturin backend in native/pyproject.toml; must
+        # run after the Rust toolchain is on PATH. Without the native
+        # extension the engine falls back to pure-Python crypto / hashing
+        # / parsers and the full suite takes ~14 min instead of seconds,
+        # blowing this job timeout (run 28333620410).
+        run: python -m pip install ./native
 
       - name: Run pytest
         # No filtering — full suite. Quiet mode so the log isn't
