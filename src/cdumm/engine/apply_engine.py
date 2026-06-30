@@ -156,6 +156,32 @@ def _yield_gil() -> None:
     """
     time.sleep(0)
 
+
+def _dirs_losing_pamt(deferred_file_deletions: "list[Path]") -> "set[str]":
+    """Directory names (e.g. ``'0037'``) whose ``0.pamt`` index file is
+    queued for post-commit deletion.
+
+    GitHub #225: a disabled mod's new files (``0037/0.pamt`` +
+    ``0037/0.paz``) go into ``deferred_file_deletions``, deleted only
+    AFTER the transaction commits. The Phase 4 PAPGT rebuild runs before
+    the commit, while those files are still on disk, so without this the
+    rebuilt index keeps an entry for ``0037`` — then the now-empty dir is
+    removed post-commit and Post-Apply Verification reports
+    "Missing directory 0037". Feeding these dirs into the rebuild's
+    ``exclude_dirs`` keeps the index consistent with the post-commit
+    on-disk state.
+
+    Keyed on the ``0.pamt`` index file specifically (the file that makes
+    a directory a real PAPGT entry, per the rebuild's disk-discovery and
+    the post-apply verify): a dir losing only its ``.paz`` keeps a valid
+    index and is not a "missing directory" case.
+    """
+    out: set[str] = set()
+    for fp in deferred_file_deletions:
+        if fp.name.lower() == "0.pamt":
+            out.add(fp.parent.name)
+    return out
+
 from cdumm.archive.papgt_manager import PapgtManager
 from cdumm.archive.transactional_io import TransactionalIO
 from cdumm.engine.delta_engine import (
@@ -2650,9 +2676,17 @@ class ApplyWorker(QObject):
 
             papgt_mgr = PapgtManager(self._game_dir, self._vanilla_dir)
             try:
+                # exclude_dirs must cover BOTH whole-dir deletions and
+                # dirs that lose their 0.pamt index via deferred FILE
+                # deletions (disabled mods that added a whole directory).
+                # Both kinds are still on disk now (deletion deferred to
+                # post-commit), so without the second set the rebuilt
+                # index keeps an entry for a dir that gets removed right
+                # after commit -> "Missing directory NNNN" (GitHub #225).
+                exclude_dirs = {d.name for d in deferred_dir_deletions}
+                exclude_dirs |= _dirs_losing_pamt(deferred_file_deletions)
                 papgt_bytes = papgt_mgr.rebuild(
-                    modified_pamts,
-                    exclude_dirs={d.name for d in deferred_dir_deletions})
+                    modified_pamts, exclude_dirs=exclude_dirs)
                 txn.stage_file("meta/0.papgt", papgt_bytes)
             except FileNotFoundError:
                 logger.warning("PAPGT not found, skipping rebuild")
