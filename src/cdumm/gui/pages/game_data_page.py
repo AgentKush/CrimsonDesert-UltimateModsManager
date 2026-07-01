@@ -204,119 +204,112 @@ class _PreviewWorker(QObject):
 
 
 class _Texture3DView(QDialog):
-    """Pop-up 3D material preview: the selected texture on an orbitable
-    sphere or cube. Built with Qt3D and constructed lazily (Qt3D is only
-    imported when the user opens a 3D preview). The caller wraps
-    construction in try/except so a GPU/driver problem can't take the app
-    down — it just reports the texture can't be shown in 3D."""
+    """Pop-up 3D material preview: the selected texture on a flat plane,
+    sphere, or cube. Built with Qt3D, constructed lazily (Qt3D is only
+    imported when the user opens a 3D preview), and the caller wraps
+    construction in try/except so a GPU/driver problem can't crash the app.
+
+    A flat plane is how billboard / decal / UI textures appear in game;
+    solid game meshes aren't attainable (the mesh formats are proprietary),
+    so the sphere/cube are for inspecting how a texture wraps and tiles."""
 
     def __init__(self, qimage, title="Texture — 3D preview", parent=None):
         super().__init__(parent)
-        # PySide6 6.10 nests the Qt3D classes under a same-named namespace
-        # (PySide6.Qt3DExtras.Qt3DExtras.Qt3DWindow, etc.), so pull them off
-        # the nested namespace rather than the top-level module.
+        # PySide6 6.10 nests the Qt3D classes under a same-named namespace.
         from PySide6.Qt3DExtras import Qt3DExtras as _E
         from PySide6.Qt3DCore import Qt3DCore as _C
         from PySide6.Qt3DRender import Qt3DRender as _R
-        Qt3DWindow = _E.Qt3DWindow
-        QOrbitCameraController = _E.QOrbitCameraController
-        QDiffuseMapMaterial = _E.QDiffuseMapMaterial
-        QSphereMesh = _E.QSphereMesh
-        QCuboidMesh = _E.QCuboidMesh
-        QEntity = _C.QEntity
-        QTransform = _C.QTransform
-        QTexture2D = _R.QTexture2D
-        QPaintedTextureImage = _R.QPaintedTextureImage
-        QPointLight = _R.QPointLight
         from PySide6.QtGui import QVector3D, QColor
+        from PySide6.QtCore import QUrl
         from qfluentwidgets import CaptionLabel, PushButton
 
-        class _Painted(QPaintedTextureImage):
-            def __init__(self):
-                super().__init__()
-                self._img = None
-
-            def set_image(self, img):
-                self._img = img
-                self.setSize(img.size())
-                self.update()
-
-            def paint(self, painter):
-                if self._img is not None:
-                    painter.drawImage(0, 0, self._img)
-
         self.setWindowTitle(title)
-        self.resize(720, 660)
+        self.resize(760, 700)
 
-        self._window = Qt3DWindow()
+        # Most portable way to get a QImage into a Qt3D texture across PySide6
+        # builds: a temp PNG loaded by QTextureLoader (a painted-texture
+        # subclass rendered nothing on this build).
+        fd, self._tmp_png = tempfile.mkstemp(suffix=".png")
+        os.close(fd)
+        qimage.save(self._tmp_png, "PNG")
+
+        self._window = _E.Qt3DWindow()
         self._window.defaultFrameGraph().setClearColor(QColor("#20222E"))
         container = QWidget.createWindowContainer(self._window, self)
-        container.setMinimumSize(400, 400)
+        container.setMinimumSize(420, 420)
         container.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
         root_layout = QVBoxLayout(self)
         root_layout.setContentsMargins(8, 8, 8, 8)
         root_layout.setSpacing(8)
         bar = QHBoxLayout()
-        self._sphere_btn = PushButton("Sphere", self)
-        self._cube_btn = PushButton("Cube", self)
-        self._sphere_btn.clicked.connect(lambda: self._set_shape(True))
-        self._cube_btn.clicked.connect(lambda: self._set_shape(False))
-        hint = CaptionLabel("Drag to orbit · scroll to zoom", self)
-        bar.addWidget(self._sphere_btn)
-        bar.addWidget(self._cube_btn)
+        for label, shape in (("Plane", "plane"), ("Sphere", "sphere"),
+                             ("Cube", "cube")):
+            btn = PushButton(label, self)
+            btn.clicked.connect(lambda _=False, s=shape: self._set_shape(s))
+            bar.addWidget(btn)
         bar.addStretch(1)
-        bar.addWidget(hint)
+        bar.addWidget(CaptionLabel("Drag to orbit · scroll to zoom", self))
         root_layout.addLayout(bar)
         root_layout.addWidget(container, 1)
 
-        self._root = QEntity()
+        self._root = _C.QEntity()
         cam = self._window.camera()
-        cam.lens().setPerspectiveProjection(45.0, 1.0, 0.1, 1000.0)
-        cam.setPosition(QVector3D(0, 0, 3.5))
+        cam.lens().setPerspectiveProjection(45.0, 1.2, 0.1, 1000.0)
+        cam.setPosition(QVector3D(0, 0, 3.2))
         cam.setViewCenter(QVector3D(0, 0, 0))
-        ctrl = QOrbitCameraController(self._root)
+        ctrl = _E.QOrbitCameraController(self._root)
         ctrl.setCamera(cam)
-        ctrl.setLinearSpeed(50.0)
+        ctrl.setLinearSpeed(60.0)
         ctrl.setLookSpeed(180.0)
 
-        light_ent = QEntity(self._root)
-        light = QPointLight(light_ent)
-        light.setIntensity(1.1)
-        lt = QTransform()
-        lt.setTranslation(QVector3D(0, 0, 8))
-        light_ent.addComponent(light)
-        light_ent.addComponent(lt)
+        # Unlit texture material — shows the texture at full brightness with
+        # no lighting dependency, so the shape is always visible.
+        tex = _R.QTextureLoader(self._root)
+        tex.setSource(QUrl.fromLocalFile(self._tmp_png))
+        mat = _E.QTextureMaterial(self._root)
+        mat.setTexture(tex)
 
-        self._painted = _Painted()
-        tex = QTexture2D(self._root)
-        tex.addTextureImage(self._painted)
-        mat = QDiffuseMapMaterial(self._root)
-        mat.setDiffuse(tex)
-        mat.setAmbient(QColor(80, 80, 80))
-        mat.setSpecular(QColor(28, 28, 28))
-        mat.setShininess(8.0)
-
-        self._sphere = QEntity(self._root)
-        sm = QSphereMesh()
-        sm.setRadius(1.2)
-        sm.setRings(60)
-        sm.setSlices(60)
-        self._sphere.addComponent(sm)
-        self._sphere.addComponent(mat)
-
-        self._cube = QEntity(self._root)
-        cm = QCuboidMesh()
-        self._cube.addComponent(cm)
-        self._cube.addComponent(mat)
-        self._cube.setEnabled(False)
+        self._shapes = {}
+        # Plane — a flat card (thin cuboid, visible from both sides).
+        pe = _C.QEntity(self._root)
+        pmesh = _E.QCuboidMesh()
+        ptx = _C.QTransform()
+        ptx.setScale3D(QVector3D(2.0, 2.0, 0.03))
+        pe.addComponent(pmesh)
+        pe.addComponent(mat)
+        pe.addComponent(ptx)
+        self._shapes["plane"] = pe
+        # Sphere
+        se = _C.QEntity(self._root)
+        smesh = _E.QSphereMesh()
+        smesh.setRadius(1.2)
+        smesh.setRings(60)
+        smesh.setSlices(60)
+        se.addComponent(smesh)
+        se.addComponent(mat)
+        self._shapes["sphere"] = se
+        # Cube
+        ce = _C.QEntity(self._root)
+        cmesh = _E.QCuboidMesh()
+        ce.addComponent(cmesh)
+        ce.addComponent(mat)
+        self._shapes["cube"] = ce
 
         self._window.setRootEntity(self._root)
-        self._painted.set_image(qimage)
+        self._set_shape("plane")
 
-    def _set_shape(self, sphere: bool) -> None:
-        self._sphere.setEnabled(sphere)
-        self._cube.setEnabled(not sphere)
+    def _set_shape(self, which: str) -> None:
+        for name, ent in self._shapes.items():
+            ent.setEnabled(name == which)
+
+    def closeEvent(self, event):  # noqa: N802
+        try:
+            if getattr(self, "_tmp_png", None) and os.path.exists(self._tmp_png):
+                os.remove(self._tmp_png)
+        except Exception:  # noqa: BLE001
+            pass
+        super().closeEvent(event)
 
 
 class GameDataPage(ToolPageBase):
