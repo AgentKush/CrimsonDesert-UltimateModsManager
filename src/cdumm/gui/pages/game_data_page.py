@@ -16,8 +16,9 @@ import subprocess
 import tempfile
 
 from PySide6.QtCore import QObject, Qt, QThread, Signal
-from PySide6.QtWidgets import (QFileDialog, QHBoxLayout, QSplitter,
-                               QTableWidgetItem, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QFileDialog, QHBoxLayout, QSizePolicy,
+                               QSplitter, QTableWidgetItem, QVBoxLayout,
+                               QWidget)
 
 from cdumm.engine import game_index
 from cdumm.gui.pages.tool_page import ToolPageBase
@@ -102,18 +103,25 @@ class GameDataPage(ToolPageBase):
         self._open_btn.clicked.connect(self._open_location)
         loc_row.addWidget(self._open_btn)
         root.insertLayout(root.count() - 1, loc_row)
+        root.insertSpacing(root.count() - 1, 16)
 
-        # Search + results table
+        # Search box — capped width + left-aligned (it doesn't need to span
+        # the whole page), so it also stops crowding the buttons above it.
+        search_row = QHBoxLayout()
+        search_row.setContentsMargins(0, 0, 0, 0)
         self._search = LineEdit(self._container)
         self._search.setPlaceholderText(
             "Search assets by path (build the index first)…")
         self._search.setClearButtonEnabled(True)
         self._search.setFixedHeight(38)
+        self._search.setMaximumWidth(480)
         _sf = self._search.font()
         _sf.setPixelSize(15)
         self._search.setFont(_sf)
         self._search.textChanged.connect(self._on_search)
-        root.insertWidget(root.count() - 1, self._search)
+        search_row.addWidget(self._search)
+        search_row.addStretch(1)
+        root.insertLayout(root.count() - 1, search_row)
 
         self._hits = BodyLabel("", self._container)
         self._hits.setContentsMargins(2, 4, 0, 0)
@@ -121,12 +129,17 @@ class GameDataPage(ToolPageBase):
         _hitf.setPixelSize(15)
         self._hits.setFont(_hitf)
         root.insertWidget(root.count() - 1, self._hits)
+        root.insertSpacing(root.count() - 1, 8)
 
         # Results table (left) + live preview pane (right), in a draggable
-        # splitter so the user can trade list width for preview width.
+        # splitter. It's given stretch=1 (below) + an Expanding policy so it
+        # fills the page down to the bottom instead of sitting short with a
+        # big dead zone beneath it.
         split = QSplitter(Qt.Horizontal, self._container)
         split.setChildrenCollapsible(False)
-        split.setMinimumHeight(420)
+        split.setMinimumHeight(460)
+        split.setSizePolicy(QSizePolicy.Policy.Expanding,
+                            QSizePolicy.Policy.Expanding)
 
         self._table = TableWidget(split)
         self._table.setColumnCount(4)
@@ -188,7 +201,9 @@ class GameDataPage(ToolPageBase):
         split.setStretchFactor(1, 2)
         self._preview_bytes: bytes | None = None
         self._preview_name: str | None = None
-        root.insertWidget(root.count() - 1, split)
+        # stretch=1 makes this row absorb the page's spare vertical space
+        # (the base layout's trailing addStretch() has factor 0, so it yields).
+        root.insertWidget(root.count() - 1, split, 1)
 
     # ── engine wiring ────────────────────────────────────────────────
     def set_managers(self, **kwargs) -> None:
