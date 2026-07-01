@@ -1529,14 +1529,16 @@ def _find_loose_file_candidates(path: Path, max_depth: int = 5) -> list[dict]:
         if base_key in seen_bases:
             return None
         # Pattern 5: mod.json at this folder + 2+ sibling subfolders
-        # each carrying a NNNN/0.paz layout. Surface one candidate
-        # per sibling so the GUI's variant picker fires. Used by
-        # Character Creator (mod 837): CharacterCreator/mod.json
-        # alongside HumanFemale/0036/0.paz, GoblinMale/0036/0.paz,
-        # etc. Must run BEFORE Pattern 2 because Pattern 2 would
-        # otherwise match the top-level mod.json + sibling json/asi
-        # files at root and stop the walk before the body-type
-        # subfolders get a chance.
+        # each carrying a NNNN/0.paz OR NNNN/0.pamt layout. Surface
+        # one candidate per sibling so the GUI's variant picker fires.
+        # Used by Character Creator (mod 837): CharacterCreator/mod.json
+        # alongside HumanFemale/0036/..., GoblinMale/0036/..., etc.
+        # v6.3+ ships each body type as 0036/0.pamt (no 0.paz), so the
+        # marker check accepts either archive form — both are valid game
+        # files per _GAME_FILE_RE (GitHub #189). Must run BEFORE Pattern
+        # 2 because Pattern 2 would otherwise match the top-level
+        # mod.json + sibling json/asi files at root and stop the walk
+        # before the body-type subfolders get a chance.
         mod_json = candidate / "mod.json"
         if mod_json.exists():
             try:
@@ -1564,7 +1566,8 @@ def _find_loose_file_candidates(path: Path, max_depth: int = 5) -> list[dict]:
                             if (d.is_dir()
                                     and d.name.isdigit()
                                     and len(d.name) == 4
-                                    and (d / "0.paz").exists()):
+                                    and ((d / "0.paz").exists()
+                                         or (d / "0.pamt").exists())):
                                 variant_subdirs.append(sub)
                                 break
                     except OSError:
