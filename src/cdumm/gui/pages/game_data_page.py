@@ -157,12 +157,16 @@ class GameDataPage(ToolPageBase):
         _hf = _hdr.font()
         _hf.setPixelSize(15)
         _hdr.setFont(_hf)
-        # Path absorbs the slack; the other three size to their content. This
-        # keeps the columns spanning the full table width so the vertical
-        # scrollbar hugs the last column instead of floating far to its right.
+        # Path stretches to fill the slack; the other three get fixed widths.
+        # This keeps the columns spanning the full table width (so the vertical
+        # scrollbar hugs the last column) WITHOUT ResizeToContents, which
+        # re-measures every row on every update and can stall the UI thread.
         _hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         for _c in (1, 2, 3):
-            _hdr.setSectionResizeMode(_c, QHeaderView.ResizeMode.ResizeToContents)
+            _hdr.setSectionResizeMode(_c, QHeaderView.ResizeMode.Interactive)
+        self._table.setColumnWidth(1, 90)
+        self._table.setColumnWidth(2, 140)
+        self._table.setColumnWidth(3, 130)
         self._table.verticalHeader().setDefaultSectionSize(36)
         self._table.itemSelectionChanged.connect(self._on_asset_selected)
         split.addWidget(self._table)
@@ -369,7 +373,9 @@ class GameDataPage(ToolPageBase):
     # ── preview pane ─────────────────────────────────────────────────
     _PREVIEW_TEXT_CAP = 200_000            # chars shown for text assets
     _PREVIEW_HEX_CAP = 4096               # bytes shown for the hex view
-    _PREVIEW_SIZE_LIMIT = 32 * 1024 * 1024  # don't inline-decode above this
+    _PREVIEW_SIZE_LIMIT = 4 * 1024 * 1024   # keep inline decode cheap: a 4 MB
+    #   read+LZ4+decode is ~tens of ms; a multi-MB table/texture would freeze
+    #   the UI thread (AppHang). Bigger assets show metadata + Extract raw only.
 
     def _selected_path(self) -> str | None:
         items = self._table.selectedItems()
