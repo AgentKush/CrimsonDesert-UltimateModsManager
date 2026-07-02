@@ -66,6 +66,50 @@ def _cell(v) -> str:
     return s if len(s) <= 200 else s[:200] + "…"
 
 
+_FILE_TYPE_GUIDE = """A quick guide to Crimson Desert's file types — what you're looking at, and which ones you actually edit to make a mod. (Some are Pearl Abyss's own undocumented formats; where a meaning is inferred it's marked "~".)
+
+━━ THE ONES MODDERS EDIT MOST ━━
+.pabgb / .pabgh   Game-data TABLES + their key index — items, NPCs (character), quests, skills, drops, gimmicks, spawns, stages. Stats and values live here; most gameplay mods edit these. Opens as a grid of records (the _key and _name columns are always reliable).
+.paz              The ARCHIVE everything is packed into (like a .zip). The mod manager reads/writes these for you — you rarely touch them by hand.
+
+━━ VISUALS ━━
+.dds              TEXTURES / images — armour, faces, UI, the world map. Opens as an image (with a 3D view too).
+.padxil           Compiled SHADERS (GPU code) that draw surfaces. ~
+.pami / .pam / .pamlod   Model / MESH data and level-of-detail versions. ~
+.meshinfo         Mesh + collision / physics info for an object.
+.prefab           A placed "scene object" with its components and transform.
+
+━━ ANIMATION & COMBAT ━━
+.paa              ANIMATIONS (Pearl Abyss "PAR" clips) — character/creature motion.
+.paa_metabin      Metadata that rides alongside an animation.
+.paac / .paatt    ACTION CHARTS + their attribute blocks — the combat/animation logic (which move plays and its properties). ~
+.hkx              HAVOK data — ragdoll / physics / some animation (third-party format; shown as a structure outline).
+
+━━ AUDIO ━━
+.wem              Wwise SOUND streams — SFX, voice, music. Windows can't play them raw; the previewer decodes them with vgmstream so you can hear + export them.
+.bnk              Wwise SOUNDBANK — a container of sounds + event data.
+
+━━ EFFECTS · CUTSCENES · WORLD ━━
+.pae              Particle / EFFECT data — fire, sparks, auras.
+.paseq / .paseqc  SEQUENCER — timeline / cutscene data.
+.paproj           Projectile definitions — arrows, bombs, spells. ~
+.palevel / .levelinfo    Level / world data. ~
+.road / .roadsector / .nav   Roads and AI navigation meshes. ~
+
+━━ TEXT & CONFIG ━━
+.xml / .pac_xml / .app_xml / .html / .css / .thtml   Human-readable text, config, and UI.
+
+━━ HOW THE PREVIEW DECIDES WHAT TO SHOW ━━
+• Text formats → shown as text.
+• Textures → shown as an image (+ 3D).
+• Data tables (.pabgb) → a record grid.
+• Reflection formats (.pae / .paseq / .prefab / .meshinfo …) → a Field → Type schema table, using the engine's OWN names.
+• Audio (.wem / .bnk) → metadata + Play / Export-to-WAV.
+• Everything else (packed formats like .paatt / .paa / .pabgh) → a typed word table: the exact bytes shown as unsigned / signed / float. These formats carry no field names inside the file, so the values are shown accurately as raw numbers you can still patch by offset.
+
+Tip: a name ending in "info" is almost always a game-data table you can edit."""
+
+
 def _shape_records(records: dict, schema) -> tuple[list, list, int, float]:
     """Turn parse_records output into (columns, rows, total, health).
 
@@ -472,6 +516,25 @@ class GameDataPage(ToolPageBase):
         _hitf.setPixelSize(15)
         self._hits.setFont(_hitf)
         root.insertWidget(root.count() - 1, self._hits)
+        root.insertSpacing(root.count() - 1, 8)
+
+        # Beginner-friendly file-type guide — a collapsible box so newcomers can
+        # learn what each format is without it taking over the page.
+        self._guide_btn = PushButton(
+            "📖  New to modding?  What these file types mean", self._container)
+        self._guide_btn.setCheckable(True)
+        self._guide_btn.clicked.connect(
+            lambda: self._guide_box.setVisible(self._guide_btn.isChecked()))
+        root.insertWidget(root.count() - 1, self._guide_btn)
+        self._guide_box = PlainTextEdit(self._container)
+        self._guide_box.setReadOnly(True)
+        self._guide_box.setPlainText(_FILE_TYPE_GUIDE)
+        _gbf = self._guide_box.font()
+        _gbf.setPixelSize(13)
+        self._guide_box.setFont(_gbf)
+        self._guide_box.setFixedHeight(300)
+        self._guide_box.setVisible(False)
+        root.insertWidget(root.count() - 1, self._guide_box)
         root.insertSpacing(root.count() - 1, 8)
 
         # Results table (left) + live preview pane (right), in a draggable
