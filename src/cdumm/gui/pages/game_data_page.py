@@ -131,8 +131,30 @@ def _shape_records(records: dict, schema, positions: dict | None = None
     # `(unverified)` so a guessed byte never masquerades as fact.
     verified = getattr(schema, "verified_fields", None) if schema else None
 
+    # Mask fields the decoder can't trust. A field is an "unknown-width
+    # placeholder" when it has no struct format, no walker type descriptor, and
+    # isn't a CString — i.e. an upstream `direct_15B` / `reader_*` / complex
+    # field whose real size is unknown. The decoder reads it left-to-right, so
+    # the FIRST such field (wrong width) misaligns every field after it too.
+    # Show fields up to that point; render it and everything after
+    # `(unverified)` rather than present misleading bytes. (Tables with a
+    # hand-built override have real type descriptors, so nothing trips this.)
+    masked = set()
+    if schema:
+        hit = False
+        for f in schema.fields:
+            if f.name in ("_key", "_name"):
+                continue          # metadata from the index/header, always shown
+            if not hit and hasattr(f, "field_type") and (
+                    not getattr(f, "struct_fmt", None)
+                    and not getattr(f, "type_descriptor", None)
+                    and f.field_type != "CString"):
+                hit = True
+            if hit:
+                masked.add(f.name)
+
     def _fieldval(k, c):
-        if verified is not None and c not in verified:
+        if (verified is not None and c not in verified) or c in masked:
             return "(unverified)"
         return _cell(records[k].get(c))
 
@@ -155,7 +177,8 @@ def _shape_records(records: dict, schema, positions: dict | None = None
     suspect = 0
     # Unverified fields are intentionally not decoded — exclude them from the
     # health score so a curated table isn't penalised for hiding guesses.
-    scored_fields = ([f for f in field_names if verified is None or f in verified])
+    scored_fields = [f for f in field_names
+                     if (verified is None or f in verified) and f not in masked]
     sample = keys[:60]
     for fn in scored_fields:
         vals = [records[k].get(fn) for k in sample]

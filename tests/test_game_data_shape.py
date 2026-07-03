@@ -98,3 +98,30 @@ def test_shape_records_verified_none_shows_all_fields():
     records = {1: {"_key": 1, "_name": "x", "_a": 7, "_b": 9}}
     _cols, rows, _total, _h = _shape_records(records, schema)
     assert rows[0][-2:] == ["7", "9"]         # no masking anywhere
+
+
+def test_shape_records_masks_from_first_placeholder():
+    """A field with no struct format / walker type / CString is an unknown-width
+    placeholder; it and every field after it are masked (its wrong width
+    misaligns the rest). Fields before it, and _key/_name, stay shown."""
+    from cdumm.gui.pages.game_data_page import _shape_records
+    from cdumm.semantic.parser import FieldSpec, TableSchema
+
+    def f(name, fmt=None, td=None, ft="direct_u8", sz=1):
+        return FieldSpec(name=name, stream_size=sz, field_type=ft,
+                         struct_fmt=fmt, type_descriptor=td)
+
+    schema = TableSchema("t", [
+        f("_a", fmt="B"),                                   # primitive → shown
+        f("_b", td="u32"),                                  # walker type → shown
+        f("_raw", ft="direct_15B", sz=15),                  # placeholder → mask here on
+        f("_c", fmt="B"),                                   # after placeholder → masked
+    ])
+    records = {1: {"_key": 1, "_name": "x", "_a": 5, "_b": 9,
+                   "_raw": "deadbeef", "_c": 7}}
+    cols, rows, _t, _h = _shape_records(records, schema)
+    ci = {c: i for i, c in enumerate(cols)}
+    assert rows[0][ci["_a"]] == "5"
+    assert rows[0][ci["_b"]] == "9"
+    assert rows[0][ci["_raw"]] == "(unverified)"
+    assert rows[0][ci["_c"]] == "(unverified)"    # cascade: after a placeholder
