@@ -57,7 +57,10 @@ def test_compound_branch_defers_json_siblings_to_helper():
     src = _src()
     anchor = src.find("def import_from_folder(")
     assert anchor != -1
-    body = src[anchor:anchor + 16000]
+    # Window bumped 16000 -> 18000 (2026-07, #241): the Format 3 compound
+    # guard added ~20 lines to import_from_folder, pushing the second
+    # (compound-branch) _import_sibling_json_patches call to offset ~16120.
+    body = src[anchor:anchor + 18000]
     # Must reference the sibling helper in the compound branch.
     sibling_call_count = body.count("_import_sibling_json_patches(")
     # Pre-C1 the file had ONE call (the CB branch). Post-C1 must
