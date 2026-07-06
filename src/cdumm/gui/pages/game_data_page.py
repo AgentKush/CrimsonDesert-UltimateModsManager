@@ -199,6 +199,43 @@ def _shape_records(records: dict, schema, positions: dict | None = None
     return cols, rows, len(records), health
 
 
+def _overlay_iteminfo_native_fields(recs: dict, body: bytes, header: bytes) -> None:
+    """Overlay #252's native 1.13 decode onto the generic iteminfo records for
+    the post-drift scalar fields (cooltime, max_endurance, item_tier). The
+    generic parser mis-reads these on CD 1.13 because the prefab lists relocated
+    to the record tail; the native decoder reads them correctly for the decoded
+    (stackable) items and carries equipment records opaque. Decoded records get
+    the true native value; opaque records get ``None`` (shown blank) so a wrong
+    value never appears. Leading fields (_maxStackCount / _isBlocked) are left
+    as the generic parser decodes them — correct for every record. Best-effort:
+    any failure leaves the generic records untouched."""
+    try:
+        from cdumm.engine.iteminfo_native_parser import (
+            parse_iteminfo_from_bytes, detect_iteminfo_layout)
+        from cdumm.semantic.parser import parse_pabgh_index
+        _keys, off = parse_pabgh_index(header, "iteminfo")
+        starts = sorted(off.values())
+        fields = detect_iteminfo_layout(body, starts)
+        items = parse_iteminfo_from_bytes(body, starts, fields=fields)
+    except Exception:  # noqa: BLE001 — never break the preview
+        return
+    native_to_schema = {
+        "cooltime": "_cooltime",
+        "max_endurance": "_maxEndurance",
+        "item_tier": "_itemTier",
+    }
+    for it in items:
+        k = it.get("key")
+        if k not in recs:
+            continue
+        if it.get("_opaque_record"):
+            for sname in native_to_schema.values():
+                recs[k][sname] = None
+        else:
+            for nname, sname in native_to_schema.items():
+                recs[k][sname] = it.get(nname)
+
+
 class _PreviewWorker(QObject):
     """Reads + decodes one asset off the UI thread so a large table or
     texture can never freeze the app. Emits exactly one ``ready`` dict
@@ -260,6 +297,8 @@ class _PreviewWorker(QObject):
                     # variable-length fields so richly-schema'd tables
                     # (iteminfo, regioninfo, ...) show their real columns.
                     recs = sem.parse_records_display(table, body, header)
+                    if table == "iteminfo" and recs:
+                        _overlay_iteminfo_native_fields(recs, body, header)
                 except Exception:  # noqa: BLE001 — fall back to a raw view
                     recs = {}
                 if recs:

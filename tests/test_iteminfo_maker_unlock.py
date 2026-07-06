@@ -13,7 +13,8 @@ from __future__ import annotations
 from cdumm.semantic import parser as sem
 from cdumm.engine.format3_builder import is_editable_scalar_field
 
-_EXPECTED = frozenset({"_maxStackCount", "_isBlocked"})
+_EXPECTED = frozenset(
+    {"_maxStackCount", "_isBlocked", "_cooltime", "_maxEndurance", "_itemTier"})
 
 
 def _iteminfo_schema():
@@ -21,7 +22,7 @@ def _iteminfo_schema():
     return sem.get_schema("iteminfo")
 
 
-def test_iteminfo_exposes_exactly_the_two_leading_scalars():
+def test_iteminfo_verified_fields_match_the_unlocked_set():
     sch = _iteminfo_schema()
     assert sch is not None
     assert sch.verified_fields == _EXPECTED
