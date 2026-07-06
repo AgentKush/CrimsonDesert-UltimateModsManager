@@ -493,6 +493,31 @@ def _build_change_relocated_layout(
         if intent.field in UNWRITEABLE_KNOWN_FIELDS:
             skipped_field += 1
             continue
+        # Nested path (dotted / indexed) — walk the parsed dict to the
+        # assignment target. The full-schema writer already does this; the
+        # 1.13 relocated-layout writer needs it too so item-price mods
+        # (price_list[N].price.price) apply on the current game. Mirrors the
+        # path block below; uses this function's own counters.
+        if "." in intent.field or "[" in intent.field:
+            target = _resolve_path_target(item, intent.field)
+            if target is None:
+                skipped_field += 1
+                continue
+            parent, last_seg = target
+            try:
+                existing_nested = parent[last_seg]
+            except (KeyError, IndexError, TypeError):
+                existing_nested = None
+            if not shape_matches(existing_nested, intent.new):
+                skipped_field += 1
+                continue
+            try:
+                parent[last_seg] = intent.new
+                applied += 1
+                decoded_edits += 1
+            except (KeyError, IndexError, TypeError):
+                skipped_field += 1
+            continue
         target_field = _resolve_field_name(intent.field, item)
         if target_field is None:
             if intent.field in SUPPORTED_FIELDS:
