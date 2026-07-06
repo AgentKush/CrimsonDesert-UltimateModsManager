@@ -9,7 +9,10 @@
   },
   "ItemInfo": {
     "_no_null_skip": true,
-    "_verified_fields": ["_maxStackCount", "_isBlocked", "_cooltime", "_maxEndurance", "_itemTier"],
+    "_verified_fields": ["_maxStackCount", "_isBlocked", "_cooltime", "_maxEndurance", "_itemTier", "_price"],
+    "_synthetic_fields": {
+      "_price": {"type": "u64", "path": "price_list[0].price.price"}
+    },
     "_ordered_fields": [
       "_isBlocked", "_maxStackCount",
       "_itemName", "_brokenItemPrefixString", "_inventoryInfo",

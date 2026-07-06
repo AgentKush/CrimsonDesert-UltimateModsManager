@@ -55,3 +55,22 @@ def test_price_path_bad_segments_return_none():
     it = _item()
     assert _resolve_path_target(it, "price_list[9].price.price") is None   # index OOR
     assert _resolve_path_target(it, "price_list[0].nope.price") is None    # missing key
+
+
+def test_iteminfo_price_is_a_synthetic_editable_field():
+    # The maker exposes a flat `_price` column whose intent targets the nested
+    # path; the writer resolves the path (verified byte-exact on the live game).
+    from cdumm.semantic import parser as sem
+    from cdumm.engine.format3_builder import is_editable_scalar_field
+    sem.init_schemas()
+    sch = sem.get_schema("iteminfo")
+    by = {f.name: f for f in sch.fields}
+    p = by.get("_price")
+    assert p is not None, "synthetic _price field missing"
+    assert p.struct_fmt == "Q"                       # u64 == PriceFloor.price
+    assert p.intent_path == "price_list[0].price.price"
+    assert is_editable_scalar_field(p)
+    assert "_price" in (sch.verified_fields or frozenset())
+    # the real CArray field is left intact and stays gated (not verified)
+    assert "_priceList" in by
+    assert "_priceList" not in (sch.verified_fields or frozenset())

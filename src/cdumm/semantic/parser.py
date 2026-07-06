@@ -70,6 +70,13 @@ class FieldSpec:
     base schema marks as ``stream=?``. None = no override; use
     legacy field_type/stream_size logic."""
 
+    intent_path: str | None = None
+    """For a *synthetic* field (declared via ``_synthetic_fields`` in the
+    type-override file): the dotted/indexed path a Format 3 intent should
+    target instead of this field's flat name — e.g. ``_price`` maps to
+    ``price_list[0].price.price`` so a modder edits one scalar cell and the
+    writer walks the nested struct. None for ordinary schema fields."""
+
 
 @dataclass
 class TableSchema:
@@ -270,6 +277,27 @@ def _load_schemas() -> dict[str, TableSchema]:
                 struct_fmt=struct_fmt,
                 type_descriptor=type_descriptor,
             ))
+
+        # Synthetic fields: expose a nested struct value as a flat, editable
+        # scalar column (e.g. an item's sell price at price_list[0].price.price)
+        # so the mod maker can offer a plain "price" cell. The FieldSpec carries
+        # `intent_path`; the maker emits a Format 3 intent targeting that path,
+        # which the table's writer resolves. Declared via `_synthetic_fields`
+        # in the override file: {name: {"type": <primitive>, "path": <path>}}.
+        synth = table_overrides.get("_synthetic_fields") or {}
+        if synth:
+            from cdumm.semantic.pabgb_types import primitive_width
+            for sname, sdef in synth.items():
+                stype = (sdef or {}).get("type", "")
+                ti = _TYPE_MAP.get(f"direct_{stype}")
+                fields.append(FieldSpec(
+                    name=sname,
+                    stream_size=primitive_width(stype) or 0,
+                    field_type=f"direct_{stype}",
+                    struct_fmt=(ti[0] if ti else None),
+                    type_descriptor=stype,
+                    intent_path=(sdef or {}).get("path"),
+                ))
 
         if fields:
             schemas[table_name.lower()] = TableSchema(

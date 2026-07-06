@@ -231,9 +231,14 @@ def _overlay_iteminfo_native_fields(recs: dict, body: bytes, header: bytes) -> N
         if it.get("_opaque_record"):
             for sname in native_to_schema.values():
                 recs[k][sname] = None
+            recs[k]["_price"] = None      # synthetic price column, no data
         else:
             for nname, sname in native_to_schema.items():
                 recs[k][sname] = it.get(nname)
+            pl = it.get("price_list")      # synthetic _price = price_list[0].price.price
+            recs[k]["_price"] = (
+                pl[0]["price"].get("price")
+                if pl and isinstance(pl[0].get("price"), dict) else None)
 
 
 class _PreviewWorker(QObject):
@@ -1494,7 +1499,10 @@ class GameDataPage(ToolPageBase):
         except (ValueError, AttributeError):
             key = 0
         entry = name_item.text() if name_item else ""
-        field = self._pv_cols[c] if c < len(self._pv_cols) else spec.name
+        # A synthetic field (e.g. _price) targets a nested path, not its flat
+        # column name; the writer resolves the path.
+        field = getattr(spec, "intent_path", None) or (
+            self._pv_cols[c] if c < len(self._pv_cols) else spec.name)
         try:
             new_val = parse_scalar_value(spec, item.text())
         except (ValueError, TypeError):

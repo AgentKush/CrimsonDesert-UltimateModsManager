@@ -14,7 +14,8 @@ from cdumm.semantic import parser as sem
 from cdumm.engine.format3_builder import is_editable_scalar_field
 
 _EXPECTED = frozenset(
-    {"_maxStackCount", "_isBlocked", "_cooltime", "_maxEndurance", "_itemTier"})
+    {"_maxStackCount", "_isBlocked", "_cooltime", "_maxEndurance", "_itemTier",
+     "_price"})
 
 
 def _iteminfo_schema():
