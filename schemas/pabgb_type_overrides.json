@@ -9,7 +9,25 @@
   },
   "ItemInfo": {
     "_no_null_skip": true,
-    "_verified_fields": ["_maxStackCount", "_isBlocked", "_cooltime", "_maxEndurance", "_itemTier", "_price"],
+    "_verified_fields": [
+      "_isBlocked", "_maxStackCount", "_brokenItemPrefixString", "_inventoryInfo",
+      "_equipTypeInfo", "_equipAbleHash", "_mapIconPath", "_moneyIconPath",
+      "_useMapIconAlert", "_itemType", "_materialKey", "_equipableLevel",
+      "_categoryInfo", "_knowledgeInfo", "_knowledgeObtainType", "_destroyEffecInfo",
+      "_useImmediately", "_applyMaxStackCap", "_extractMultiChangeInfo",
+      "_minimumExtractEnchantLevel", "_gimmickInfo", "_maxDropResultSubItemCount",
+      "_useDropSetTarget", "_isAllGimmickSealable", "_deleteByGimmickUnlock",
+      "_gimmickUnlockMessageLocalStringInfo", "_canDisassemble", "_isRegisterTradeMarket",
+      "_isEditorUsable", "_discardable", "_isDyeable", "_isEditableGrime",
+      "_isDestroyWhenBroken", "_isHousingOnly", "_quickSlotIndex", "_itemTier",
+      "_isImportantItem", "_applyDropStatType", "_cooltime", "_itemChargeType",
+      "_maxChargedUseableCount", "_discardOffsetY", "_hideFromInventoryOnPopItem",
+      "_isShieldItem", "_isTowerShieldItem", "_isWild", "_packedItemInfo",
+      "_unpackedItemInfo", "_convertItemInfoByDropNPC", "_lookDetailGameAdviceInfoWrapper",
+      "_lookDetailMissionInfo", "_enableAlertSystemToUI", "_isSaveGameDataAtUseItem",
+      "_isLogoutAtUseItem", "_sharedCoolTimeGroupNameHash", "_enableEquipInCloneActor",
+      "_isBlockedStoreSell", "_isPreorderItem", "_isHasItemUseDataInventoryBuff",
+      "_isPreservedOnExtract", "_respawnTimeSeconds", "_maxEndurance", "_price"],
     "_synthetic_fields": {
       "_price": {"type": "u64", "path": "price_list[0].price.price"}
     },
