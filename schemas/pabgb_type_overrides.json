@@ -9,6 +9,28 @@
   },
   "ItemInfo": {
     "_no_null_skip": true,
+    "_verified_fields": [
+      "_isBlocked", "_maxStackCount", "_brokenItemPrefixString", "_inventoryInfo",
+      "_equipTypeInfo", "_equipAbleHash", "_mapIconPath", "_moneyIconPath",
+      "_useMapIconAlert", "_itemType", "_materialKey", "_equipableLevel",
+      "_categoryInfo", "_knowledgeInfo", "_knowledgeObtainType", "_destroyEffecInfo",
+      "_useImmediately", "_applyMaxStackCap", "_extractMultiChangeInfo",
+      "_minimumExtractEnchantLevel", "_gimmickInfo", "_maxDropResultSubItemCount",
+      "_useDropSetTarget", "_isAllGimmickSealable", "_deleteByGimmickUnlock",
+      "_gimmickUnlockMessageLocalStringInfo", "_canDisassemble", "_isRegisterTradeMarket",
+      "_isEditorUsable", "_discardable", "_isDyeable", "_isEditableGrime",
+      "_isDestroyWhenBroken", "_isHousingOnly", "_quickSlotIndex", "_itemTier",
+      "_isImportantItem", "_applyDropStatType", "_cooltime", "_itemChargeType",
+      "_maxChargedUseableCount", "_discardOffsetY", "_hideFromInventoryOnPopItem",
+      "_isShieldItem", "_isTowerShieldItem", "_isWild", "_packedItemInfo",
+      "_unpackedItemInfo", "_convertItemInfoByDropNPC", "_lookDetailGameAdviceInfoWrapper",
+      "_lookDetailMissionInfo", "_enableAlertSystemToUI", "_isSaveGameDataAtUseItem",
+      "_isLogoutAtUseItem", "_sharedCoolTimeGroupNameHash", "_enableEquipInCloneActor",
+      "_isBlockedStoreSell", "_isPreorderItem", "_isHasItemUseDataInventoryBuff",
+      "_isPreservedOnExtract", "_respawnTimeSeconds", "_maxEndurance", "_price"],
+    "_synthetic_fields": {
+      "_price": {"type": "u64", "path": "price_list[0].price.price"}
+    },
     "_ordered_fields": [
       "_isBlocked", "_maxStackCount",
       "_itemName", "_brokenItemPrefixString", "_inventoryInfo",
@@ -385,8 +407,9 @@
     "_tagList": {"type": "CArray<u32>"}
   },
   "CharacterInfo": {
-    "_meta_note": "Mount/vehicle subset only (11 fields) — ported from NattKh characterinfo_mount_parser.py. Targets: _vehicleInfo, _callMercenaryCoolTime, _callMercenarySpawnDuration, _mercenaryCoolTimeType. Fields after _mercenaryCoolTimeType are 'complex arrays/stats' that NattKh's mount parser skips; reaching them needs further RE.",
+    "_meta_note": "Mount/vehicle subset. The 4 mount scalars (_vehicleInfo u16, _callMercenaryCoolTime u64, _callMercenarySpawnDuration u64, _mercenaryCoolTimeType u8) are verified byte-exact on the LIVE 1.13 game: an edit rewrites only that field's bytes, re-parses correctly, zero collateral (18/18 real mounts) + _vehicleInfo's 33 distinct values are all valid vehicleinfo.pabgb keys (33/33 foreign-key match). They sit past two LocalizableStrings + a CString so the offset is record-dependent — the writer (characterinfo_writer._mount_change) resolves it via the schema _ordered_fields walk (cdumm.semantic.parser.field_offsets_in_record), because NattKh's fixed-offset parse_entry FAILS on the real mount records (it only parses the ~6300 all-zero non-mount records). Also unlocked: _spawnFixType (u8, 6-value enum) + _isRemoteCatchable (u8, 0-3) — leading scalars before the mount block, byte-exact + carrying real varied data, offsets transitively verified (the same walk reaches the FK-verified _vehicleInfo after them). Held: _enum4hash_a/b + _keyLookup_a/b are byte-safe but opaque hashes/keys (a modder can't set a meaningful value blind); _isBlocked is uniformly 0 on 1.13 (no live variance). Fields after _mercenaryCoolTimeType are complex arrays/stats needing further RE.",
     "_no_null_skip": true,
+    "_verified_fields": ["_spawnFixType", "_isRemoteCatchable", "_vehicleInfo", "_callMercenaryCoolTime", "_callMercenarySpawnDuration", "_mercenaryCoolTimeType"],
     "_ordered_fields": [
       "_isBlocked", "_stringKey1", "_stringKey2",
       "_enum4hash_a", "_enum4hash_b", "_description",
@@ -411,9 +434,9 @@
     "_mercenaryCoolTimeType": {"type": "u8"}
   },
   "WantedInfo": {
-    "_meta_note": "Verified-only pass 2026-07-03. Only _increasePrice is validated: read as u64 at payload offset 0 (the default entry header consumes exactly key(2)+name_len(4, always 0)+null(1) = 7 bytes on every record, landing on the price). Values track the wanted tier — 30/50/100/500/1500 gold, consistent across all 5 key groups. _isBlocked/_useTargetPrice are all-zero in shipped data except one toggling flag byte whose name mapping can't be proven from the files alone (the field defs live only in the exe), so they are listed but gated as unverified rather than guessed. _stringKey (untyped in the base schema) stays dropped.",
+    "_meta_note": "Verified-only pass 2026-07-03; _isBlocked verified + added 2026-07-07. Records are a uniform 16 bytes: header key(2)+name_len(4, always 0)+null(1)=7, then _increasePrice u64 at payload offset 0 (record byte 7) and _isBlocked u8 at payload offset 8 (record byte 15, the record's last byte). Both proven byte-exact on all sampled records via BOTH the display walker AND the real Format 3 writer (apply_intents_to_pabgb_bytes) — a set rewrites only that field's bytes with zero collateral to any other record. _increasePrice tracks the wanted tier (30/50/100/500/1500 gold). _isBlocked is a live 0/1 flag: 1 on exactly the ten price=50 records, 0 on the other 25 — real shipped data, not padding, and its byte-15 offset is provably in-bounds. _useTargetPrice would fall at record byte 16, past the 16-byte record end, so it does not exist in shipped data (the writer no-ops it) and stays gated. _stringKey (untyped in the base schema) stays dropped.",
     "_ordered_fields": ["_increasePrice", "_isBlocked", "_useTargetPrice"],
-    "_verified_fields": ["_increasePrice"],
+    "_verified_fields": ["_increasePrice", "_isBlocked"],
     "_increasePrice": {"type": "u64"},
     "_isBlocked": {"type": "u8"},
     "_useTargetPrice": {"type": "u8"}

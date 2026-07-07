@@ -70,6 +70,13 @@ class FieldSpec:
     base schema marks as ``stream=?``. None = no override; use
     legacy field_type/stream_size logic."""
 
+    intent_path: str | None = None
+    """For a *synthetic* field (declared via ``_synthetic_fields`` in the
+    type-override file): the dotted/indexed path a Format 3 intent should
+    target instead of this field's flat name — e.g. ``_price`` maps to
+    ``price_list[0].price.price`` so a modder edits one scalar cell and the
+    writer walks the nested struct. None for ordinary schema fields."""
+
 
 @dataclass
 class TableSchema:
@@ -270,6 +277,27 @@ def _load_schemas() -> dict[str, TableSchema]:
                 struct_fmt=struct_fmt,
                 type_descriptor=type_descriptor,
             ))
+
+        # Synthetic fields: expose a nested struct value as a flat, editable
+        # scalar column (e.g. an item's sell price at price_list[0].price.price)
+        # so the mod maker can offer a plain "price" cell. The FieldSpec carries
+        # `intent_path`; the maker emits a Format 3 intent targeting that path,
+        # which the table's writer resolves. Declared via `_synthetic_fields`
+        # in the override file: {name: {"type": <primitive>, "path": <path>}}.
+        synth = table_overrides.get("_synthetic_fields") or {}
+        if synth:
+            from cdumm.semantic.pabgb_types import primitive_width
+            for sname, sdef in synth.items():
+                stype = (sdef or {}).get("type", "")
+                ti = _TYPE_MAP.get(f"direct_{stype}")
+                fields.append(FieldSpec(
+                    name=sname,
+                    stream_size=primitive_width(stype) or 0,
+                    field_type=f"direct_{stype}",
+                    struct_fmt=(ti[0] if ti else None),
+                    type_descriptor=stype,
+                    intent_path=(sdef or {}).get("path"),
+                ))
 
         if fields:
             schemas[table_name.lower()] = TableSchema(
@@ -647,6 +675,53 @@ def decode_record_display(entry_data: bytes, schema: "TableSchema",
             out[spec.name] = entry_data[off:off + w].hex()
             off += w
     return out
+
+
+def field_offsets_in_record(entry_data: bytes, schema: "TableSchema",
+                            key_size: int) -> dict[str, int]:
+    """Byte offset (within ``entry_data``) of each fixed-width scalar field.
+
+    Uses the exact walk of :func:`decode_record_display` — variable-length
+    fields are consumed but not reported — so the offsets it returns land on
+    the same bytes the display reads. This lets a writer edit a scalar field
+    in place on tables whose records are located by walking rather than a
+    fixed layout (e.g. characterinfo mount fields sit past two variable-length
+    LocalizableStrings + a CString, so their offset is record-dependent).
+    Stops at the first field the walk can't consume, same as the display.
+    """
+    from cdumm.semantic import pabgb_types as _pt
+    off = _display_payload_start(entry_data, schema, key_size)
+    end = len(entry_data)
+    offsets: dict[str, int] = {}
+    for spec in schema.fields:
+        if spec.type_descriptor:
+            w = _pt.consume_bytes(spec.type_descriptor, entry_data, off, end)
+            if w is None:
+                break
+            # A fixed-width primitive descriptor (u8/u16/u32/u64/float) is
+            # editable in place; record its offset. Variable-length
+            # descriptors are recorded too but callers only use scalars.
+            offsets[spec.name] = off
+            off += w
+        elif spec.struct_fmt:
+            w = spec.stream_size
+            if off + w > end:
+                break
+            offsets[spec.name] = off
+            off += w
+        elif spec.field_type == "CString":
+            if off + 4 > end:
+                break
+            slen = struct.unpack_from("<I", entry_data, off)[0]
+            if off + 4 + slen > end:
+                break
+            off += 4 + slen
+        else:
+            w = spec.stream_size or 0
+            if w == 0 or off + w > end:
+                break
+            off += w
+    return offsets
 
 
 def parse_records_display(table_name: str, body_bytes: bytes,

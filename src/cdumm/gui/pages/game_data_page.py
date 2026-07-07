@@ -199,6 +199,96 @@ def _shape_records(records: dict, schema, positions: dict | None = None
     return cols, rows, len(records), health
 
 
+def _overlay_iteminfo_native_fields(recs: dict, body: bytes, header: bytes) -> None:
+    """Overlay #252's native 1.13 decode onto the generic iteminfo records for
+    the post-drift scalar fields (cooltime, max_endurance, item_tier). The
+    generic parser mis-reads these on CD 1.13 because the prefab lists relocated
+    to the record tail; the native decoder reads them correctly for the decoded
+    (stackable) items and carries equipment records opaque. Decoded records get
+    the true native value; opaque records get ``None`` (shown blank) so a wrong
+    value never appears. Leading fields (_maxStackCount / _isBlocked) are left
+    as the generic parser decodes them — correct for every record. Best-effort:
+    any failure leaves the generic records untouched."""
+    try:
+        from cdumm.engine.iteminfo_native_parser import (
+            parse_iteminfo_from_bytes, detect_iteminfo_layout)
+        from cdumm.semantic.parser import parse_pabgh_index
+        _keys, off = parse_pabgh_index(header, "iteminfo")
+        starts = sorted(off.values())
+        fields = detect_iteminfo_layout(body, starts)
+        items = parse_iteminfo_from_bytes(body, starts, fields=fields)
+    except Exception:  # noqa: BLE001 — never break the preview
+        return
+    native_to_schema = {
+        "cooltime": "_cooltime",
+        "max_endurance": "_maxEndurance",
+        "item_tier": "_itemTier",
+        "equipable_level": "_equipableLevel",
+        "category_info": "_categoryInfo",
+        "knowledge_info": "_knowledgeInfo",
+        "knowledge_obtain_type": "_knowledgeObtainType",
+        "destroy_effec_info": "_destroyEffecInfo",
+        "use_immediately": "_useImmediately",
+        "apply_max_stack_cap": "_applyMaxStackCap",
+        "extract_multi_change_info": "_extractMultiChangeInfo",
+        "minimum_extract_enchant_level": "_minimumExtractEnchantLevel",
+        "gimmick_info": "_gimmickInfo",
+        "max_drop_result_sub_item_count": "_maxDropResultSubItemCount",
+        "use_drop_set_target": "_useDropSetTarget",
+        "is_all_gimmick_sealable": "_isAllGimmickSealable",
+        "delete_by_gimmick_unlock": "_deleteByGimmickUnlock",
+        "gimmick_unlock_message_local_string_info": "_gimmickUnlockMessageLocalStringInfo",
+        "can_disassemble": "_canDisassemble",
+        "is_register_trade_market": "_isRegisterTradeMarket",
+        "is_editor_usable": "_isEditorUsable",
+        "discardable": "_discardable",
+        "is_dyeable": "_isDyeable",
+        "is_editable_grime": "_isEditableGrime",
+        "is_destroy_when_broken": "_isDestroyWhenBroken",
+        "is_housing_only": "_isHousingOnly",
+        "quick_slot_index": "_quickSlotIndex",
+        "is_important_item": "_isImportantItem",
+        "apply_drop_stat_type": "_applyDropStatType",
+        "item_charge_type": "_itemChargeType",
+        "max_charged_useable_count": "_maxChargedUseableCount",
+        "discard_offset_y": "_discardOffsetY",
+        "hide_from_inventory_on_pop_item": "_hideFromInventoryOnPopItem",
+        "is_shield_item": "_isShieldItem",
+        "is_tower_shield_item": "_isTowerShieldItem",
+        "is_wild": "_isWild",
+        "packed_item_info": "_packedItemInfo",
+        "unpacked_item_info": "_unpackedItemInfo",
+        "convert_item_info_by_drop_npc": "_convertItemInfoByDropNPC",
+        "look_detail_game_advice_info_wrapper": "_lookDetailGameAdviceInfoWrapper",
+        "look_detail_mission_info": "_lookDetailMissionInfo",
+        "enable_alert_system_to_ui": "_enableAlertSystemToUI",
+        "is_save_game_data_at_use_item": "_isSaveGameDataAtUseItem",
+        "is_logout_at_use_item": "_isLogoutAtUseItem",
+        "shared_cool_time_group_name_hash": "_sharedCoolTimeGroupNameHash",
+        "enable_equip_in_clone_actor": "_enableEquipInCloneActor",
+        "is_blocked_store_sell": "_isBlockedStoreSell",
+        "is_preorder_item": "_isPreorderItem",
+        "is_has_item_use_data_inventory_buff": "_isHasItemUseDataInventoryBuff",
+        "is_preserved_on_extract": "_isPreservedOnExtract",
+        "respawn_time_seconds": "_respawnTimeSeconds",
+    }
+    for it in items:
+        k = it.get("key")
+        if k not in recs:
+            continue
+        if it.get("_opaque_record"):
+            for sname in native_to_schema.values():
+                recs[k][sname] = None
+            recs[k]["_price"] = None      # synthetic price column, no data
+        else:
+            for nname, sname in native_to_schema.items():
+                recs[k][sname] = it.get(nname)
+            pl = it.get("price_list")      # synthetic _price = price_list[0].price.price
+            recs[k]["_price"] = (
+                pl[0]["price"].get("price")
+                if pl and isinstance(pl[0].get("price"), dict) else None)
+
+
 class _PreviewWorker(QObject):
     """Reads + decodes one asset off the UI thread so a large table or
     texture can never freeze the app. Emits exactly one ``ready`` dict
@@ -260,6 +350,8 @@ class _PreviewWorker(QObject):
                     # variable-length fields so richly-schema'd tables
                     # (iteminfo, regioninfo, ...) show their real columns.
                     recs = sem.parse_records_display(table, body, header)
+                    if table == "iteminfo" and recs:
+                        _overlay_iteminfo_native_fields(recs, body, header)
                 except Exception:  # noqa: BLE001 — fall back to a raw view
                     recs = {}
                 if recs:
@@ -1455,7 +1547,10 @@ class GameDataPage(ToolPageBase):
         except (ValueError, AttributeError):
             key = 0
         entry = name_item.text() if name_item else ""
-        field = self._pv_cols[c] if c < len(self._pv_cols) else spec.name
+        # A synthetic field (e.g. _price) targets a nested path, not its flat
+        # column name; the writer resolves the path.
+        field = getattr(spec, "intent_path", None) or (
+            self._pv_cols[c] if c < len(self._pv_cols) else spec.name)
         try:
             new_val = parse_scalar_value(spec, item.text())
         except (ValueError, TypeError):
