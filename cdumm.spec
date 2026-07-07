@@ -328,7 +328,12 @@ exe = EXE(
     name='CDUMM',
     debug=False,
     bootloader_ignore_signals=False,
-    strip=True,
+    # GNU `strip` corrupts Windows PE binaries -- stripping python313.dll on
+    # the windows-latest CI runner (which has strip.exe on PATH) produces a DLL
+    # that fails to load: `Failed to load Python DLL ... LoadLibrary: Invalid
+    # access to memory location`. Strip only on posix (macOS/Linux) where it's
+    # safe and meaningfully reduces size; never on Windows.
+    strip=(os.name != 'nt'),
     # UPX disabled — heuristic AV engines (Bkav, CrowdStrike Falcon,
     # DeepInstinct, Fortinet) flag UPX-packed PyInstaller binaries
     # because real malware uses UPX too. Defender is fine either way,
