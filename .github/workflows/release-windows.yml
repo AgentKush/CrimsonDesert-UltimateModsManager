@@ -1,0 +1,93 @@
+name: Build Windows release
+
+# Community/fork build pipeline. Mirrors release-macos.yml but produces the
+# Windows onefile CDUMM.exe.
+#
+# Triggers:
+#   * push of a tag matching v*  — builds the exe and attaches it to the
+#     GitHub Release for that tag (softprops/action-gh-release).
+#   * workflow_dispatch — manual run. Builds the exe and uploads it as a
+#     workflow artifact (downloadable for 30 days); does NOT touch Releases.
+#     Use this to validate a build before tagging.
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write # needed to attach assets to GitHub Releases
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v6
+        with:
+          # 3.13 matches windows-tests.yml (the test gate) and the vendored
+          # crimson_rs.pyd / abi3 cdumm_native both load on 3.13.
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo + native target
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            native/target
+          key: cargo-windows-${{ hashFiles('native/Cargo.lock') }}
+          restore-keys: cargo-windows-
+
+      - name: Install build tooling + project deps
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pyinstaller
+          # cdumm_native is a maturin (Rust) extension. `pip install ./native`
+          # uses native/pyproject.toml's maturin build-backend to compile and
+          # install the cdumm_native module (abi3, so any 3.9+ works). The
+          # PyInstaller spec then finds + bundles the built .pyd.
+          python -m pip install ./native
+          # Project runtime deps (PySide6, qfluentwidgets, py7zr, lxml, ...).
+          python -m pip install -e .
+
+      - name: Build CDUMM.exe (PyInstaller onefile)
+        run: python scripts/build.py
+
+      - name: Name the artifact after the ref
+        shell: pwsh
+        run: |
+          $ver = "${{ github.ref_type == 'tag' && github.ref_name || 'dev' }}"
+          Copy-Item dist/CDUMM.exe "dist/CDUMM-$ver-windows-x64.exe"
+
+      - name: Upload exe as workflow artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: CDUMM-windows-x64
+          path: dist/CDUMM-*-windows-x64.exe
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Attach exe to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v3
+        with:
+          files: dist/CDUMM-*-windows-x64.exe
+          fail_on_unmatched_files: true
+          generate_release_notes: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
