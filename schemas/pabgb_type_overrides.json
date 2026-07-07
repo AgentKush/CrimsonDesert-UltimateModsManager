@@ -407,8 +407,9 @@
     "_tagList": {"type": "CArray<u32>"}
   },
   "CharacterInfo": {
-    "_meta_note": "Mount/vehicle subset only (11 fields) — ported from NattKh characterinfo_mount_parser.py. Targets: _vehicleInfo, _callMercenaryCoolTime, _callMercenarySpawnDuration, _mercenaryCoolTimeType. Fields after _mercenaryCoolTimeType are 'complex arrays/stats' that NattKh's mount parser skips; reaching them needs further RE.",
+    "_meta_note": "Mount/vehicle subset. The 4 mount scalars (_vehicleInfo u16, _callMercenaryCoolTime u64, _callMercenarySpawnDuration u64, _mercenaryCoolTimeType u8) are verified byte-exact on the LIVE 1.13 game: an edit rewrites only that field's bytes, re-parses correctly, zero collateral (18/18 real mounts) + _vehicleInfo's 33 distinct values are all valid vehicleinfo.pabgb keys (33/33 foreign-key match). They sit past two LocalizableStrings + a CString so the offset is record-dependent — the writer (characterinfo_writer._mount_change) resolves it via the schema _ordered_fields walk (cdumm.semantic.parser.field_offsets_in_record), because NattKh's fixed-offset parse_entry FAILS on the real mount records (it only parses the ~6300 all-zero non-mount records). Fields after _mercenaryCoolTimeType are complex arrays/stats needing further RE; the leading scalars (_enum4hash_*, _spawnFixType, _isRemoteCatchable, _keyLookup_*) are byte-safe but semantically unvalidated so stay gated. _isBlocked is uniformly 0 on 1.13 (no live variance).",
     "_no_null_skip": true,
+    "_verified_fields": ["_vehicleInfo", "_callMercenaryCoolTime", "_callMercenarySpawnDuration", "_mercenaryCoolTimeType"],
     "_ordered_fields": [
       "_isBlocked", "_stringKey1", "_stringKey2",
       "_enum4hash_a", "_enum4hash_b", "_description",

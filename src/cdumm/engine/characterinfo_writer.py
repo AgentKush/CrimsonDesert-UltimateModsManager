@@ -54,7 +54,92 @@ _FIELD_MAP: dict[str, tuple[str, str, int]] = {
     "flag_c": ("_flagC_offset", "<B", 1),
 }
 
-SUPPORTED_FIELDS = frozenset(_FIELD_MAP)
+# Mount / vehicle scalar fields. Unlike the appearance fields above, these are
+# NOT located by parse_entry -- that parser fails on the real mount records (it
+# only parses the ~6300 all-zero non-mount records). They sit past two
+# variable-length LocalizableStrings + a CString, so their offset is record-
+# dependent and is resolved by the schema `_ordered_fields` walk
+# (cdumm.semantic.parser.field_offsets_in_record, the same walk the Game Data
+# grid displays them with). Each is a fixed-width primitive => a `set` is one
+# absolute-offset replace, no size change. Verified byte-exact on the live 1.13
+# install (18/18 real mounts) + a 33/33 vehicleinfo foreign-key cross-check.
+_MOUNT_FIELD_WIDTHS: dict[str, tuple[str, int]] = {
+    "_vehicleInfo": ("<H", 2),
+    "_callMercenaryCoolTime": ("<Q", 8),
+    "_callMercenarySpawnDuration": ("<Q", 8),
+    "_mercenaryCoolTimeType": ("<B", 1),
+}
+
+SUPPORTED_FIELDS = frozenset(_FIELD_MAP) | frozenset(_MOUNT_FIELD_WIDTHS)
+
+_ci_key_size_cache: dict[str, int] = {}
+
+
+def _mount_change(
+    body: bytes,
+    header: bytes,
+    idx: dict[int, int],
+    order: list[tuple[int, int]],
+    name_to_key: dict[str, int],
+    entry_name: str,
+    raw_key: int,
+    field: str,
+    new_value: object,
+) -> dict | None:
+    """Resolve one mount-field Format 3 intent to an absolute-offset replace.
+
+    Locates the record by key (the maker always supplies it; falls back to the
+    parse_entry name map for the non-mount records that carries), walks the
+    schema `_ordered_fields` to the field's record-dependent offset, and
+    returns a v2 change dict, or None (logged) if anything doesn't resolve.
+    """
+    fmt, width = _MOUNT_FIELD_WIDTHS[field]
+    if isinstance(new_value, bool) or not isinstance(new_value, int):
+        logger.warning("characterinfo: mount intent %s on %r has non-integer "
+                       "value %r, skipping", field, entry_name, new_value)
+        return None
+    key = name_to_key.get(entry_name)
+    if key is None and raw_key:
+        key = raw_key
+    start = idx.get(key) if key is not None else None
+    if start is None:
+        logger.warning("characterinfo: mount entry %r (key=%r) not found, "
+                       "skipping intent on %s", entry_name, raw_key, field)
+        return None
+    ranks = {k: i for i, (k, _) in enumerate(order)}
+    rank = ranks.get(key)
+    end = (order[rank + 1][1]
+           if rank is not None and rank + 1 < len(order) else len(body))
+    from cdumm.semantic import parser as _sem
+    _sem.init_schemas()
+    schema = _sem.get_schema("characterinfo")
+    if schema is None:
+        return None
+    key_size = _ci_key_size_cache.get("v")
+    if key_size is None:
+        key_size, _ = _sem.parse_pabgh_index(header, "characterinfo")
+        _ci_key_size_cache["v"] = key_size
+    rel = _sem.field_offsets_in_record(
+        body[start:end], schema, key_size).get(field)
+    if rel is None:
+        logger.warning("characterinfo: could not walk to mount field %r for "
+                       "%r, skipping", field, entry_name)
+        return None
+    abs_off = start + rel
+    if abs_off + width > len(body):
+        return None
+    try:
+        patched = struct.pack(fmt, new_value)
+    except struct.error:
+        logger.warning("characterinfo: value %r out of range for mount field "
+                       "%r (%d-byte), skipping", new_value, field, width)
+        return None
+    return {
+        "offset": abs_off,
+        "original": bytes(body[abs_off:abs_off + width]).hex(),
+        "patched": patched.hex(),
+        "label": f"{entry_name}.{field}",
+    }
 
 
 def build_characterinfo_changes(
@@ -93,6 +178,13 @@ def build_characterinfo_changes(
 
     changes: list[dict] = []
     for entry_name, raw_key, field, new_value in intents:
+        if field in _MOUNT_FIELD_WIDTHS:
+            ch = _mount_change(vanilla_body, vanilla_header, idx, order,
+                               name_to_key, entry_name, raw_key, field,
+                               new_value)
+            if ch is not None:
+                changes.append(ch)
+            continue
         spec = _FIELD_MAP.get(field)
         if spec is None:
             logger.warning(

@@ -677,6 +677,53 @@ def decode_record_display(entry_data: bytes, schema: "TableSchema",
     return out
 
 
+def field_offsets_in_record(entry_data: bytes, schema: "TableSchema",
+                            key_size: int) -> dict[str, int]:
+    """Byte offset (within ``entry_data``) of each fixed-width scalar field.
+
+    Uses the exact walk of :func:`decode_record_display` — variable-length
+    fields are consumed but not reported — so the offsets it returns land on
+    the same bytes the display reads. This lets a writer edit a scalar field
+    in place on tables whose records are located by walking rather than a
+    fixed layout (e.g. characterinfo mount fields sit past two variable-length
+    LocalizableStrings + a CString, so their offset is record-dependent).
+    Stops at the first field the walk can't consume, same as the display.
+    """
+    from cdumm.semantic import pabgb_types as _pt
+    off = _display_payload_start(entry_data, schema, key_size)
+    end = len(entry_data)
+    offsets: dict[str, int] = {}
+    for spec in schema.fields:
+        if spec.type_descriptor:
+            w = _pt.consume_bytes(spec.type_descriptor, entry_data, off, end)
+            if w is None:
+                break
+            # A fixed-width primitive descriptor (u8/u16/u32/u64/float) is
+            # editable in place; record its offset. Variable-length
+            # descriptors are recorded too but callers only use scalars.
+            offsets[spec.name] = off
+            off += w
+        elif spec.struct_fmt:
+            w = spec.stream_size
+            if off + w > end:
+                break
+            offsets[spec.name] = off
+            off += w
+        elif spec.field_type == "CString":
+            if off + 4 > end:
+                break
+            slen = struct.unpack_from("<I", entry_data, off)[0]
+            if off + 4 + slen > end:
+                break
+            off += 4 + slen
+        else:
+            w = spec.stream_size or 0
+            if w == 0 or off + w > end:
+                break
+            off += w
+    return offsets
+
+
 def parse_records_display(table_name: str, body_bytes: bytes,
                           header_bytes: bytes) -> dict[int, dict[str, Any]]:
     """Display-only variant of parse_records for the Game Data grid.
