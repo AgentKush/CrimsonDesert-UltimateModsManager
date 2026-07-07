@@ -12,7 +12,7 @@ name: Build Windows release
 on:
   push:
     tags:
-      - "v*"
+      - "community-*"
   workflow_dispatch:
 
 concurrency:
@@ -83,11 +83,15 @@ jobs:
           if-no-files-found: error
 
       - name: Attach exe to GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/community-')
         uses: softprops/action-gh-release@v3
         with:
           files: dist/CDUMM-*-windows-x64.exe
           fail_on_unmatched_files: true
           generate_release_notes: false
+          # Community build: land as a DRAFT PRERELEASE so nothing is public
+          # until the exe build succeeds and release notes are attached.
+          draft: true
+          prerelease: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
