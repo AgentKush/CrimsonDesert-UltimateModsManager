@@ -54,23 +54,31 @@ _FIELD_MAP: dict[str, tuple[str, str, int]] = {
     "flag_c": ("_flagC_offset", "<B", 1),
 }
 
-# Mount / vehicle scalar fields. Unlike the appearance fields above, these are
-# NOT located by parse_entry -- that parser fails on the real mount records (it
-# only parses the ~6300 all-zero non-mount records). They sit past two
-# variable-length LocalizableStrings + a CString, so their offset is record-
-# dependent and is resolved by the schema `_ordered_fields` walk
-# (cdumm.semantic.parser.field_offsets_in_record, the same walk the Game Data
-# grid displays them with). Each is a fixed-width primitive => a `set` is one
-# absolute-offset replace, no size change. Verified byte-exact on the live 1.13
-# install (18/18 real mounts) + a 33/33 vehicleinfo foreign-key cross-check.
-_MOUNT_FIELD_WIDTHS: dict[str, tuple[str, int]] = {
+# Scalar fields located by the schema `_ordered_fields` walk rather than by
+# parse_entry -- that parser fails on the real mount records (it only parses the
+# ~6300 all-zero non-mount records). Every field here sits past two variable-
+# length LocalizableStrings + a CString, so its offset is record-dependent and
+# is resolved by cdumm.semantic.parser.field_offsets_in_record (the same walk
+# the Game Data grid displays them with). Each is a fixed-width primitive => a
+# `set` is one absolute-offset replace, no size change.
+#   - Mount block (verified byte-exact on live 1.13: 18/18 real mounts + a 33/33
+#     vehicleinfo foreign-key cross-check on _vehicleInfo).
+#   - _spawnFixType / _isRemoteCatchable: two clean gameplay enums that precede
+#     the mount block; their offsets are transitively verified (the same walk
+#     reaches the FK-verified _vehicleInfo after them) and they carry real
+#     varied data (6 and 4 distinct values). Adjacent opaque hash/lookup fields
+#     (_enum4hash_*, _keyLookup_*) are byte-safe but stay gated -- a modder
+#     can't set a meaningful value blind.
+_WALK_FIELD_WIDTHS: dict[str, tuple[str, int]] = {
+    "_spawnFixType": ("<B", 1),
+    "_isRemoteCatchable": ("<B", 1),
     "_vehicleInfo": ("<H", 2),
     "_callMercenaryCoolTime": ("<Q", 8),
     "_callMercenarySpawnDuration": ("<Q", 8),
     "_mercenaryCoolTimeType": ("<B", 1),
 }
 
-SUPPORTED_FIELDS = frozenset(_FIELD_MAP) | frozenset(_MOUNT_FIELD_WIDTHS)
+SUPPORTED_FIELDS = frozenset(_FIELD_MAP) | frozenset(_WALK_FIELD_WIDTHS)
 
 _ci_key_size_cache: dict[str, int] = {}
 
@@ -93,7 +101,7 @@ def _mount_change(
     schema `_ordered_fields` to the field's record-dependent offset, and
     returns a v2 change dict, or None (logged) if anything doesn't resolve.
     """
-    fmt, width = _MOUNT_FIELD_WIDTHS[field]
+    fmt, width = _WALK_FIELD_WIDTHS[field]
     if isinstance(new_value, bool) or not isinstance(new_value, int):
         logger.warning("characterinfo: mount intent %s on %r has non-integer "
                        "value %r, skipping", field, entry_name, new_value)
@@ -178,7 +186,7 @@ def build_characterinfo_changes(
 
     changes: list[dict] = []
     for entry_name, raw_key, field, new_value in intents:
-        if field in _MOUNT_FIELD_WIDTHS:
+        if field in _WALK_FIELD_WIDTHS:
             ch = _mount_change(vanilla_body, vanilla_header, idx, order,
                                name_to_key, entry_name, raw_key, field,
                                new_value)

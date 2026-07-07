@@ -25,7 +25,8 @@ def _make_record(key: int, name: str, *, upper: int, lower: int,
                  gameplay: int, appearance: int, prefab: int,
                  skeleton: int, skelvar: int, flag_c: int,
                  vehicle: int = 0, cool: int = 0, spawn: int = 0,
-                 merctype: int = 0) -> bytes:
+                 merctype: int = 0, spawnfix: int = 0,
+                 catchable: int = 0) -> bytes:
     """Build one characterinfo record matching the parser walk in
     characterinfo_full_parser.parse_entry."""
     nb = name.encode("latin-1")
@@ -37,8 +38,8 @@ def _make_record(key: int, name: str, *, upper: int, lower: int,
     r += b"\x00" + b"\x00" * 8 + b"\x00" * 4  # locstr 2 (len 0)
     r += b"\x00" * 4 + b"\x00" * 4            # two u32
     r += b"\x00" * 4                          # CString (len 0)
-    r += b"\x00" + b"\x00"                    # two u8
-    r += b"\x00" * 4 + b"\x00" * 4            # two u32
+    r += struct.pack("<BB", spawnfix, catchable)  # _spawnFixType,_isRemoteCatchable
+    r += b"\x00" * 4 + b"\x00" * 4            # two u32 (_keyLookup_a,_b)
     r += struct.pack("<H", vehicle)           # _vehicleInfo u16
     r += struct.pack("<Q", cool)              # _callMercenaryCoolTime
     r += struct.pack("<Q", spawn)             # _callMercenarySpawnDuration
@@ -218,11 +219,14 @@ _MOUNT_FIELDS = (
     "_vehicleInfo", "_callMercenaryCoolTime",
     "_callMercenarySpawnDuration", "_mercenaryCoolTimeType",
 )
+# Two clean gameplay enums that precede the mount block; same walk resolution.
+_LEADING_ENUMS = ("_spawnFixType", "_isRemoteCatchable")
+_VERIFIED_CHARACTERINFO = frozenset(_MOUNT_FIELDS + _LEADING_ENUMS)
 
 
 def test_mount_fields_in_characterinfo_accept_set():
     from cdumm.engine.characterinfo_writer import SUPPORTED_FIELDS, _FIELD_MAP
-    for f in _MOUNT_FIELDS:
+    for f in _MOUNT_FIELDS + _LEADING_ENUMS:
         assert f in SUPPORTED_FIELDS, f"{f} must be accepted by the writer"
         # they resolve via the schema walk, not the parse_entry offset map
         assert f not in _FIELD_MAP
@@ -234,9 +238,9 @@ def test_characterinfo_mount_fields_verified_and_editable():
     sem.init_schemas()
     sch = sem.get_schema("characterinfo")
     assert sch is not None
-    assert sch.verified_fields == frozenset(_MOUNT_FIELDS)
+    assert sch.verified_fields == _VERIFIED_CHARACTERINFO
     by = {f.name: f for f in sch.fields}
-    for f in _MOUNT_FIELDS:
+    for f in _VERIFIED_CHARACTERINFO:
         assert is_editable_scalar_field(by[f]), f"{f} must be an editable scalar"
 
 
@@ -275,3 +279,25 @@ def test_writer_patches_mount_fields_byte_exact():
     assert r["_callMercenaryCoolTime"] == 12345
     assert r["_callMercenarySpawnDuration"] == 54321
     assert r["_mercenaryCoolTimeType"] == 2
+
+
+def test_writer_patches_leading_enums_byte_exact():
+    # _spawnFixType / _isRemoteCatchable precede the mount block; the walk must
+    # land on them the same way (offsets transitively verified by the mount FK).
+    rec = _make_record(1234, "NPC", spawnfix=5, catchable=3, **_vanilla_kwargs())
+    pabgb, pabgh = _make_table([rec])
+    cases = {"_spawnFixType": (5, 7), "_isRemoteCatchable": (3, 1)}
+    all_changes = []
+    for field, (old, new) in cases.items():
+        changes = build_characterinfo_changes(
+            pabgb, pabgh, [("NPC", 1234, field, new)])
+        assert len(changes) == 1, f"{field} did not resolve to a write"
+        assert bytes.fromhex(changes[0]["original"]) == struct.pack("<B", old), (
+            f"{field}: writer read the wrong offset")
+        all_changes += changes
+    from cdumm.semantic import parser as sem
+    sem.init_schemas()
+    patched = _apply(pabgb, all_changes)
+    r = sem.parse_records_display("characterinfo", patched, pabgh)[1234]
+    assert r["_spawnFixType"] == 7
+    assert r["_isRemoteCatchable"] == 1
