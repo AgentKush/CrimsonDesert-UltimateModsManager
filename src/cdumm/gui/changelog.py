@@ -19,6 +19,19 @@ _UNRELEASED_NOTES: list[str] = [
 
 CHANGELOG = [
     {
+        "version": "3.5.0",
+        "date": "2026-07-08",
+        "notes": [
+            "<b>Item and character mods work again on game version 1.13.</b> The July patch changed the item table layout again, so most item mods (stack sizes, sockets, durability) applied with zero changes, and some large mods were stalling the apply process entirely. Character mods (mesh, skeleton and appearance swaps) were also affected: every record failed to parse, so those mods silently did nothing. Both tables are readable again, and the parser now recognizes when a table's layout has shifted instead of hanging. Found via woowoots, lupo1190 and Yorivel on GitHub (#247, #257).",
+            "<b>Female Armor Module now installs its model, not just its icons.</b> That mod bundles a compiled model swap alongside a separate icon mod in the same download. CDUMM was only picking up the icons and quietly skipping the model. Both halves now install as two separate mods you can toggle on their own. Found via woowoots on GitHub (#241).",
+            "<b>New: Game Data tab.</b> A built-in browser for everything your Crimson Desert install ships: search and preview any of the game's 1.6 million archived files and 133 data tables without leaving CDUMM. Textures decode and preview in 3D, audio plays back and exports to WAV, and data tables show their real fields where the layout is known.",
+            "<b>New: in-app mod maker.</b> From the Game Data tab, double-click a verified field to edit its value, then turn your edits into a real mod with one click. Only fields CDUMM has confirmed the exact byte layout for are editable, so there's no risk of writing to a guessed offset.",
+            "Launching the game on macOS Steam installs no longer fails with 'Steam needs to be running' when Steam is, in fact, running.",
+            "Fixed a color bug in the Activity Log's filter chips that made some categories render with the wrong tint.",
+            "Thanks to AgentKush and raxjinn, who contributed the 1.13 fixes, the Female Armor Module fix, the Game Data tab and mod maker, and the macOS launch fix in this release.",
+        ],
+    },
+    {
         "version": "3.4.2",
         "date": "2026-06-30",
         "notes": [
