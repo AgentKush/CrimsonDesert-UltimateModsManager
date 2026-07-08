@@ -2909,12 +2909,20 @@ def _import_from_extracted(
     from cdumm.engine.json_patch_handler import is_natt_format_3
     f3_jsons = [p for p in tmp_path.rglob("*.json")
                 if is_natt_format_3(p)]
-    if len(f3_jsons) == 1:
+    # #241: a lone Format 3 JSON short-circuits here — but when the archive
+    # ALSO bundles a standalone NNNN/0.paz mod (Female Armor Module 3029:
+    # 0036/ armor-model swap + a Format 3 icons JSON), returning now
+    # silently drops the model PAZ. Defer the JSON and fall through to the
+    # PAZ-dir flow; it is re-imported as a sibling once the model mod lands.
+    _deferred_f3_json = None
+    if len(f3_jsons) == 1 and _bundled_paz_root(tmp_path) is None:
         return import_from_natt_format_3(
             json_path=f3_jsons[0], game_dir=game_dir, db=db,
             snapshot=snapshot, deltas_dir=deltas_dir,
             existing_mod_id=existing_mod_id,
         )
+    if len(f3_jsons) == 1:
+        _deferred_f3_json = f3_jsons[0]
     if len(f3_jsons) > 1:
         # Variant pack messaging mirrored from import_from_zip's flow
         # so RAR/7z drops of multi-Format-3 archives get the same
@@ -3006,6 +3014,13 @@ def _import_from_extracted(
     # mods are purely XML patches and have no other game files.
     result = _register_partial_patches_into_result(
         tmp_path, result, mod_name, modinfo, db, deltas_dir)
+
+    # #241: compound archive — the PAZ-dir model mod has landed; now import
+    # the deferred Format 3 sibling JSON (armor icons) as its own mod.
+    if (_deferred_f3_json is not None and result.changed_files
+            and not result.error and result.mod_id is not None):
+        _import_sibling_format3(
+            _deferred_f3_json, game_dir, db, snapshot, deltas_dir)
 
     return result
 
@@ -3371,11 +3386,21 @@ def import_from_zip(
         f3_jsons = [p for p in tmp_path.rglob("*.json")
                     if "_asi_staging" not in p.parts
                     and is_natt_format_3(p)]
-        if len(f3_jsons) == 1:
+        # #241: a lone Format 3 JSON short-circuits here — but when the
+        # archive ALSO bundles a standalone NNNN/0.paz mod (Female Armor
+        # Module 3029: 0036/ armor-model swap + a Format 3 icons JSON),
+        # returning now silently drops the model PAZ (icons change in-game
+        # but the models don't). Defer the JSON and fall through to the
+        # PAZ-dir flow; it is re-imported as a sibling once the model mod
+        # lands. Format 3 analogue of the #34 compound guard.
+        _deferred_f3_json = None
+        if len(f3_jsons) == 1 and _bundled_paz_root(tmp_path) is None:
             return _with_asi(import_from_natt_format_3(
                 json_path=f3_jsons[0], game_dir=game_dir, db=db,
                 snapshot=snapshot, deltas_dir=deltas_dir,
                 existing_mod_id=existing_mod_id))
+        if len(f3_jsons) == 1:
+            _deferred_f3_json = f3_jsons[0]
         if len(f3_jsons) > 1:
             # Variant pack (CrimsonWings: 10pct/25pct/50pct/75pct/
             # infinite of one mod) is detected via stem prefix +
@@ -3468,6 +3493,15 @@ def import_from_zip(
         # though the identical content imported fine from a .7z.
         result = _register_partial_patches_into_result(
             tmp_path, result, mod_name, modinfo, db, deltas_dir)
+
+        # #241: compound archive — the PAZ-dir model mod has landed; now
+        # import the deferred Format 3 sibling JSON (armor icons) as its
+        # own mod so the user can toggle it independently. Runs inside the
+        # staging context so the JSON path still exists on disk.
+        if (_deferred_f3_json is not None and result.changed_files
+                and not result.error and result.mod_id is not None):
+            _import_sibling_format3(
+                _deferred_f3_json, game_dir, db, snapshot, deltas_dir)
 
         # _process_extracted_files builds a fresh ModImportResult — re-attach
         # any ASI files we staged at the top of import_from_zip so the GUI
@@ -3873,11 +3907,18 @@ def import_from_folder(
     from cdumm.engine.json_patch_handler import is_natt_format_3
     f3_jsons = [p for p in folder_path.rglob("*.json")
                 if is_natt_format_3(p)]
-    if len(f3_jsons) == 1:
+    # #241: defer a lone Format 3 JSON (don't short-circuit) when the
+    # folder ALSO bundles a standalone NNNN/0.paz mod, or the PAZ model
+    # data is silently dropped. Re-imported as a sibling after the PAZ-dir
+    # mod lands. Format 3 analogue of the #34 compound guard.
+    _deferred_f3_json = None
+    if len(f3_jsons) == 1 and _bundled_paz_root(folder_path) is None:
         return import_from_natt_format_3(
             json_path=f3_jsons[0], game_dir=game_dir, db=db,
             snapshot=snapshot, deltas_dir=deltas_dir,
             existing_mod_id=existing_mod_id)
+    if len(f3_jsons) == 1:
+        _deferred_f3_json = f3_jsons[0]
     if len(f3_jsons) > 1:
         result = ModImportResult(mod_name)
         f3_pack = _scan_format3_variant_pack(folder_path)
@@ -3986,6 +4027,15 @@ def import_from_folder(
             logger.warning(
                 "Compound-layout sibling JSON scan failed: %s", e)
 
+    # #241: compound archive with a Format 3 sibling (e.g. Female Armor
+    # Module icons JSON) — import it as its own mod after the PAZ-dir
+    # model mod lands. The Format 2 block above uses the JSON-patch
+    # helper, which doesn't handle the Format 3 (intents) dialect.
+    if (_deferred_f3_json is not None and result.changed_files
+            and not result.error and result.mod_id is not None):
+        _import_sibling_format3(
+            _deferred_f3_json, game_dir, db, snapshot, deltas_dir)
+
     return result
 
 
@@ -4011,6 +4061,63 @@ def _first_numbered_parent(root: Path, max_depth: int = 4) -> Path | None:
             continue
         return None
     return None
+
+
+def _bundled_paz_root(root: Path) -> Path | None:
+    """Return the directory that directly holds a standalone ``NNNN/0.paz``
+    mod (searching ``root`` and single-subdir wrappers), else ``None``.
+
+    Detects *compound* archives that bundle a PAZ-dir model/mesh mod
+    alongside a sibling JSON patch. Example: Female Armor Module (Nexus
+    3029) ships ``0036/0.paz`` (the armor-model swap) + ``meta/0.papgt``
+    next to a Format 3 icons JSON, all under a ``Female Armor Module/``
+    wrapper. The Format 3 branch used to short-circuit on the JSON and
+    silently drop the PAZ half — icons changed in-game but the models did
+    not (GitHub #241). ``_first_numbered_parent`` already handles the
+    wrapper descent, so reuse it and confirm the numbered dir actually
+    carries a ``0.paz``.
+    """
+    base = _first_numbered_parent(root) or root
+    try:
+        for d in base.iterdir():
+            if (d.is_dir() and d.name.isdigit() and len(d.name) == 4
+                    and (d / "0.paz").exists()):
+                return base
+    except OSError:
+        pass
+    return None
+
+
+def _import_sibling_format3(
+    json_path: Path, game_dir: Path, db: Database,
+    snapshot: SnapshotManager, deltas_dir: Path,
+) -> None:
+    """Import a Format 3 JSON that lives alongside a primary PAZ-dir mod
+    (a compound archive) as its own separate mod, so the user can toggle
+    it independently.
+
+    Mirrors ``_import_sibling_json_patches`` but for the Format 3 (intents)
+    dialect, which that Format 2-only helper cannot handle. Failures are
+    logged, never raised — a bad sibling must not sink the primary model
+    import. GitHub #241 (Female Armor Module: ``0036/`` model swap + a
+    Format 3 icons JSON in one archive).
+    """
+    try:
+        res = import_from_natt_format_3(
+            json_path=json_path, game_dir=game_dir, db=db,
+            snapshot=snapshot, deltas_dir=deltas_dir, existing_mod_id=None)
+        if res is not None and getattr(res, "error", None):
+            logger.info(
+                "Compound sibling Format 3 '%s' not imported: %s",
+                json_path.name, res.error)
+        else:
+            logger.info(
+                "Compound mod: sibling Format 3 '%s' imported as its "
+                "own mod", json_path.name)
+    except Exception as e:
+        logger.warning(
+            "Compound sibling Format 3 '%s' import failed: %s",
+            json_path.name, e)
 
 
 def _find_best_variant(folder_path: Path) -> Path | None:
