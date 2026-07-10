@@ -230,6 +230,21 @@ def _parse_clone_intent(raw: dict, i: int, label: str) -> Format3Intent:
     )
 
 
+def _parse_delete_intent(raw: dict, i: int, label: str) -> Format3Intent:
+    """Parse a ``delete_record`` intent: ``{"op":"delete_record",
+    "key":N}`` (optional ``entry`` for a friendlier log label)."""
+    key = raw.get("key")
+    if isinstance(key, bool) or not isinstance(key, int):
+        raise ValueError(
+            f"{label} intent #{i} delete_record needs an integer 'key' "
+            f"(the record to remove); got {key!r}"
+        )
+    return Format3Intent(
+        entry=str(raw.get("entry", "")), key=key, field="",
+        op="delete_record", new=None,
+    )
+
+
 def _parse_intents_block(
     raw_intents, label: str = "intents",
 ) -> list[Format3Intent]:
@@ -256,6 +271,9 @@ def _parse_intents_block(
         # entry/field/new triple, so parse it here and move on.
         if raw.get("op") == "clone_record":
             intents.append(_parse_clone_intent(raw, i, label))
+            continue
+        if raw.get("op") == "delete_record":
+            intents.append(_parse_delete_intent(raw, i, label))
             continue
         # The newer skill .field.json variant drops 'op' since 'set'
         # is implicit. We default to 'set' when absent. GitHub #66.
@@ -687,6 +705,15 @@ def _classify_clone(
     return None
 
 
+def _classify_delete(intent: Format3Intent) -> str | None:
+    """Validate a ``delete_record`` intent. Structural only — whether the
+    key exists is checked against the real bytes at apply time (the
+    delete writer refuses + logs a miss)."""
+    if isinstance(intent.key, bool) or not isinstance(intent.key, int):
+        return "delete_record needs an integer 'key' (the record to remove)"
+    return None
+
+
 def validate_intents(
     target: str, intents: list[Format3Intent]
 ) -> Format3Validation:
@@ -725,6 +752,11 @@ def validate_intents(
                 result.skipped.append((
                     mi,
                     f"clone_record needs a decoded schema for table "
+                    f"'{table_name}', which CDUMM doesn't have yet"))
+            elif mi.op == "delete_record":
+                result.skipped.append((
+                    mi,
+                    f"delete_record needs a decoded schema for table "
                     f"'{table_name}', which CDUMM doesn't have yet"))
             else:
                 kept.append(mi)
@@ -781,6 +813,13 @@ def validate_intents(
         if intent.op == "clone_record" or intent.clone is not None:
             reason = _classify_clone(
                 intent, schema, field_specs, fs_entries, table_name)
+            if reason is None:
+                result.supported.append(intent)
+            else:
+                result.skipped.append((intent, reason))
+            continue
+        if intent.op == "delete_record":
+            reason = _classify_delete(intent)
             if reason is None:
                 result.supported.append(intent)
             else:
@@ -1562,6 +1601,86 @@ def apply_clone_to_pabgb_bytes(
         if new_raw.get(k) != rb:
             return None
 
+    return new_body, new_header
+
+
+def apply_delete_to_pabgb_bytes(
+    table_name: str,
+    body: bytes,
+    header: bytes,
+    key: int,
+) -> tuple[bytes, bytes] | None:
+    """Delete record ``key`` from a table -> ``(new_body, new_header)``
+    or ``None`` when it can't be done safely.
+
+    Rebuilds the body from the surviving entries (in body order) and the
+    ``.pabgh`` index in its original file order with remapped offsets.
+    Parse-back self-checked: the deleted key is gone, every surviving
+    record decodes byte-identically, the index key set matches, and the
+    body shrank by exactly the removed entry's size. Any failure returns
+    ``None`` so the caller emits no change.
+
+    (Byte-safety only: removing a record other tables reference is the
+    modder's concern, same as any mod — this guarantees the table stays
+    well-formed, not that the game likes it.)
+    """
+    tn = _table_name_from_target(table_name)
+    if get_schema(tn) is None:
+        return None
+    if isinstance(key, bool) or not isinstance(key, int):
+        return None
+    key_size, offsets = parse_pabgh_index(header, tn)
+    if not offsets or key_size not in (2, 4):
+        return None
+    if key not in offsets:
+        return None
+    count = len(offsets)
+    count_size = len(header) - count * (key_size + 4)
+    if count_size not in (2, 4):
+        return None
+    raws = _raw_entries(tn, body, header)
+    if key not in raws:
+        return None
+
+    ordered = sorted(offsets.items(), key=lambda kv: kv[1])
+    new_body = bytearray()
+    oldoff_to_newoff: dict[int, int] = {}
+    for k, off in ordered:
+        if k == key:
+            continue
+        oldoff_to_newoff[off] = len(new_body)
+        new_body += raws[k]
+
+    count_fmt = "<I" if count_size == 4 else "<H"
+    idx = bytearray(struct.pack(count_fmt, count - 1))
+    for k, off in offsets.items():  # preserve original index file order
+        if k == key:
+            continue
+        idx += k.to_bytes(key_size, "little")
+        idx += struct.pack("<I", oldoff_to_newoff[off])
+    new_body = bytes(new_body)
+    new_header = bytes(idx)
+
+    # ── Self-check ──
+    ks2, offs2 = parse_pabgh_index(new_header, tn)
+    if ks2 != key_size:
+        return None
+    survivors = {k for k in offsets if k != key}
+    if set(offs2) != survivors:
+        return None
+    old_records = parse_records(tn, body, header)
+    new_records = parse_records(tn, new_body, new_header)
+    if key in new_records:
+        return None
+    for k in survivors:
+        if new_records.get(k) != old_records.get(k):
+            return None
+    new_raw = _raw_entries(tn, new_body, new_header)
+    for k in survivors:
+        if new_raw.get(k) != raws.get(k):
+            return None
+    if len(new_body) != len(body) - len(raws[key]):
+        return None
     return new_body, new_header
 
 

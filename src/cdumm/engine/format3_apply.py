@@ -207,55 +207,71 @@ def _expand_match_intents(
 # safely returns None and is skipped here, never applied.
 
 
-def _build_clone_change_for_target(
+_RECORD_OPS = ("clone_record", "delete_record")
+
+
+def _build_record_ops_change_for_target(
     target: str,
     vanilla_body: bytes,
     vanilla_header: bytes,
     supported: list[Format3Intent],
 ) -> tuple[dict | None, dict | None, int]:
     """Build one whole-table change for a target whose supported intents
-    include ``clone_record`` ops.
+    include record-creation/deletion ops (``clone_record`` /
+    ``delete_record``).
 
-    Applies each clone sequentially (a refused clone is skipped with a
-    warning, never aborting the rest), then applies any non-clone ``set``
-    intents on top of the cloned bytes. Returns ``(body_change,
-    companion_change | None, n_clones_applied)``, or ``(None, None, 0)``
-    when nothing applied.
+    Applies each record op sequentially in mod order (a refused op is
+    skipped with a warning, never aborting the rest), then applies any
+    remaining ``set`` intents on top. Returns ``(body_change,
+    companion_change | None, n_ops_applied)``, or ``(None, None, 0)`` when
+    nothing applied.
     """
     from cdumm.engine.format3_handler import (
         apply_clone_to_pabgb_bytes,
+        apply_delete_to_pabgb_bytes,
         apply_intents_to_pabgb_bytes,
     )
     tn = _table_name_from_target(target)
     body, header = bytes(vanilla_body), bytes(vanilla_header)
     n_applied = 0
     for intent in supported:
-        if getattr(intent, "op", "") != "clone_record":
-            continue
-        spec = getattr(intent, "clone", None)
-        if not spec:
-            continue
-        res = apply_clone_to_pabgb_bytes(tn, body, header, spec)
-        if res is None:
-            logger.warning(
-                "Format 3 clone_record on %s refused (source_key=%s, "
-                "new_key=%s); skipped, no bytes changed.",
-                target, spec.get("source_key"), spec.get("new_key"))
-            continue
-        body, header = res
-        n_applied += 1
+        op = getattr(intent, "op", "")
+        if op == "clone_record":
+            spec = getattr(intent, "clone", None)
+            if not spec:
+                continue
+            res = apply_clone_to_pabgb_bytes(tn, body, header, spec)
+            if res is None:
+                logger.warning(
+                    "Format 3 clone_record on %s refused (source_key=%s, "
+                    "new_key=%s); skipped, no bytes changed.",
+                    target, spec.get("source_key"), spec.get("new_key"))
+                continue
+            body, header = res
+            n_applied += 1
+        elif op == "delete_record":
+            res = apply_delete_to_pabgb_bytes(
+                tn, body, header, getattr(intent, "key", None))
+            if res is None:
+                logger.warning(
+                    "Format 3 delete_record on %s refused (key=%s not "
+                    "found / unsafe); skipped, no bytes changed.",
+                    target, getattr(intent, "key", None))
+                continue
+            body, header = res
+            n_applied += 1
     if n_applied == 0:
         return None, None, 0
-    # Apply non-clone set intents (incl. match-expanded ones) on top of
-    # the cloned bytes so a mixed mod composes into one change.
-    rest = [i for i in supported if getattr(i, "op", "") != "clone_record"]
+    # Apply remaining set intents (incl. match-expanded ones) on top of
+    # the reshaped bytes so a mixed mod composes into one change.
+    rest = [i for i in supported if getattr(i, "op", "") not in _RECORD_OPS]
     if rest:
         body = apply_intents_to_pabgb_bytes(tn, body, header, rest)
     body_change = {
         "offset": 0,
         "original": bytes(vanilla_body).hex(),
         "patched": bytes(body).hex(),
-        "label": f"clone_record x{n_applied} ({tn})",
+        "label": f"record ops x{n_applied} ({tn})",
     }
     companion = None
     if bytes(header) != bytes(vanilla_header):
@@ -432,24 +448,24 @@ def expand_format3_into_aggregated(
                         mod_name, mod_id, target)
                     continue
 
-                # clone_record: creates records (grows the table), so it
-                # emits one whole-table body + .pabgh companion change,
-                # routed like the iteminfo/skill whole-table writers. Each
-                # clone is append-only + parse-back self-checked in the
-                # engine, so a clone it can't do safely is skipped, never
-                # applied. Isolated to clone-bearing mods; every other
-                # Format 3 flow below is unchanged.
-                if any(getattr(i, "op", "") == "clone_record"
+                # Record ops (clone_record / delete_record) reshape the
+                # table, so they emit one whole-table body + .pabgh
+                # companion change, routed like the iteminfo/skill
+                # whole-table writers. Each op is parse-back self-checked
+                # in the engine, so one it can't do safely is skipped,
+                # never applied. Isolated to record-op-bearing mods; every
+                # other Format 3 flow below is unchanged.
+                if any(getattr(i, "op", "") in _RECORD_OPS
                        for i in supported):
                     body_change, companion, n_applied = (
-                        _build_clone_change_for_target(
+                        _build_record_ops_change_for_target(
                             target, vanilla_body, vanilla_header, supported))
                     if body_change is None:
                         n_mods_skipped += 1
                         logger.warning(
-                            "Format 3 mod '%s' (id=%d): clone_record "
-                            "produced 0 changes for %s (all clones "
-                            "refused).", mod_name, mod_id, target)
+                            "Format 3 mod '%s' (id=%d): record op(s) "
+                            "produced 0 changes for %s (all refused).",
+                            mod_name, mod_id, target)
                         continue
                     body_change["_target_file"] = target
                     body_change["_source_mod_ids"] = [mod_id]
@@ -466,7 +482,7 @@ def expand_format3_into_aggregated(
                     if participating_mod_ids is not None:
                         participating_mod_ids.add(mod_id)
                     logger.info(
-                        "Format 3 clone_record: applied %d clone(s) from "
+                        "Format 3 record ops: applied %d op(s) from "
                         "mod '%s' (id=%d) to %s%s",
                         n_applied, mod_name, mod_id, target,
                         " + .pabgh companion" if companion else "")

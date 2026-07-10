@@ -15,7 +15,7 @@ import struct
 
 import pytest
 
-from cdumm.engine.format3_apply import _build_clone_change_for_target
+from cdumm.engine.format3_apply import _build_record_ops_change_for_target
 from cdumm.engine.format3_handler import (
     Format3Intent,
     _parse_intents_block,
@@ -252,7 +252,7 @@ def test_build_clone_change_emits_whole_table_change(monkeypatch):
     intent = _parse_intents_block([{
         "op": "clone_record", "source_key": 100, "new_key": 500,
         "patches": [{"field": "_bar", "new": 0x99}]}])[0]
-    body_change, companion, n = _build_clone_change_for_target(
+    body_change, companion, n = _build_record_ops_change_for_target(
         "synthtest.pabgb", body, header, [intent])
     assert n == 1
     assert body_change is not None and companion is not None
@@ -277,7 +277,7 @@ def test_build_clone_change_all_refused_returns_none(monkeypatch):
     # collision on the only clone -> nothing applied
     intent = _parse_intents_block([{
         "op": "clone_record", "source_key": 100, "new_key": 200}])[0]
-    body_change, companion, n = _build_clone_change_for_target(
+    body_change, companion, n = _build_record_ops_change_for_target(
         "synthtest.pabgb", body, header, [intent])
     assert (body_change, companion, n) == (None, None, 0)
 
@@ -290,7 +290,7 @@ def test_build_clone_change_composes_with_set(monkeypatch):
     # a plain set on the ORIGINAL record, alongside the clone
     plain = Format3Intent(entry="First", key=100, field="_bar",
                           op="set", new=0x77)
-    body_change, companion, n = _build_clone_change_for_target(
+    body_change, companion, n = _build_record_ops_change_for_target(
         "synthtest.pabgb", body, header, [clone, plain])
     assert n == 1
     new_body = bytes.fromhex(body_change["patched"])
