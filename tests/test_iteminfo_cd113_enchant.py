@@ -17,10 +17,9 @@ so these tests pin them together.
 """
 from __future__ import annotations
 
-import os
-from pathlib import Path
-
 import pytest
+
+from tests.fixture_loaders import load_vanilla113
 
 import cdumm.engine.iteminfo_native_parser as nat
 from cdumm.engine.iteminfo_native_parser import (
@@ -175,22 +174,14 @@ def test_detect_claims_nothing_when_nothing_roundtrips():
 
 # ── real-game integration (skips when the game isn't installed) ──────────
 
-def _live_iteminfo():
-    env = os.environ.get("CDUMM_VANILLA_ITEMINFO_DIR")
-    dirs = ([Path(env)] if env else []) + [
-        Path(__file__).parent / "fixtures" / "iteminfo"]
-    for d in dirs:
-        body, header = d / "iteminfo.pabgb", d / "iteminfo.pabgh"
-        if body.exists() and header.exists():
-            return body.read_bytes(), header.read_bytes()
-    return None
-
-
 def test_live_1_13_table_decodes_fully_and_roundtrips_byte_exact():
-    pair = _live_iteminfo()
-    if pair is None:
-        pytest.skip("vanilla iteminfo.pabgb/.pabgh not available")
-    body, header = pair
+    """Runs against the COMMITTED 1.13 fixture, so it runs in CI.
+
+    This used to look for a tests/fixtures/iteminfo/ directory that has
+    never existed, so it skipped silently everywhere and guarded nothing.
+    """
+    body = load_vanilla113("iteminfo.pabgb")
+    header = load_vanilla113("iteminfo.pabgh")
 
     count = int.from_bytes(header[:2], "little")
     starts = sorted(
@@ -198,8 +189,11 @@ def test_live_1_13_table_decodes_fully_and_roundtrips_byte_exact():
         for i in range(count))
 
     fields = detect_iteminfo_layout(body, starts)
-    if fields is not _ITEM_FIELDS_CD113_ENCHANT:
-        pytest.skip("installed game is not the CD 1.13 layout")
+    # The fixture IS the 1.13 layout -- assert, don't skip. A skip here
+    # would hide a regression in detect_iteminfo_layout itself.
+    assert fields is _ITEM_FIELDS_CD113_ENCHANT, (
+        "detect_iteminfo_layout no longer self-selects the CD 1.13 layout "
+        "for the committed 1.13 fixture")
 
     items = parse_iteminfo_from_bytes(body, starts, fields=fields)
 

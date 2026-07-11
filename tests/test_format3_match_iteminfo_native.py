@@ -13,10 +13,7 @@ through it.
 """
 from __future__ import annotations
 
-import os
-from pathlib import Path
-
-import pytest
+from tests.fixture_loaders import load_vanilla113
 
 from cdumm.engine.format3_apply import (
     _decode_records_for_match,
@@ -26,22 +23,15 @@ from cdumm.engine.format3_apply import (
 from cdumm.engine.format3_handler import Format3Intent
 
 
-def _live_iteminfo():
-    env = os.environ.get("CDUMM_VANILLA_ITEMINFO_DIR")
-    dirs = ([Path(env)] if env else []) + [
-        Path(__file__).parent / "fixtures" / "iteminfo"]
-    for d in dirs:
-        body, header = d / "iteminfo.pabgb", d / "iteminfo.pabgh"
-        if body.exists() and header.exists():
-            return body.read_bytes(), header.read_bytes()
-    return None
-
-
 def _require_live():
-    pair = _live_iteminfo()
-    if pair is None:
-        pytest.skip("vanilla iteminfo.pabgb/.pabgh not available")
-    return pair
+    """The COMMITTED CD 1.13 table, so these run in CI.
+
+    They previously looked for a tests/fixtures/iteminfo/ directory that has
+    never existed in this repo, so they skipped silently -- in CI and on a
+    fresh clone -- and the assertions below guarded nothing.
+    """
+    return (load_vanilla113("iteminfo.pabgb"),
+            load_vanilla113("iteminfo.pabgh"))
 
 
 def test_non_iteminfo_tables_still_use_the_generic_walker(monkeypatch):

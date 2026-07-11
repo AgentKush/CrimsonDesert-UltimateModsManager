@@ -8,10 +8,7 @@ traversal (see ``test_misses_return_none_not_an_exception``).
 """
 from __future__ import annotations
 
-import os
-from pathlib import Path
-
-import pytest
+from tests.fixture_loaders import load_vanilla113
 
 from cdumm.engine.format3_apply import (
     _decode_records_for_match,
@@ -154,23 +151,15 @@ def test_nested_path_combines_with_any_of_and_with_flat_fields():
 
 # ── live table ──────────────────────────────────────────────────────────
 
-def _live_iteminfo():
-    env = os.environ.get("CDUMM_VANILLA_ITEMINFO_DIR")
-    dirs = ([Path(env)] if env else []) + [
-        Path(__file__).parent / "fixtures" / "iteminfo"]
-    for d in dirs:
-        body, header = d / "iteminfo.pabgb", d / "iteminfo.pabgh"
-        if body.exists() and header.exists():
-            return body.read_bytes(), header.read_bytes()
-    return None
-
-
 def test_nested_match_selects_socketed_items_on_the_live_table():
-    """The whole point: select every socketed item in one intent."""
-    pair = _live_iteminfo()
-    if pair is None:
-        pytest.skip("vanilla iteminfo.pabgb/.pabgh not available")
-    body, header = pair
+    """The whole point: select every socketed item in one intent.
+
+    Runs on the COMMITTED CD 1.13 fixture. It used to look for a
+    tests/fixtures/iteminfo/ directory that has never existed, so it
+    skipped silently in CI and proved nothing.
+    """
+    body = load_vanilla113("iteminfo.pabgb")
+    header = load_vanilla113("iteminfo.pabgh")
     records = _decode_records_for_match("iteminfo", body, header)
 
     got = _match_record_keys(records, {"drop_default_data.use_socket": 1})
