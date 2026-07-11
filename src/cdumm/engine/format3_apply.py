@@ -38,6 +38,10 @@ import struct
 from pathlib import Path
 from typing import Callable
 
+# The writer's field-name resolver, shared on purpose: a `match` key must
+# accept exactly the spellings a `field` key accepts, and copying the rule
+# would let the two drift apart silently.
+from cdumm.engine.iteminfo_writer import _resolve_field_name
 from cdumm.engine.field_schema import (
     DTYPE_TABLE,
     FieldSchemaEntry,
@@ -86,21 +90,102 @@ can't be extracted. apply_engine wires this to its existing
 # we only ever compare against trustworthy decoded values.
 
 
-def _lookup_record_field(rec: dict, field: str):
-    """Return ``rec``'s value for ``field``, trying the same four name
-    shapes the writer uses (exact / +underscore / snake→camel /
-    snake→camel +underscore). Returns ``None`` if no shape is present."""
-    if field in rec:
-        return rec[field]
-    cand = [field, f"_{field}"]
-    if "_" in field:
-        camel = _snake_to_camel(field)
-        if camel != field:
+_MISSING = object()
+"""Distinguishes "no such field" from a field whose value really is
+``None``. Matching treats both as no-match, but the traversal below must
+not confuse "the key isn't there" with "the key holds None"."""
+
+
+def _lookup_one(d: dict, name: str):
+    """One path segment: ``d``'s value for ``name``. ``_MISSING`` if the
+    segment isn't present under any accepted spelling.
+
+    A ``match`` key must accept exactly the spellings the ``field`` key
+    accepts, or a mod half-works: the same name resolves for the write but
+    not for the selector, so the intent applies to nothing and reports no
+    error. So this bridges *both* directions:
+
+      * snake_case mod name -> camelCase record field, and
+      * camelCase mod name -> snake_case record field,
+
+    the second by delegating to the writer's ``_resolve_field_name``. That
+    is deliberately the *same function* the writer uses rather than a copy,
+    so the two can't drift -- it also carries the separator-insensitive
+    fallback (``_equipAbleHash`` -> ``equipable_hash``, GitHub #191), which
+    only accepts an unambiguous single match and so never silently picks
+    the wrong field.
+    """
+    if name in d:
+        return d[name]
+    # snake_case mod name -> camelCase record field.
+    cand = [f"_{name}"]
+    if "_" in name:
+        camel = _snake_to_camel(name)
+        if camel != name:
             cand += [camel, f"_{camel}"]
     for n in cand:
-        if n in rec:
-            return rec[n]
-    return None
+        if n in d:
+            return d[n]
+    # camelCase mod name -> snake_case record field. The writer's resolver
+    # only takes this branch for underscore-prefixed names, so normalise to
+    # that shape; a bare `equipTypeInfo` then resolves like `_equipTypeInfo`.
+    key = _resolve_field_name(f"_{name.lstrip('_')}", d)
+    if key is not None:
+        return d[key]
+    return _MISSING
+
+
+def _lookup_record_field(rec: dict, field: str):
+    """Return ``rec``'s value for ``field``. Returns ``None`` when the
+    field isn't present.
+
+    ``field`` may be a dotted path into nested structs and lists:
+
+        drop_default_data.use_socket
+        drop_default_data.add_socket_material_item_list.0.item
+        enchant_data_list.0.level
+
+    Each segment is resolved with the same four name shapes the rest of
+    the matcher uses, so nested fields behave exactly like flat ones (that
+    means snake_case in the mod resolving a camelCase record field, but
+    not the reverse -- same limitation flat fields already have).
+    A segment applied to a list must be an integer index (negatives count
+    from the end); anything else is a miss.
+
+    There is deliberately **no** "any element" list traversal. It would be
+    ambiguous against ``_match_value_equals``, where a list on the record
+    side already means "match this list exactly" — so
+    ``some_list.field == 5`` could mean "any element has field 5" or "the
+    extracted values equal 5", and silently picking one would make a mod
+    select records its author never intended. Index explicitly.
+    """
+    # A flat field wins outright, so a field whose real name happens to
+    # contain a dot still resolves before we try to read it as a path.
+    got = _lookup_one(rec, field)
+    if got is not _MISSING:
+        return got
+    if "." not in field:
+        return None
+
+    cur: object = rec
+    for seg in field.split("."):
+        if isinstance(cur, dict):
+            cur = _lookup_one(cur, seg)
+            if cur is _MISSING:
+                return None
+        elif isinstance(cur, (list, tuple)):
+            body = seg[1:] if seg.startswith("-") else seg
+            if not body.isdigit():
+                return None
+            idx = int(seg)
+            if not -len(cur) <= idx < len(cur):
+                return None
+            cur = cur[idx]
+        else:
+            # A scalar with path left to walk: the path is wrong for this
+            # record's shape.
+            return None
+    return cur
 
 
 def _match_value_equals(got, want) -> bool:
@@ -154,6 +239,81 @@ def _match_record_keys(records: dict, match: dict) -> list:
     return out
 
 
+def _decode_iteminfo_for_match(body: bytes, header: bytes) -> dict:
+    """Decode iteminfo with the *native* parser, in ``parse_records``'
+    ``{key: {field: value, _key, _name}}`` shape.
+
+    The generic ``parse_records`` walker only reaches ~5 iteminfo fields
+    before it stops, so a ``match`` on anything past them — including
+    ``equip_type_info`` and everything nested under ``drop_default_data``,
+    which is exactly what the socket mods select on (GitHub #272) — sees
+    ``None`` and quietly matches nothing. The native parser decodes all
+    116, so route iteminfo through it.
+
+    Returns ``{}`` on any failure, so the caller falls back to the
+    generic walker rather than losing the match entirely.
+    """
+    from cdumm.engine.iteminfo_native_parser import (
+        detect_iteminfo_layout, parse_iteminfo_from_bytes,
+    )
+    _key_size, off = parse_pabgh_index(header, "iteminfo")
+    if not off:
+        return {}
+    starts = sorted(off.values())
+    fields = detect_iteminfo_layout(body, starts)
+    items = parse_iteminfo_from_bytes(body, starts, fields=fields)
+
+    records: dict[int, dict] = {}
+    for it in items:
+        # Records the layout couldn't decode are carried opaque (all
+        # fields dropped). Matching on them would compare against
+        # nothing and silently select nothing, so leave them out and let
+        # the caller's fallback decide — never guess.
+        if it.get("_opaque_record"):
+            continue
+        key = it.get("key")
+        if key is None:
+            continue
+        rec = dict(it)
+        rec["_key"] = key
+        rec["_name"] = it.get("string_key", "")
+        records[key] = rec
+    return records
+
+
+def _decode_records_for_match(
+    table_name: str, body: bytes, header: bytes,
+) -> dict:
+    """Decode a table for ``match`` resolution, preferring the richest
+    decoder available for it.
+
+    ``table_name`` arrives from ``_table_name_from_target``, which only
+    strips the extension -- so a path-shaped target yields
+    ``gamedata/binary__/client/bin/iteminfo``, not ``iteminfo``. Take the
+    basename before deciding how to decode it. (``identify_table_from_path``
+    is no use here: it wants the extension that was already stripped.) The
+    original string is still what gets handed to ``parse_records``, so
+    nothing about the generic path changes.
+    """
+    bare = table_name.replace("\\", "/").rsplit("/", 1)[-1].split(".", 1)[0]
+    if bare == "iteminfo":
+        try:
+            records = _decode_iteminfo_for_match(body, header)
+        except Exception:  # noqa: BLE001 - never break apply on a decode
+            logger.warning(
+                "Format 3 match: native iteminfo decode failed; falling "
+                "back to the generic walker (matches on fields past the "
+                "first few will find nothing).", exc_info=True)
+        else:
+            if records:
+                logger.info(
+                    "Format 3 match: decoded %d iteminfo records natively "
+                    "(%d fields available to match on).",
+                    len(records), len(next(iter(records.values()))))
+                return records
+    return parse_records(table_name, body, header)
+
+
 def _expand_match_intents(
     target: str,
     vanilla_body: bytes,
@@ -163,10 +323,11 @@ def _expand_match_intents(
     """Replace each ``match`` intent in ``intents`` with concrete
     per-record ``set`` intents; pass non-match intents through unchanged.
 
-    Decodes the target table once via ``parse_records`` and, for each
-    ``match`` intent, emits one ``Format3Intent`` per matched record
-    carrying that record's real ``_name``/``_key`` so the existing writer
-    resolves it exactly like a hand-authored single-record intent.
+    Decodes the target table once (natively for iteminfo, else via
+    ``parse_records``) and, for each ``match`` intent, emits one
+    ``Format3Intent`` per matched record carrying that record's real
+    ``_name``/``_key`` so the existing writer resolves it exactly like a
+    hand-authored single-record intent.
     """
     # ``getattr`` guard: some intent stand-ins (and any future
     # lightweight intent type) may not carry a ``match`` attribute at
@@ -176,7 +337,8 @@ def _expand_match_intents(
 
     table_name = _table_name_from_target(target)
     try:
-        records = parse_records(table_name, vanilla_body, vanilla_header)
+        records = _decode_records_for_match(
+            table_name, vanilla_body, vanilla_header)
     except Exception:  # noqa: BLE001 - decode must never break apply
         logger.warning(
             "Format 3 match: could not decode %s to resolve a match "
