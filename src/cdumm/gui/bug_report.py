@@ -385,6 +385,132 @@ def _exe_info(exe_path: Path) -> str:
         return f"{exe_path} (error: {e})"
 
 
+# ── Crash-trace parsing / GPU diagnostics ──────────────────────────────
+
+# faulthandler headline prefixes that indicate a *native* fault: the
+# crash is in C/C++ code and the Python frames it prints may be unrelated
+# to the actual fault. Matched case-insensitively against the first
+# non-empty line of the trace.
+_NATIVE_CRASH_MARKERS = (
+    "windows fatal exception",   # access violation, stack overflow, ...
+    "segmentation fault",
+    "bus error",
+    "illegal instruction",
+    "fatal python error: aborted",
+)
+
+
+def _crash_trace_candidates(app_data_dir: Path) -> list[tuple[str, Path]]:
+    """Return (label, path) crash-trace sources in priority order.
+
+    The preserved ``crash_trace.prev.txt`` (moved aside by main.py's
+    ``_preserve_prior_crash_trace`` at the next startup) is the real
+    previous-session trace and comes first. ``crash_trace.txt`` is only
+    non-empty when faulthandler dumped *and* the process survived long
+    enough to report in the same session — a rare fallback.
+    """
+    return [
+        ("previous session", app_data_dir / "crash_trace.prev.txt"),
+        ("this session", app_data_dir / "crash_trace.txt"),
+    ]
+
+
+def _parse_crash_headline(trace_text: str) -> tuple[str, bool]:
+    """Extract the crash headline and whether it is a native fault.
+
+    faulthandler writes the fault class on the first line, e.g.
+    ``Windows fatal exception: access violation`` or
+    ``Fatal Python error: Segmentation fault``. Returns
+    ``(headline, is_native)``; ``headline`` is "" if none could be read.
+    """
+    headline = ""
+    for line in trace_text.splitlines():
+        s = line.strip()
+        if s:
+            headline = s
+            break
+    low = headline.lower()
+    is_native = any(m in low for m in _NATIVE_CRASH_MARKERS)
+    return headline, is_native
+
+
+def _windows_gpu_adapters() -> list[tuple[str, str]]:
+    """Read installed display adapters (name, driver version) from the
+    Windows registry — no GL context, no subprocess.
+
+    Spinning up an OpenGL/D3D context to query the live GPU would risk
+    crashing the crash reporter itself on a machine whose GPU driver is
+    the very thing that just faulted. The registry's Display-adapter
+    class key is a safe, static source. Returns [] on non-Windows or on
+    any failure.
+    """
+    if not IS_WINDOWS:
+        return []
+    adapters: list[tuple[str, str]] = []
+    try:
+        import winreg
+        class_key = (r"SYSTEM\CurrentControlSet\Control\Class"
+                     r"\{4d36e968-e325-11ce-bfc1-08002be10318}")
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, class_key) as root:
+            i = 0
+            while True:
+                try:
+                    sub = winreg.EnumKey(root, i)
+                except OSError:
+                    break
+                i += 1
+                # Adapter instances are 4-digit keys (0000, 0001, ...);
+                # skip 'Properties' and 'Configuration' sibling keys.
+                if not (len(sub) == 4 and sub.isdigit()):
+                    continue
+                try:
+                    with winreg.OpenKey(root, sub) as ak:
+                        name, _ = winreg.QueryValueEx(ak, "DriverDesc")
+                        try:
+                            drv, _ = winreg.QueryValueEx(ak, "DriverVersion")
+                        except OSError:
+                            drv = "?"
+                    adapters.append((str(name), str(drv)))
+                except OSError:
+                    continue
+    except Exception:
+        return adapters
+    return adapters
+
+
+def _renderer_diagnostics() -> list[str]:
+    """Safe GPU / Qt-render diagnostics for the SYSTEM section.
+
+    Captures the Qt version, active QPA platform plugin, the RHI backend
+    override (if the user set one), and the installed GPU adapter(s).
+    Render-stack faults (Qt3D preview, DDS texture decode) are the most
+    common native crashes, so this makes them actionable. Every lookup is
+    read-only and cannot spawn a graphics context.
+    """
+    lines: list[str] = []
+    try:
+        from PySide6.QtCore import qVersion
+        lines.append(f"Qt Version: {qVersion()}")
+    except Exception:
+        pass
+    try:
+        app = QApplication.instance()
+        if app is not None:
+            lines.append(f"Qt Platform Plugin: {app.platformName()}")
+    except Exception:
+        pass
+    rhi = os.environ.get("QSG_RHI_BACKEND")
+    if rhi:
+        lines.append(f"QSG_RHI_BACKEND (env override): {rhi}")
+    adapters = _windows_gpu_adapters()
+    if adapters:
+        for name, drv in adapters:
+            lines.append(f"GPU: {name} (driver {drv})")
+    elif IS_WINDOWS:
+        lines.append("GPU: (not detected)")
+    return lines
+
+
 def generate_bug_report(db: Database | None, game_dir: Path | None,
                         app_data_dir: Path | None) -> str:
     """Build a structured bug report for user-facing diagnostics."""
@@ -459,6 +585,10 @@ def generate_bug_report(db: Database | None, game_dir: Path | None,
         except Exception:
             pass
         body.append(f"App Data Drive Free: {_disk_free(app_data_dir)}")
+    # Renderer / GPU — render-stack faults are the most common native
+    # crashes (Qt3D preview, DDS decode); capture the stack safely.
+    for _rline in _renderer_diagnostics():
+        body.append(_rline)
     body.append("")
 
     # ── Storage ────────────────────────────────────────────────────────
@@ -874,35 +1004,53 @@ def generate_bug_report(db: Database | None, game_dir: Path | None,
             body.append("  (log file not found)")
     body.append("")
 
-    # ── Crash trace (if last session actually recorded a trace) ───────
-    # We only emit this section and flag it in the TL;DR when the trace
-    # file exists AND has non-whitespace content — an empty file left over
-    # from a previous session shouldn't claim there was a crash.
+    # ── Crash trace (if a recent session actually recorded a trace) ────
+    # main.py preserves the previous session's faulthandler dump as
+    # crash_trace.prev.txt at the next startup (the live crash_trace.txt
+    # is truncated on every launch), so a real hard crash survives to be
+    # reported here. We only emit the section — and flag it in the TL;DR —
+    # when a candidate trace exists AND has non-whitespace content. The
+    # preserved previous-session trace takes priority over any same-session
+    # dump; the first candidate with content wins and we stop.
     if app_data_dir:
-        trace_path = app_data_dir / "crash_trace.txt"
-        if trace_path.exists():
+        for _src_label, trace_path in _crash_trace_candidates(app_data_dir):
+            if not trace_path.exists():
+                continue
             try:
                 text = trace_path.read_text(encoding="utf-8", errors="replace")
             except Exception as e:
-                text = ""
-                body.append("--- CRASH TRACE (previous session) ---")
-                body.append(f"  Error reading crash trace: {e}")
+                body.append("--- CRASH TRACE ---")
+                body.append(f"  Error reading {trace_path.name}: {e}")
                 body.append("")
                 tldr_flags.append(
-                    "crash_trace.txt exists but couldn't be read — check "
+                    f"{trace_path.name} exists but couldn't be read — check "
                     "file permissions on the CDUMM app-data folder.")
-            else:
-                if text.strip():
-                    tldr_flags.append(
-                        "Previous session crashed — crash trace is included "
-                        "at the bottom of this report.")
-                    body.append("--- CRASH TRACE (previous session) ---")
-                    if len(text) > 4000:
-                        text = text[-4000:]
-                        body.append("  (truncated — showing last 4000 chars)")
-                    for ll in text.splitlines():
-                        body.append(f"  {ll}")
-                    body.append("")
+                continue
+            if not text.strip():
+                continue
+            headline, is_native = _parse_crash_headline(text)
+            flag = f"Crash detected ({_src_label})"
+            if headline:
+                flag += f": {headline}"
+            if is_native:
+                flag += (" — native fault, so the Python frames in the trace "
+                         "may be unrelated to the real (C/C++) crash site")
+            flag += ". Full trace at the bottom of this report."
+            tldr_flags.append(flag)
+            body.append(f"--- CRASH TRACE ({_src_label}) ---")
+            if is_native:
+                body.append(
+                    "  NOTE: native fault — faulthandler can only print Python "
+                    "frames, which may be unrelated to the actual crash in "
+                    "C/C++ code. Treat the fault type on the first line as the "
+                    "primary signal (e.g. a GPU/driver fault in a render call).")
+            if len(text) > 4000:
+                text = text[-4000:]
+                body.append("  (truncated — showing last 4000 chars)")
+            for ll in text.splitlines():
+                body.append(f"  {ll}")
+            body.append("")
+            break
 
     # ── Assemble header + TL;DR + body ────────────────────────────────
     out: list[str] = []
