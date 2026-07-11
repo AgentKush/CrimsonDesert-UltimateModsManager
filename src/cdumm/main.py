@@ -30,8 +30,23 @@ def _preserve_prior_crash_trace(trace_path: Path) -> None:
     """
     try:
         if trace_path.is_file() and trace_path.stat().st_size > 0:
-            os.replace(trace_path, trace_path.with_name(
-                trace_path.stem + ".prev" + trace_path.suffix))
+            prev = trace_path.with_name(
+                trace_path.stem + ".prev" + trace_path.suffix)
+            try:
+                os.replace(trace_path, prev)
+            except OSError:
+                # The rename fails outright (WinError 32) while ANY process
+                # still holds the file open -- a hung prior instance whose
+                # faulthandler handle never closed, or an AV scanner mid-scan.
+                # Windows share semantics still let the caller's open("w")
+                # truncate it, so without this fallback the old trace is
+                # destroyed anyway and the move bought us nothing. Copy the
+                # bytes out instead, so the previous session's trace survives
+                # even when it can't be moved. Observed live: 13 unkillable
+                # zombie pytest processes held crash_trace.txt open and
+                # os.replace raised every launch.
+                import shutil
+                shutil.copyfile(trace_path, prev)
     except Exception:
         pass
 
@@ -45,6 +60,9 @@ def _preserve_prior_crash_trace(trace_path: Path) -> None:
 _fault_log = None
 try:
     APP_DATA_DIR.mkdir(parents=True, exist_ok=True)
+    # #265 and #273 both solved this; keep #265's helper (it's reused) and
+    # fold #273's locked-file fallback into it rather than inlining a second
+    # copy of the same logic here.
     _preserve_prior_crash_trace(APP_DATA_DIR / "crash_trace.txt")
     _fault_log = open(APP_DATA_DIR / "crash_trace.txt", "w")
     faulthandler.enable(file=_fault_log)
