@@ -39,6 +39,7 @@ REFLECTION_EXTS = (".pae", ".paseq", ".prefab", ".meshinfo", ".paproj",
 # in the Game Data preview via Qt Multimedia's FFmpeg backend.
 VIDEO_EXTS = (".mp4",)
 
+
 def category_of(path: str) -> str:
     """First path segment, e.g. 'gamedata' for 'gamedata/iteminfo.pabgb'."""
     return path.split("/", 1)[0] if "/" in path else "(root)"
