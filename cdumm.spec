@@ -62,11 +62,22 @@ _qflw_datas, _qflw_binaries, _qflw_hiddenimports = collect_all('qframelesswindow
 # (GitHub #175 / #178 / #179: CERTIFICATE_VERIFY_FAILED).
 _certifi_datas = collect_data_files('certifi')
 
+# Qt6ShaderTools.dll — Qt3D's default RHI render plugin (rhirenderer.dll, the
+# DirectX backend) links it. Without it the plugin fails to load and the
+# texture 3D preview hard-crashes in the frozen build. PySide6's hook doesn't
+# pull it when QtShaderTools isn't imported, so bundle the DLL explicitly next
+# to the other PySide6 Qt DLLs.
+import PySide6 as _pyside6
+_shadertools_binaries = []
+_st_dll = os.path.join(os.path.dirname(_pyside6.__file__), 'Qt6ShaderTools.dll')
+if os.path.isfile(_st_dll):
+    _shadertools_binaries.append((_st_dll, 'PySide6'))
+
 
 a = Analysis(
     ['src/cdumm/main.py'],
     pathex=['src'],
-    binaries=_xxhash_binaries + _native_binaries + _crimson_rs_binaries + _qflw_binaries,
+    binaries=_xxhash_binaries + _native_binaries + _crimson_rs_binaries + _qflw_binaries + _shadertools_binaries,
     datas=[('cdumm.ico', '.'), ('asi_loader/winmm.dll', 'asi_loader'),
            ('src/cdumm/translations', 'cdumm/translations'),
            ('schemas/pabgb_complete_schema.json', 'schemas'),
@@ -153,6 +164,16 @@ a = Analysis(
         'cdumm.engine.language',
         'cdumm.engine.compiled_merge',
         'cdumm.engine.texture_mod_handler',
+        # PIL DDS texture decode for the Game Data preview — name the core
+        # codec + DDS plugin so the onefile build actually bundles them
+        # (Pillow registers plugins lazily, which PyInstaller can miss).
+        'PIL', 'PIL.Image', 'PIL.ImageFile', 'PIL.DdsImagePlugin',
+        # Qt3D for the Game Data texture 3D preview (sphere/cube). The
+        # PySide6 hook bundles the Qt3D DLLs + plugins once these are imported
+        # (and not excluded); QtOpenGL is what Qt3DRender renders through.
+        'PySide6.Qt3DCore', 'PySide6.Qt3DRender', 'PySide6.Qt3DExtras',
+        'PySide6.Qt3DInput', 'PySide6.Qt3DLogic', 'PySide6.Qt3DAnimation',
+        'PySide6.QtOpenGL',
         'cdumm.archive.pathc_handler',
         'cdumm.engine.mod_health_check',
         'cdumm.asi.asi_manager',
@@ -224,12 +245,15 @@ a = Analysis(
     excludes=[
         # PySide6 modules not used by CDUMM (only QtCore/QtGui/QtWidgets/QtSvg needed)
         'PySide6.QtWebEngine', 'PySide6.QtWebEngineWidgets', 'PySide6.QtWebEngineCore',
-        'PySide6.Qt3DCore', 'PySide6.Qt3DRender', 'PySide6.Qt3DInput', 'PySide6.Qt3DExtras',
+        # Qt3D IS used — the Game Data texture 3D preview (sphere/cube). Do NOT
+        # exclude Qt3DCore/Render/Input/Extras or the preview reports
+        # "3D preview unavailable: No module named 'PySide6.Qt3DExtras'".
         'PySide6.QtCharts', 'PySide6.QtMultimedia', 'PySide6.QtMultimediaWidgets',
         'PySide6.QtQuick', 'PySide6.QtQml', 'PySide6.QtBluetooth',
         'PySide6.QtPositioning', 'PySide6.QtSensors', 'PySide6.QtSerialPort',
         'PySide6.QtRemoteObjects', 'PySide6.QtNfc',
-        'PySide6.QtOpenGL', 'PySide6.QtOpenGLWidgets',
+        # QtOpenGL kept (Qt3DRender renders through it); OpenGLWidgets unused.
+        'PySide6.QtOpenGLWidgets',
         'PySide6.QtNetwork',
         'PySide6.QtDataVisualization', 'PySide6.QtGraphs',
         'PySide6.QtAxContainer', 'PySide6.QtDesigner',
@@ -239,9 +263,10 @@ a = Analysis(
         'PySide6.QtTest', 'PySide6.QtDBus', 'PySide6.QtConcurrent',
         # scipy/numpy — only needed for acrylic blur (disabled)
         'scipy', 'numpy', 'numpy.core', 'numpy.linalg',
-        # PIL/Pillow — not imported by CDUMM (colorthief dep, unused)
-        'PIL', 'PIL._imaging', 'PIL._avif', 'PIL._webp', 'PIL.Image',
-        'Pillow', 'colorthief',
+        # PIL/Pillow IS used — it decodes DDS textures for the Game Data
+        # preview, so it must be bundled (do NOT exclude it). Only colorthief
+        # (which merely pulls PIL in transitively) is unused.
+        'colorthief',
         # brotli — not used by CDUMM (transitive dep from py7zr)
         'brotli', '_brotli', 'brotlicffi',
         # cryptography used by privatebin for AES-GCM + PBKDF2. Keep minimal subset.
@@ -254,15 +279,20 @@ a = Analysis(
 
 # Strip large unused DLLs from binaries
 _dll_excludes = {
-    'opengl32sw.dll',        # ~20 MB software OpenGL (not needed)
-    'Qt6Network.dll',        # ~3 MB
+    # opengl32sw.dll (~20 MB software OpenGL) stripped — verified NOT loaded by
+    # the running app after using the 3D preview: Qt3D uses the DirectX RHI
+    # backend + hardware opengl32.dll, never the software renderer (every
+    # machine that runs Crimson Desert has a DirectX/GL-capable GPU).
+    'opengl32sw.dll',
+    # Qt6Network.dll kept — Qt63DCore.dll links it (loaded); stripping it broke
+    # the 3D preview with "DLL load failed while importing Qt3DExtras".
     'Qt6Pdf.dll',            # ~4 MB
     'Qt6Designer.dll',       # ~5 MB
     'Qt6Quick.dll',          # ~6 MB
     'Qt6Qml.dll',            # ~5 MB
-    'Qt6ShaderTools.dll',    # ~4 MB
+    # Qt6ShaderTools.dll kept — Qt3D's RHI (DirectX) render plugin links it.
     'Qt6Quick3DRuntimeRender.dll',
-    'Qt6OpenGL.dll',         # ~1.9 MB (not used — no OpenGL rendering)
+    # Qt6OpenGL.dll kept — Qt3DRender (texture 3D preview) renders through it.
     'Qt6QmlModels.dll',      # ~0.95 MB
     'Qt6QmlMeta.dll',        # ~0.15 MB
     'Qt6QmlWorkerScript.dll',  # ~0.08 MB
@@ -283,9 +313,11 @@ _dll_excludes = {
     'qtga.dll',              # ~0.04 MB
     'qwbmp.dll',             # ~0.04 MB
 }
-# Also filter out PIL/brotli/cryptography binary extensions
+# Also filter out brotli/cryptography binary extensions. Keep PIL's core
+# '_imaging' (DDS/BCn texture decode); only the AVIF/WebP/CMS codecs — which
+# CDUMM's DDS preview never touches — are dropped.
 _binary_name_excludes = {
-    '_avif', '_imaging', '_webp', '_imagingcms', '_brotli',
+    '_avif', '_webp', '_imagingcms', '_brotli',
     # '_rust' kept — cryptography uses it for AES-GCM in privatebin uploads
     '_ec_ws',      # Cryptodome elliptic curve (not used by CDUMM)
     '_ed448',      # Cryptodome Ed448
@@ -328,7 +360,10 @@ exe = EXE(
     name='CDUMM',
     debug=False,
     bootloader_ignore_signals=False,
-    strip=True,
+    # GNU strip on the windows-latest CI runner corrupts python313.dll (the exe
+    # then fails at launch: "Failed to load Python DLL ... Invalid access to
+    # memory location"). Strip only on posix, never on Windows.
+    strip=(os.name != 'nt'),
     # UPX disabled — heuristic AV engines (Bkav, CrowdStrike Falcon,
     # DeepInstinct, Fortinet) flag UPX-packed PyInstaller binaries
     # because real malware uses UPX too. Defender is fine either way,
