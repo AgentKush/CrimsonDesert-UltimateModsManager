@@ -1187,8 +1187,13 @@ class GameDataPage(ToolPageBase):
         return exts[idx] if 0 <= idx < len(exts) else None
 
     def _populate_type_filter(self, con) -> None:
-        """Fill the Type dropdown from the extensions actually indexed, most
-        common first, each labelled with its file count."""
+        """Fill the Type dropdown from EVERY extension actually indexed, most
+        common first, each labelled with its file count.
+
+        No cap: rare but modding-relevant formats (e.g. .pabgb keyed tables,
+        ~130 files) must not be dropped just because bulk assets
+        (.wem / .paa / .dds, hundreds of thousands each) dwarf them in count.
+        """
         try:
             rows = con.execute(
                 "SELECT ext, COUNT(*) c FROM assets GROUP BY ext "
@@ -1196,7 +1201,7 @@ class GameDataPage(ToolPageBase):
         except Exception:  # noqa: BLE001
             return
         items = [("All types", None)]
-        for ext, c in rows[:40]:
+        for ext, c in rows:
             if ext and ext != "(none)":
                 items.append((f"{ext}  ({c:,})", ext))
         if len(items) > 1:
