@@ -46,6 +46,8 @@ from cdumm.engine.field_schema import (
 )
 from cdumm.engine.format3_handler import (
     Format3Intent,
+    _snake_to_camel,
+    _table_name_from_target,
     parse_format3_mod,
     parse_format3_mod_targets,
     validate_intents,
@@ -55,6 +57,7 @@ from cdumm.semantic.parser import (
     has_schema,
     identify_table_from_path,
     parse_pabgh_index,
+    parse_records,
 )
 
 logger = logging.getLogger(__name__)
@@ -65,6 +68,232 @@ VanillaExtractor = Callable[[str], "tuple[bytes, bytes] | None"]
 bytes for the vanilla version of that file, or None if the file
 can't be extracted. apply_engine wires this to its existing
 ``_get_vanilla_entry_content`` + ``_extract_sibling_entry`` helpers."""
+
+
+# ── 'match' selector expansion ───────────────────────────────────────
+#
+# A Format 3 intent may carry a ``match`` selector instead of a single
+# ``entry``/``key``: ``{"match": {field: value, ...}, "field": F,
+# "new": N}`` targets *every* record whose fields all equal the given
+# values (AND across conditions). We resolve that here, at apply time,
+# once the table's vanilla bytes are in hand: decode the table with the
+# same ``parse_records`` the diff/apply pipeline already uses, find the
+# matching record keys, and emit one ordinary per-record ``set`` intent
+# for each. Those flow through the existing, already-trusted writer path
+# (and its verified-field write gate) — so ``match`` adds no new
+# byte-writing code and cannot introduce a new corruption path. Matching
+# is gated in ``validate_intents`` to verified (or metadata) fields, so
+# we only ever compare against trustworthy decoded values.
+
+
+def _lookup_record_field(rec: dict, field: str):
+    """Return ``rec``'s value for ``field``, trying the same four name
+    shapes the writer uses (exact / +underscore / snake→camel /
+    snake→camel +underscore). Returns ``None`` if no shape is present."""
+    if field in rec:
+        return rec[field]
+    cand = [field, f"_{field}"]
+    if "_" in field:
+        camel = _snake_to_camel(field)
+        if camel != field:
+            cand += [camel, f"_{camel}"]
+    for n in cand:
+        if n in rec:
+            return rec[n]
+    return None
+
+
+def _match_value_equals(got, want) -> bool:
+    """Type-tolerant equality between a decoded record value ``got`` and
+    a mod-authored JSON value ``want`` (e.g. JSON ``5`` vs decoded int,
+    or JSON ``"5"`` vs decoded ``5``).
+
+    A list/tuple on the mod side means **any-of** (SQL ``IN``): the record
+    matches when its value equals any one candidate. That lets a single
+    intent target a whole family of records — pinapana's Crazy ExtraSockets
+    (GitHub #272) selects 63 ``equip_type_info`` values in one intent
+    instead of 63 separate intents.
+
+    When the record's own value is *itself* a list, a list on the mod side
+    keeps exact-equality semantics instead, so a genuinely list-valued
+    field can still be matched whole and the two meanings never collide.
+    """
+    if got is None:
+        return False
+    if isinstance(want, (list, tuple)) and not isinstance(got, (list, tuple)):
+        return any(_match_value_equals(got, w) for w in want)
+    if got == want:
+        return True
+    # numeric tolerance (int vs float), excluding bool surprises.
+    if (isinstance(got, (int, float)) and not isinstance(got, bool)
+            and isinstance(want, (int, float)) and not isinstance(want, bool)):
+        try:
+            return float(got) == float(want)
+        except (TypeError, ValueError, OverflowError):
+            return False
+    # string-form tolerance ("5" == 5).
+    if isinstance(want, str) and not isinstance(got, str):
+        return str(got) == want
+    return False
+
+
+def _match_record_keys(records: dict, match: dict) -> list:
+    """Keys of every record in ``records`` whose fields all satisfy the
+    ``match`` conditions (AND). Preserves ``records`` iteration order."""
+    out = []
+    for key, rec in records.items():
+        if all(
+            _match_value_equals(
+                rec.get(mf) if mf in ("_name", "_key", "_entry_id")
+                else _lookup_record_field(rec, mf),
+                mv,
+            )
+            for mf, mv in match.items()
+        ):
+            out.append(key)
+    return out
+
+
+def _expand_match_intents(
+    target: str,
+    vanilla_body: bytes,
+    vanilla_header: bytes,
+    intents: list[Format3Intent],
+) -> list[Format3Intent]:
+    """Replace each ``match`` intent in ``intents`` with concrete
+    per-record ``set`` intents; pass non-match intents through unchanged.
+
+    Decodes the target table once via ``parse_records`` and, for each
+    ``match`` intent, emits one ``Format3Intent`` per matched record
+    carrying that record's real ``_name``/``_key`` so the existing writer
+    resolves it exactly like a hand-authored single-record intent.
+    """
+    # ``getattr`` guard: some intent stand-ins (and any future
+    # lightweight intent type) may not carry a ``match`` attribute at
+    # all — those are, by definition, not match selectors.
+    if not any(getattr(i, "match", None) is not None for i in intents):
+        return list(intents)
+
+    table_name = _table_name_from_target(target)
+    try:
+        records = parse_records(table_name, vanilla_body, vanilla_header)
+    except Exception:  # noqa: BLE001 - decode must never break apply
+        logger.warning(
+            "Format 3 match: could not decode %s to resolve a match "
+            "selector; those intents produce 0 changes.", target,
+            exc_info=True)
+        records = {}
+
+    out: list[Format3Intent] = []
+    for intent in intents:
+        match = getattr(intent, "match", None)
+        if match is None:
+            out.append(intent)
+            continue
+        matched = _match_record_keys(records, match) if records else []
+        for key in matched:
+            rec = records[key]
+            out.append(Format3Intent(
+                entry=str(rec.get("_name", "")),
+                key=int(rec.get("_key", key)),
+                field=intent.field,
+                op="set",
+                new=intent.new,
+                old=getattr(intent, "old", None),
+                match=None,
+            ))
+        logger.info(
+            "Format 3 match on %s (%s == …) expanded to %d record(s) "
+            "for field %r.", target, ",".join(match), len(matched),
+            intent.field)
+    return out
+
+
+# ── clone_record: record creation ───────────────────────────────────
+#
+# ``clone_record`` copies an existing record to a new key + optional name
+# and patches a few fields on the copy. Unlike ``set``/``match`` it grows
+# the table, so it emits a whole-table (body + .pabgh companion) change in
+# the same offset=0 shape the iteminfo/skill writers use. The record
+# creation itself lives in ``format3_handler.apply_clone_to_pabgb_bytes``,
+# which is append-only and parse-back self-checked — a clone it can't do
+# safely returns None and is skipped here, never applied.
+
+
+_RECORD_OPS = ("clone_record", "delete_record", "new_record")
+
+
+def _build_record_ops_change_for_target(
+    target: str,
+    vanilla_body: bytes,
+    vanilla_header: bytes,
+    supported: list[Format3Intent],
+) -> tuple[dict | None, dict | None, int]:
+    """Build one whole-table change for a target whose supported intents
+    include record-creation/deletion ops (``clone_record`` /
+    ``delete_record``).
+
+    Applies each record op sequentially in mod order (a refused op is
+    skipped with a warning, never aborting the rest), then applies any
+    remaining ``set`` intents on top. Returns ``(body_change,
+    companion_change | None, n_ops_applied)``, or ``(None, None, 0)`` when
+    nothing applied.
+    """
+    from cdumm.engine.format3_handler import (
+        apply_clone_to_pabgb_bytes,
+        apply_delete_to_pabgb_bytes,
+        apply_intents_to_pabgb_bytes,
+    )
+    tn = _table_name_from_target(target)
+    body, header = bytes(vanilla_body), bytes(vanilla_header)
+    n_applied = 0
+    for intent in supported:
+        op = getattr(intent, "op", "")
+        if op in ("clone_record", "new_record"):
+            spec = getattr(intent, "clone", None)
+            if not spec:
+                continue  # new_record without a template; skipped upstream
+            res = apply_clone_to_pabgb_bytes(tn, body, header, spec)
+            if res is None:
+                logger.warning(
+                    "Format 3 %s on %s refused (source_key=%s, "
+                    "new_key=%s); skipped, no bytes changed.",
+                    op, target, spec.get("source_key"), spec.get("new_key"))
+                continue
+            body, header = res
+            n_applied += 1
+        elif op == "delete_record":
+            res = apply_delete_to_pabgb_bytes(
+                tn, body, header, getattr(intent, "key", None))
+            if res is None:
+                logger.warning(
+                    "Format 3 delete_record on %s refused (key=%s not "
+                    "found / unsafe); skipped, no bytes changed.",
+                    target, getattr(intent, "key", None))
+                continue
+            body, header = res
+            n_applied += 1
+    if n_applied == 0:
+        return None, None, 0
+    # Apply remaining set intents (incl. match-expanded ones) on top of
+    # the reshaped bytes so a mixed mod composes into one change.
+    rest = [i for i in supported if getattr(i, "op", "") not in _RECORD_OPS]
+    if rest:
+        body = apply_intents_to_pabgb_bytes(tn, body, header, rest)
+    body_change = {
+        "offset": 0,
+        "original": bytes(vanilla_body).hex(),
+        "patched": bytes(body).hex(),
+        "label": f"record ops x{n_applied} ({tn})",
+    }
+    companion = None
+    if bytes(header) != bytes(vanilla_header):
+        companion = {
+            "offset": 0,
+            "original": bytes(vanilla_header).hex(),
+            "patched": bytes(header).hex(),
+        }
+    return body_change, companion, n_applied
 
 
 def expand_format3_into_aggregated(
@@ -213,14 +442,73 @@ def expand_format3_into_aggregated(
                     continue
                 vanilla_body, vanilla_header = vanilla
 
+                # Expand any 'match' selector intents into concrete
+                # per-record 'set' intents now that the table bytes are
+                # available to decode. Non-match intents pass through
+                # untouched, so this is a no-op for the common case.
+                supported = _expand_match_intents(
+                    target, vanilla_body, vanilla_header,
+                    validation.supported)
+                if not supported:
+                    # Every intent was a match selector that resolved to
+                    # zero records (or the table wouldn't decode). Nothing
+                    # to write, but not an error , report like other
+                    # zero-change cases.
+                    n_mods_skipped += 1
+                    logger.debug(
+                        "Format 3 mod '%s' (id=%d): match selector(s) for "
+                        "%s matched 0 records; 0 byte changes.",
+                        mod_name, mod_id, target)
+                    continue
+
+                # Record ops (clone_record / delete_record) reshape the
+                # table, so they emit one whole-table body + .pabgh
+                # companion change, routed like the iteminfo/skill
+                # whole-table writers. Each op is parse-back self-checked
+                # in the engine, so one it can't do safely is skipped,
+                # never applied. Isolated to record-op-bearing mods; every
+                # other Format 3 flow below is unchanged.
+                if any(getattr(i, "op", "") in _RECORD_OPS
+                       for i in supported):
+                    body_change, companion, n_applied = (
+                        _build_record_ops_change_for_target(
+                            target, vanilla_body, vanilla_header, supported))
+                    if body_change is None:
+                        n_mods_skipped += 1
+                        logger.warning(
+                            "Format 3 mod '%s' (id=%d): record op(s) "
+                            "produced 0 changes for %s (all refused).",
+                            mod_name, mod_id, target)
+                        continue
+                    body_change["_target_file"] = target
+                    body_change["_source_mod_ids"] = [mod_id]
+                    aggregated.setdefault(target, []).append(body_change)
+                    if companion is not None:
+                        comp_target = target.replace(".pabgb", ".pabgh")
+                        companion["_target_file"] = comp_target
+                        companion["_source_mod_ids"] = [mod_id]
+                        aggregated.setdefault(
+                            comp_target, []).append(companion)
+                    n_mods_changed += 1
+                    files_touched.add(target)
+                    n_bytes_changed += len(body_change["patched"]) // 2
+                    if participating_mod_ids is not None:
+                        participating_mod_ids.add(mod_id)
+                    logger.info(
+                        "Format 3 record ops: applied %d op(s) from "
+                        "mod '%s' (id=%d) to %s%s",
+                        n_applied, mod_name, mod_id, target,
+                        " + .pabgh companion" if companion else "")
+                    continue
+
                 # Whole-table writer targets: defer dispatch to the
                 # post-loop phase so all mods' intents land in a single
                 # parse+serialize.
                 if target in _WHOLE_TABLE_TARGETS:
                     whole_table_intents.setdefault(target, []).extend(
-                        validation.supported)
+                        supported)
                     whole_table_intent_mods.setdefault(target, []).extend(
-                        [mod_name] * len(validation.supported))
+                        [mod_name] * len(supported))
                     whole_table_mod_names.setdefault(target, []).append(mod_name)
                     whole_table_mod_ids.setdefault(target, []).append(mod_id)
                     n_mods_changed += 1  # provisional; recounted below if no bytes
@@ -235,13 +523,13 @@ def expand_format3_into_aggregated(
                         "Format 3 batched %d supported intent(s) from mod "
                         "'%s' (id=%d) into whole-table writer queue for %s "
                         "(queue depth now %d)",
-                        len(validation.supported), mod_name, mod_id,
+                        len(supported), mod_name, mod_id,
                         target, len(whole_table_intents[target]))
                     continue
 
                 # Convert each supported intent into a v2-style change dict
                 changes = _intents_to_v2_changes(
-                    target, vanilla_body, vanilla_header, validation.supported)
+                    target, vanilla_body, vanilla_header, supported)
                 if not changes:
                     n_mods_skipped += 1
                     # Don't pollute aggregated with empty lists.
@@ -249,7 +537,7 @@ def expand_format3_into_aggregated(
                         "Format 3 mod '%s' (id=%d): all %d supported intents "
                         "resolved to zero changes (probably TID-not-found "
                         "or value out of range).",
-                        mod_name, mod_id, len(validation.supported))
+                        mod_name, mod_id, len(supported))
                     if warnings_out is not None:
                         warnings_out.append(
                             f"Format 3 mod '{mod_name}' produced 0 byte "
@@ -1571,6 +1859,18 @@ def _build_list_writer_change(
     """
     record_bytes = vanilla_body[entry_off:entry_end]
     if table_name == "dropsetinfo" and intent.field == "drops":
+        # array_append: add one drop, existing drops byte-preserved.
+        if getattr(intent, "op", "set") == "array_append":
+            from cdumm.engine.dropset_writer import build_drop_append_change
+            if not isinstance(intent.new, dict):
+                return None
+            return build_drop_append_change(
+                record_bytes,
+                intent_key=intent.key,
+                intent_entry=entry_name or intent.entry,
+                element_json=intent.new,
+            )
+        # op=set: replace the whole drops list.
         from cdumm.engine.dropset_writer import (
             build_drops_replacement_change,
         )
