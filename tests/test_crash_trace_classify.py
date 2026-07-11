@@ -88,12 +88,25 @@ def test_unrecognised_nonempty_dump_is_crash():
 
 
 # ── Integration: the benign trace must not headline the bug report ──────
+#
+# These assert BEHAVIOUR, not prose. The headline wording is owned by the
+# crash-report generator (#265) and changed when that landed alongside this
+# work; pinning its exact sentence made these tests break on a merge that had
+# not changed a single thing about what they actually guard. What matters:
+#   * a REAL fault is flagged and its trace is included, and
+#   * the benign splash dump is NOT flagged and its trace is NOT dumped.
+
+
+def _flags_a_crash(report: str) -> bool:
+    """Did the report red-flag a crash and include the trace?"""
+    return "--- CRASH TRACE" in report and "Crash detected" in report
+
 
 def test_bug_report_does_not_flag_benign_prev_trace(tmp_path: Path):
     (tmp_path / "crash_trace.prev.txt").write_text(BENIGN, encoding="utf-8")
     report = generate_bug_report(None, None, tmp_path)
-    assert "Previous session crashed" not in report
-    assert "0x8001010d" in report  # the benign OK note names the code
+    assert not _flags_a_crash(report)
+    assert "0x8001010d" in report          # the benign OK note names the code
     assert "not a crash" in report
 
 
@@ -101,7 +114,7 @@ def test_bug_report_flags_real_prev_trace(tmp_path: Path):
     (tmp_path / "crash_trace.prev.txt").write_text(
         REAL_ACCESS_VIOLATION, encoding="utf-8")
     report = generate_bug_report(None, None, tmp_path)
-    assert "Previous session crashed" in report
+    assert _flags_a_crash(report)
     assert "access violation" in report
 
 
@@ -113,5 +126,5 @@ def test_bug_report_prefers_preserved_prev_over_live(tmp_path: Path):
     (tmp_path / "crash_trace.prev.txt").write_text(
         REAL_ACCESS_VIOLATION, encoding="utf-8")
     report = generate_bug_report(None, None, tmp_path)
-    assert "Previous session crashed" in report
+    assert _flags_a_crash(report)
     assert "access violation" in report
