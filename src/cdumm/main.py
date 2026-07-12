@@ -1,6 +1,7 @@
 import atexit
 import faulthandler
 import os
+import shutil
 import sys
 import logging
 import threading
@@ -29,9 +30,22 @@ def _preserve_prior_crash_trace(trace_path: Path) -> None:
     keep the most recent previous session's trace.
     """
     try:
-        if trace_path.is_file() and trace_path.stat().st_size > 0:
-            os.replace(trace_path, trace_path.with_name(
-                trace_path.stem + ".prev" + trace_path.suffix))
+        if not (trace_path.is_file() and trace_path.stat().st_size > 0):
+            return
+        prev = trace_path.with_name(
+            trace_path.stem + ".prev" + trace_path.suffix)
+        try:
+            os.replace(trace_path, prev)
+        except OSError:
+            # The rename fails outright (WinError 32) while ANY process
+            # still holds the file open — a hung prior instance whose
+            # faulthandler handle never closed, or an AV scanner mid-scan.
+            # Windows share semantics still let the caller's open("w")
+            # truncate it, so swallowing this would destroy the trace
+            # anyway — exactly the crash we most need the trace for. Copy
+            # the bytes out instead, so it survives even when it can't be
+            # moved.
+            shutil.copyfile(trace_path, prev)
     except Exception:
         pass
 

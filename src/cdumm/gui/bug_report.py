@@ -177,6 +177,46 @@ def _is_relevant_log_line(ln: str) -> bool:
     return True
 
 
+def classify_crash_trace(text: str) -> str:
+    """Classify a faulthandler ``crash_trace`` dump.
+
+    Returns one of:
+
+    * ``"empty"``  — nothing was recorded.
+    * ``"benign"`` — the ONLY fault recorded is the known Windows splash
+      COM warning ``0x8001010d`` (``RPC_E_CANTCALLOUT_ININPUTSYNCCALL``)
+      raised inside ``gui/splash.py`` during ``show_splash``. Qt/DWM
+      raises this *continuable* exception the first time the frameless,
+      translucent splash composits; CDUMM catches it and starts
+      normally, but ``faulthandler`` still dumps it. It is NOT a crash
+      and must never be surfaced as one, or every bug report headlines a
+      phantom "previous session crashed".
+    * ``"crash"`` — anything else: a real fault, a benign fault with a
+      second fault stacked after it, or an unrecognised dump (fail safe
+      toward "crash" so genuine problems are always surfaced).
+    """
+    if not text or not text.strip():
+        return "empty"
+    # A hard fault is often reported as "Fatal Python error: ..." — that is
+    # never the benign splash case.
+    if "Fatal Python error" in text:
+        return "crash"
+    headers = [ln for ln in text.splitlines()
+               if "Windows fatal exception" in ln]
+    # Benign is exactly one exception dump. Zero (unknown format) or more
+    # than one (a real fault stacked after the splash warning) are not
+    # benign.
+    if len(headers) != 1:
+        return "crash"
+    if "0x8001010d" not in headers[0]:
+        return "crash"
+    # A single 0x8001010d dump is benign only when the crashing frame is
+    # the splash. If any other module is implicated, treat it as real.
+    if "show_splash" in text and "splash.py" in text:
+        return "benign"
+    return "crash"
+
+
 def _format_import_date(d: str | None) -> str:
     if not d:
         return "?"
@@ -1006,12 +1046,20 @@ def generate_bug_report(db: Database | None, game_dir: Path | None,
 
     # ── Crash trace (if a recent session actually recorded a trace) ────
     # main.py preserves the previous session's faulthandler dump as
-    # crash_trace.prev.txt at the next startup (the live crash_trace.txt
-    # is truncated on every launch), so a real hard crash survives to be
-    # reported here. We only emit the section — and flag it in the TL;DR —
-    # when a candidate trace exists AND has non-whitespace content. The
-    # preserved previous-session trace takes priority over any same-session
-    # dump; the first candidate with content wins and we stop.
+    # crash_trace.prev.txt at the next startup (the live crash_trace.txt is
+    # truncated on every launch), so a real hard crash survives to be
+    # reported here. The preserved previous-session trace takes priority
+    # over any same-session dump; the first candidate with content wins.
+    #
+    # Every candidate goes through classify_crash_trace() FIRST. A dump
+    # existing is not the same as a crash having happened: Qt/DWM raises a
+    # *continuable* 0x8001010d (RPC_E_CANTCALLOUT_ININPUTSYNCCALL) the first
+    # time the frameless splash composits, CDUMM catches it and starts
+    # normally, and faulthandler dumps it regardless. Gating the section on
+    # the file merely being non-empty therefore headlined a phantom
+    # "previous session crashed" on EVERY bug report from EVERY Windows user
+    # — the bug #273 exists to remove. So the richer per-fault reporting
+    # below runs only once the classifier says this is a real crash.
     if app_data_dir:
         for _src_label, trace_path in _crash_trace_candidates(app_data_dir):
             if not trace_path.exists():
@@ -1026,8 +1074,22 @@ def generate_bug_report(db: Database | None, game_dir: Path | None,
                     f"{trace_path.name} exists but couldn't be read — check "
                     "file permissions on the CDUMM app-data folder.")
                 continue
-            if not text.strip():
+
+            kind = classify_crash_trace(text)
+            if kind == "empty":
                 continue
+            if kind == "benign":
+                # Known-harmless splash COM warning, and nothing stacked
+                # after it. Report it as an OK observation rather than a red
+                # flag, so nobody chases a phantom crash — and don't dump
+                # the scary-looking trace.
+                tldr_ok.append(
+                    "A non-fatal Windows splash warning "
+                    "(0x8001010d / RPC_E_CANTCALLOUT_ININPUTSYNCCALL) was "
+                    f"recorded ({_src_label}) and safely ignored — the app "
+                    "started normally; not a crash.")
+                break
+
             headline, is_native = _parse_crash_headline(text)
             flag = f"Crash detected ({_src_label})"
             if headline:
