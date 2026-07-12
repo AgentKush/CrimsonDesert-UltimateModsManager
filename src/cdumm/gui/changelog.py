@@ -21,6 +21,24 @@ _UNRELEASED_NOTES: list[str] = [
 
 CHANGELOG = [
     {
+        # Community build. Not an official release — this entry exists only
+        # on release/community-build, so the shipped exe's patch notes
+        # describe what is actually in it.
+        "version": "3.5.0+community.5",
+        "date": "2026-07-12",
+        "notes": [
+            "<b>Shop mods apply again on game version 1.13.</b> The 1.13 patch added a new field to every shop's stock record, which shifted the rest of the record along by four bytes. CDUMM was still reading the old shape, so it stopped at the very first shop and refused most of the mod: 'Shop Smart. Shop H-Mart' installed only 4 of its 14 shops, with the rest silently dropped. CDUMM now works the layout out from your own game files instead of assuming it, so all 14 shops apply — and the next time a patch moves it, it adapts instead of breaking. Found via Srimk1 on GitHub (#259).",
+            "<b>Item price mods apply again.</b> Mods that change what an item costs (like 'Cheap Gold Bars') were rejected at import with a message telling the mod author to add a schema entry — advice they could not act on, for something the engine could already do. The importer had two separate checks that had drifted apart, so the edit passed one and was refused by the other. Prices, gear stats and sockets were all stuck behind that same gate. Found via lupo1190 and Srimk1 on GitHub (#259).",
+            "<b>Socket mods work in game.</b> Equipment records did not decode at all on 1.13 — all 3,151 of them were unreadable — so anything living inside them (sockets, gear stats, durability) was invisible to CDUMM and every edit was quietly dropped. They decode now, confirmed in game by the author of 'Extra Sockets Modular' himself. Found via pinapana and falobos76 on GitHub (#191).",
+            "<b>New: gear stat editor.</b> In the Game Data tab, select a weapon or piece of armour and click 'Edit gear stats…' to change its damage, defence or crit. Every enhancement level is listed separately, because they are separate values in the game file — editing the base item alone would leave the upgraded versions untouched. Stat names are read from the game's own data rather than a hardcoded list.",
+            "<b>Bug reports stop crying wolf.</b> Every bug report was headlining 'previous session crashed' even on a perfectly healthy launch, because Windows records a harmless warning when the splash screen first appears. That is now recognised for what it is. Real crashes, meanwhile, were being erased on the next launch before you could report them — they now survive, and reports say when a crash came from the graphics driver rather than from CDUMM.",
+            "<b>Readable patch notes.</b> This window used to be a wall of text in a small box. It now scales with the window and separates each note.",
+            "<b>Game Data tab improvements.</b> Video and audio clips play inline, the Type filter lists every file type in your install instead of a partial set, and packed files no longer render their raw bytes as a nonsense outline.",
+            "<b>Appearance settings.</b> Pick an accent colour and a UI scale from Settings.",
+            "This is an unofficial community build from AgentKush's fork, bundling 22 pull requests that are still awaiting review upstream. It is not an official release. 2,288 tests pass on it, but if something misbehaves, please report it — a bug report from this build tells us far more than one from a build without these fixes.",
+        ],
+    },
+    {
         "version": "3.5.0",
         "date": "2026-07-08",
         "notes": [
