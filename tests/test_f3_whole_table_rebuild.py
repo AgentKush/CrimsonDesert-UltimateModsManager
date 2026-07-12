@@ -15,6 +15,8 @@ Fix: the change carries its raw intents (``_f3_rebuild``); on
 mismatch the apply loop re-runs the writer against the bytes actually
 in the buffer, preserving whatever else is there and layering the
 intents on top.
+
+Marked ``slow`` (see the module-level ``pytestmark`` below).
 """
 from __future__ import annotations
 
@@ -25,6 +27,21 @@ from typing import Any
 import pytest
 
 from tests.fixture_loaders import has_vanilla110, load_vanilla110
+
+# These are full-table iteminfo round-trips -- the exact category the CI
+# workflow already routes to the slow job ("~150-530s EACH"). They were
+# not marked before because the walker only ever decoded 11 of ItemInfo's
+# 113 fields, so a "whole-table" walk was cheap by accident. Now that the
+# schema is repaired and the walker decodes 110, they cost what a real
+# whole-table round-trip costs: measured 114s, 142s, 143s, 198s and 257s
+# -- 855s between them, which took the fast job from 5.4 min to 19.1 min,
+# against a 22-minute timeout.
+#
+# Marking them `slow` moves them to the slow job (master pushes + nightly
+# + on demand) rather than gating every PR. They still run in CI; they
+# just stop being the long pole on unrelated PRs. Nothing here is
+# skipped, and no coverage is lost.
+pytestmark = pytest.mark.slow
 
 
 @dataclass
