@@ -11,6 +11,31 @@ from cdumm.platform import IS_LINUX, IS_WINDOWS, app_data_dir
 
 APP_DATA_DIR = app_data_dir()
 
+
+def _preserve_prior_crash_trace(trace_path: Path) -> None:
+    """Move a previous session's crash trace aside before it is truncated.
+
+    faulthandler keeps ``trace_path`` open for the whole session and
+    rewrites it at fault time, so opening it ``"w"`` at startup wipes
+    whatever the PREVIOUS session's fatal fault recorded. Without this
+    rename the "CRASH TRACE (previous session)" bug-report section could
+    never fire for a real hard crash: the relaunch destroyed the evidence
+    before the user could generate a report. Move any non-empty prior
+    trace to ``<name>.prev<suffix>`` so it survives into the next session,
+    where the user actually clicks "generate bug report".
+
+    Best-effort: never raises, so a locked or unwritable file can't block
+    boot. ``os.replace`` overwrites an older ``.prev`` copy, so we always
+    keep the most recent previous session's trace.
+    """
+    try:
+        if trace_path.is_file() and trace_path.stat().st_size > 0:
+            os.replace(trace_path, trace_path.with_name(
+                trace_path.stem + ".prev" + trace_path.suffix))
+    except Exception:
+        pass
+
+
 # Enable faulthandler to dump C-level stack trace on segfault.
 # Defensive: if AppData is read-only / permissions fail (domolinixd1000
 # report: CDUMM.exe closes in 2-3s, can't even produce a bug report),
@@ -20,6 +45,7 @@ APP_DATA_DIR = app_data_dir()
 _fault_log = None
 try:
     APP_DATA_DIR.mkdir(parents=True, exist_ok=True)
+    _preserve_prior_crash_trace(APP_DATA_DIR / "crash_trace.txt")
     _fault_log = open(APP_DATA_DIR / "crash_trace.txt", "w")
     faulthandler.enable(file=_fault_log)
 except Exception:
@@ -28,8 +54,9 @@ except Exception:
     # breaks Python's stdlib open on some Windows configs.
     try:
         import tempfile as _tempfile
-        _fault_log = open(
-            Path(_tempfile.gettempdir()) / "cdumm_crash_trace.txt", "w")
+        _tmp_trace = Path(_tempfile.gettempdir()) / "cdumm_crash_trace.txt"
+        _preserve_prior_crash_trace(_tmp_trace)
+        _fault_log = open(_tmp_trace, "w")
         faulthandler.enable(file=_fault_log)
     except Exception:
         try:
