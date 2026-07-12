@@ -298,9 +298,17 @@ a = Analysis(
         'PySide6.QtTest', 'PySide6.QtDBus', 'PySide6.QtConcurrent',
         # scipy/numpy — only needed for acrylic blur (disabled)
         'scipy', 'numpy', 'numpy.core', 'numpy.linalg',
-        # PIL/Pillow IS used — it decodes DDS textures for the Game Data
-        # preview, so it must be bundled (do NOT exclude it). Only colorthief
-        # (which merely pulls PIL in transitively) is unused.
+        # PIL/Pillow IS used — game_index.decode_image() decodes the game's
+        # DDS textures for the Game Data preview, and game_data_page.py calls
+        # it. Do NOT exclude it. Only colorthief (which merely pulls PIL in
+        # transitively) is unused.
+        #
+        # Un-excluding it here is only half the fix: Pillow also has to be a
+        # declared runtime dependency, or CI never installs it, PyInstaller
+        # can't bundle what isn't importable, and decode_image() still
+        # returns None in the frozen build. See pyproject.toml. The gap went
+        # unnoticed because the one test covering it skipped on "No module
+        # named PIL".
         'colorthief',
         # brotli — not used by CDUMM (transitive dep from py7zr)
         'brotli', '_brotli', 'brotlicffi',
