@@ -24,6 +24,20 @@ CHANGELOG = [
         # Community build. Not an official release — this entry exists only
         # on release/community-build, so the shipped exe's patch notes
         # describe what is actually in it.
+        "version": "3.5.0+community.6",
+        "date": "2026-07-13",
+        "notes": [
+            "<b>Byte-offset mods and semantic mods can finally edit the same table together.</b> The two mod formats disagree about what a game file is: an older mod says 'at byte 4,192,880, change these bytes', while a newer one has CDUMM rebuild the whole table from its records. The moment a rebuild makes one early record longer, every byte offset after it shifts — and the older mod then writes into the middle of some other item, leaving a file the game refuses to load. On falobos76's own mod list, 229 of his 231 changes were landing on the wrong bytes. CDUMM now works out where those bytes moved to and rewrites the offsets to match: all 231 land exactly where their author measured them. No more hand-editing offsets to make two mods coexist. Found via falobos76 on GitHub (#293).",
+            "<b>...and when they genuinely can't, CDUMM says so instead of corrupting the file.</b> If a rebuild changed the very bytes an offset mod wants to patch, the two mods truly disagree about that item and there is no right answer. That mod is now refused, by name, with the reason — rather than applied to the wrong place and discovered later as a game that won't start. (#294)",
+            "<b>Tribe and gender restrictions on gear now come off.</b> The July 1.13 patch moved the block that holds an item's model, animations and equip restrictions to the end of the item record. CDUMM was carrying those bytes through untouched without reading them, so mods editing them applied cleanly and changed nothing. They decode now: 'Equip Everything' applies all 2,548 of its changes and every restriction it targets is actually cleared. (#285)",
+            "<b>.cdmod mods import.</b> A new mod format has started appearing on Nexus and CDUMM did not recognise the extension at all — the file was rejected on drop. It imports now: 'No Fall Damage' applies all 53 of its item changes, and any part of a mod CDUMM cannot yet apply is reported instead of silently skipped. (#288)",
+            "<b>In-game text tables decode.</b> CDUMM can now read the game's localization table (all 187,526 strings) and write it back byte for byte, which is the groundwork for mods that translate or reword in-game text. (#290)",
+            "The 'CD 1.13 layout' message in the log was a warning claiming fields were being skipped. Nothing is skipped on 1.13 — every field decodes — so it is now an informational note that says so.",
+            "Format 3 mods that target a nested field on an item are no longer refused at import over a path the validator did not recognise. (#281)",
+            "This is an unofficial community build from AgentKush's fork, bundling 29 pull requests that are still awaiting review upstream. It is not an official release. 2,365 tests pass on it, including tests that run against a real 1.13 game install. If something misbehaves, please report it — a bug report from this build tells us far more than one from a build without these fixes.",
+        ],
+    },
+    {
         "version": "3.5.0+community.5",
         "date": "2026-07-12",
         "notes": [
