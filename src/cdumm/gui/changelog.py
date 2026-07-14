@@ -21,6 +21,22 @@ _UNRELEASED_NOTES: list[str] = [
 
 CHANGELOG = [
     {
+        # Community build. Not an official release — this entry exists only
+        # on release/community-build, so the shipped exe's patch notes list
+        # everything in it since the last official release (3.5.0).
+        "version": "3.5.0+community.7",
+        "date": "2026-07-14",
+        "notes": [
+            "<b>Byte-offset mods and semantic mods can finally edit the same table together.</b> The two mod formats disagree about what a game file is: an older mod says 'at byte 4,192,880, change these bytes', while a newer one has CDUMM rebuild the whole table. The moment a rebuild makes one early record longer, every byte offset after it shifts — and the older mod then writes into the middle of some other item, leaving a file the game refuses to load. On falobos76's own mod list, 229 of his 231 changes were landing on the wrong bytes. CDUMM now works out where those bytes moved to and rewrites the offsets to match: all 231 land exactly where their author measured them. No more hand-editing offsets to make two mods coexist. Found via falobos76 on GitHub (#293).",
+            "<b>New: turn a byte-offset mod into a patch-proof one.</b> Right-click any older byte-offset mod and choose 'Convert to a patch-proof (Format 3) mod'. CDUMM works out which item and which field every byte offset really edits and writes out a new mod that finds items by name instead of by position — so it never needs new offsets when Crimson Desert updates. On falobos76's three real mods, all 822 changes converted, every one verified byte-for-byte against the original. The result is a file you keep and can send to the mod's author — which matters most for the mods whose authors have moved on. (#191)",
+            "<b>Tribe and gender restrictions on gear now come off.</b> The July 1.13 patch moved the block holding an item's model, animations and equip restrictions to the end of the item record. CDUMM was carrying those bytes through untouched without reading them, so mods editing them applied cleanly and changed nothing. They decode now: 'Equip Everything' applies all 2,548 of its changes and every restriction it targets is actually cleared. (#285)",
+            "<b>The conflict list stops crying wolf.</b> Every one of a set of socket mods was flagged as conflicting with every other, so only the top one 'won' — while in game they all applied fine, to different items. CDUMM now compares by item and field, not just by file: two mods that touch different items, or different fields on the same item, are correctly shown as compatible. Found via falobos76 on GitHub (#292).",
+            "<b>New mod formats import.</b> '.cdmod' packages import end to end (No Fall Damage applies all 53 of its changes), and the in-game text table (all 187,526 strings) decodes and round-trips byte for byte as groundwork for translation mods. (#288, #290)",
+            "<b>Under the hood.</b> This build ships with a real-game-table test gate on every change, a check that fails the build if any engine feature is left unreachable, and a linter — added after an internal QA pass found (and fixed) a case where a finished feature had no button to reach it. 2,396 tests pass, including tests that run against a real 1.13 install.",
+            "This is an unofficial community build from AgentKush's fork, bundling all of the open pull requests that are still awaiting review upstream, plus the fixes above. It is not an official release. If something misbehaves, please report it — a bug report from this build tells us far more than one from a build without these fixes.",
+        ],
+    },
+    {
         "version": "3.5.0",
         "date": "2026-07-08",
         "notes": [
