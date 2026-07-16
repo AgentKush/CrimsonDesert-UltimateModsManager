@@ -151,6 +151,10 @@ class Format3Intent:
     old: str | None = None
     match: dict | None = None
     clone: dict | None = None
+    # DMM Mod Builder's op:"scale" carries a numeric ``factor`` instead of a
+    # ``new`` value. Parsed leniently so a scale intent doesn't fail the whole
+    # mod; validate_intents decides whether the op is actually supported.
+    factor: Any = None
 
 
 @dataclass
@@ -369,7 +373,18 @@ def _parse_intents_block(
                     f"{label} intent #{i} is missing required key "
                     f"'{required}'"
                 )
-        if "new" not in raw:
+        # ``op: scale`` (DMM Mod Builder) carries a ``factor`` instead of a
+        # ``new``. Require that instead so the intent parses and reaches
+        # validate_intents, which skips it per-intent if scale isn't supported
+        # for the target -- rather than the missing-``new`` check taking the
+        # whole mod down (the parser's lenient-on-op contract, #66).
+        _op = str(raw.get("op", "set"))
+        if _op == "scale":
+            if "factor" not in raw:
+                raise ValueError(
+                    f"{label} intent #{i} with op 'scale' is missing "
+                    f"'factor' (the multiplier)")
+        elif "new" not in raw:
             raise ValueError(
                 f"{label} intent #{i} is missing 'new' "
                 f"(the value to set)"
@@ -410,10 +425,11 @@ def _parse_intents_block(
             entry=str(raw.get("entry", "")),
             key=raw_key,
             field=str(raw["field"]),
-            op=str(raw.get("op", "set")),
-            new=raw["new"],
+            op=_op,
+            new=raw.get("new"),
             old=raw_old,
             match=raw_match,
+            factor=raw.get("factor"),
         ))
     return intents
 
