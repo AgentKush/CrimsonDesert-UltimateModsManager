@@ -703,7 +703,7 @@ def expand_format3_into_aggregated(
     _WHOLE_TABLE_TARGETS = {
         "iteminfo.pabgb", "skill.pabgb", "multichangeinfo.pabgb",
         "storeinfo.pabgb", "equipslotinfo.pabgb", "stringinfo.pabgb",
-        "statusinfo.pabgb"}
+        "statusinfo.pabgb", "inventory.pabgb"}
     whole_table_intents: dict[str, list] = {}
     whole_table_mod_names: dict[str, list[str]] = {}
     # Per-INTENT mod attribution, index-aligned with
@@ -1212,6 +1212,73 @@ def expand_format3_into_aggregated(
                     n_bytes_changed += len(c.get("patched", "")) // 2
                 logger.info(
                     "Format 3 statusinfo writer: applied %d intent(s) "
+                    "across %d mod(s), %d record change(s)",
+                    len(batched) - len(dropped), len(contributing_mods),
+                    len(pabgb_changes))
+                continue
+
+            # inventory.pabgb (DMM Mod Builder "max inventory" mods):
+            # default/max/need_save_slot_count u16 writes on records located
+            # by name. Length-preserving, no companion .pabgh rebuild.
+            if target == "inventory.pabgb":
+                from cdumm.engine.inventory_writer import (
+                    build_inventory_changes,
+                )
+                try:
+                    pabgb_changes, dropped = build_inventory_changes(
+                        vanilla_body, vanilla_header, batched)
+                except Exception as e:
+                    logger.error(
+                        "Format 3 inventory writer crashed on %d "
+                        "intent(s): %s", len(batched), e, exc_info=True)
+                    pabgb_changes, dropped = [], []
+                if dropped:
+                    drop_lines = []
+                    for _it, _reason in dropped[:5]:
+                        _label = (getattr(_it, "entry", "")
+                                  or f"key={getattr(_it, 'key', '?')}")
+                        drop_lines.append(
+                            f"{_label}.{getattr(_it, 'field', '?')}: "
+                            f"{_reason}")
+                    more_n = len(dropped) - len(drop_lines)
+                    logger.warning(
+                        "Format 3 inventory writer refused %d of %d "
+                        "intent(s): %s", len(dropped), len(batched),
+                        "; ".join(f"{getattr(i, 'field', '?')} ({r})"
+                                  for i, r in dropped))
+                    if warnings_out is not None:
+                        warnings_out.append(
+                            f"Format 3: {len(dropped)} inventory intent(s) "
+                            f"skipped: " + "; ".join(drop_lines)
+                            + (f"; and {more_n} more (see log)"
+                               if more_n > 0 else ""))
+                if not pabgb_changes:
+                    logger.warning(
+                        "Format 3 inventory: %d intent(s) from %d mod(s) "
+                        "produced 0 record changes",
+                        len(batched), len(contributing_mods))
+                    if warnings_out is not None:
+                        warnings_out.append(
+                            f"Format 3 mod(s) "
+                            f"{', '.join(repr(n) for n in contributing_mods)} "
+                            f"produced 0 byte changes for 'inventory.pabgb'. "
+                            f"The named inventory record may not exist in "
+                            f"this game version, or every slot count already "
+                            f"held the requested value.")
+                    continue
+                contrib_ids = list(whole_table_mod_ids.get(target, []))
+                for c in pabgb_changes:
+                    c["_target_file"] = target
+                    if contrib_ids:
+                        c["_source_mod_ids"] = list(contrib_ids)
+                aggregated.setdefault(target, []).extend(pabgb_changes)
+                if participating_mod_ids is not None:
+                    for mid in contrib_ids:
+                        participating_mod_ids.add(mid)
+                for c in pabgb_changes:
+                    n_bytes_changed += len(c.get("patched", "")) // 2
+                logger.info(
+                    "Format 3 inventory writer: applied %d intent(s) "
                     "across %d mod(s), %d record change(s)",
                     len(batched) - len(dropped), len(contributing_mods),
                     len(pabgb_changes))
