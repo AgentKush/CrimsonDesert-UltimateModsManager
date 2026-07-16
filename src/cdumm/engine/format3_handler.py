@@ -1109,6 +1109,16 @@ LIST_WRITERS: dict[tuple[str, str], str] = {
         "skill_writer.build_skill_intent_change",
     ("skill", "_buffLevelList"):
         "skill_writer.build_skill_intent_change",
+    # inventory slot-count writer (DMM Mod Builder "max inventory" mods).
+    # inventory.pabgb has no PABGB schema and its .pabgh carries no record
+    # offsets, so these scalar fields route through the content-framed
+    # inventory_writer, which locates records by name.
+    ("inventory", "default_slot_count"):
+        "inventory_writer.build_inventory_changes",
+    ("inventory", "max_slot_count"):
+        "inventory_writer.build_inventory_changes",
+    ("inventory", "need_save_slot_count"):
+        "inventory_writer.build_inventory_changes",
 }
 
 
