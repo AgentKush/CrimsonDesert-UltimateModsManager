@@ -21,6 +21,21 @@ _UNRELEASED_NOTES: list[str] = [
 
 CHANGELOG = [
     {
+        "version": "3.6.0",
+        "date": "2026-07-18",
+        "notes": [
+            "<b>Popular item mods that need 'DMM' now work in CDUMM too.</b> A field the July 1.13 patch relocated inside the item table, prefab_data_list, is decoded again. This is what mods like Equip Everything and the AXIOM Mask Mega Collection need, and both were 100% blocked before this fix. Found via a sweep of the top 59 mods on Nexus (#285).",
+            "<b>New mod format: .cdmod.</b> Mods exported by the new Crimson Desert Mod Package converter now import directly, including localization patches that only tweak specific strings rather than replacing the whole language file. Found via AgentKush's Nexus sweep (#288, #290).",
+            "<b>Mods that edit different items in the same table no longer show as conflicting.</b> Two socket mods, one for helmets and one for gloves, both touch iteminfo.pabgb, so CDUMM flagged them as conflicting even though both apply cleanly in game. It now checks the actual item and field each mod touches, not just which file they share. Found via falobos76 on GitHub (#292).",
+            "<b>Fixed a rare cause of a crash-on-launch when combining certain mods.</b> A byte-offset mod and a mod that rebuilds the whole item table could end up disagreeing about where in the file things are, corrupting the table. CDUMM now moves the byte-offset change onto the rebuilt table when it safely can, and refuses the change with a clear reason instead of writing to the wrong bytes when it can't. Found via falobos76 on GitHub (#293).",
+            "<b>Large DMM-exported zip mods no longer fail to import on Windows.</b> Some mods are packaged as a folder and file sharing the same long name, which could push the extracted path past Windows' 260-character limit. CDUMM now keeps the extracted path short. Found via falobos76 on GitHub (#191).",
+            "<b>Bug reports no longer cry wolf about a 'previous session crashed' that never happened.</b> A harmless, already-handled warning during the splash screen's first paint was being logged as a crash, so every single bug report opened with a false alarm. CDUMM now tells that apart from a real fault, and also keeps the actual previous crash trace around instead of overwriting it on the next launch.",
+            "<b>New Format 3 mod operations: clone_record, new_record, delete_record, array_append, and the match selector.</b> Mod authors can now duplicate an existing item as a base for a new one, remove records, append to certain lists, and target a batch of records by a shared property instead of listing every key by hand.",
+            "New: a gear stat editor in the Game Data tab, and broader support for DMM Mod Builder-style mods (match-all selectors, the $in operator, inventory slot counts, character cooldowns, and stat mods).",
+            "Thanks to AgentKush for consolidating and testing all of the above, and to falobos76 for the detailed bug reports and reproductions that made several of these fixes possible.",
+        ],
+    },
+    {
         "version": "3.5.0",
         "date": "2026-07-08",
         "notes": [
