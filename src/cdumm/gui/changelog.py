@@ -21,6 +21,19 @@ _UNRELEASED_NOTES: list[str] = [
 
 CHANGELOG = [
     {
+        "version": "3.6.0+community.1",
+        "date": "2026-07-23",
+        "notes": [
+            "<b>Community build: everything currently in review for the main app, bundled into one exe.</b> This fork build stacks all six open pull requests on top of v3.6.0 so you don't have to wait for them to be merged upstream.",
+            "<b>Apply is now blocked if the game updates while CDUMM is open.</b> Steam can patch the game mid-session, leaving CDUMM's saved 'vanilla' out of date; applying then writes mods onto the wrong bytes and crashes the game on launch. Apply now re-checks the live game version at click time and asks you to Rescan Game Files first. Found via lupo1190 on GitHub (#307).",
+            "<b>Character Creator 7.6 female-animation and appearance mods apply correctly.</b> The current DMM Mod Builder renamed the character fields between versions, so CDUMM was writing the new names to the old slots and the swap didn't take. Every field is now pinned against the real character table. Found via woowoots and lurkser on GitHub (#302).",
+            "<b>Race/gender variant packs show their size picker again.</b> Character Creator packs that nest their per-race folders inside a single wrapper folder used to import as one lump; the picker now fires for them. Found via lurkser on GitHub (#302).",
+            "Also included, the earlier community fixes now in review for master: statusinfo stat mods, inventory slot-count mods, no-dragon-cooldown character mods, DMM Mod Builder match-all and $in selectors, Equip Everything / AXIOM (prefab_data_list), long-path zip import, variant-pack import, macOS Find Culprit, and copyable, readable skipped-file notifications (#191, #299, #303, #304).",
+            "For maintainers: adds scripts/coverage_scan.py, a CI-gateable scanner that reports which Format 3 mod edits CDUMM can't yet apply (#285, #308).",
+            "Thanks to lupo1190, woowoots, lurkser and falobos76 for the reports and reproductions behind these.",
+        ],
+    },
+    {
         "version": "3.6.0",
         "date": "2026-07-18",
         "notes": [
