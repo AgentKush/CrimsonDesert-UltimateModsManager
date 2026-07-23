@@ -36,10 +36,17 @@ def _write(p: Path, target: str, field, new, op: str = "set") -> None:
 
 
 def test_unsupported_op_is_reported(tmp_path):
-    # op=scale isn't implemented yet (#71); the field itself is real+covered,
-    # so the ONLY reason this skips is the op -> a genuine surfaced gap.
-    _write(tmp_path / "scale.field.json", "buffinfo.pabgb", "min_level", 2,
-           op="scale")
+    # op=scale isn't applied yet (#71), so validate_intents skips it -> a
+    # genuine surfaced gap. The intent carries BOTH 'new' and 'factor' so the
+    # file parses regardless of the scale-parsing rules: plain master requires
+    # 'new', while the DMM scale-tolerance change (#304) requires 'factor'.
+    # With both present it's well-formed either way, keeping this test green on
+    # master and on any branch that also merges #304.
+    (tmp_path / "scale.field.json").write_text(json.dumps({
+        "format": 3, "target": "buffinfo.pabgb",
+        "intents": [{"entry": "", "key": 1, "field": "min_level",
+                     "op": "scale", "new": 2, "factor": 2}],
+    }))
     gaps = coverage_scan.scan([str(tmp_path)])
     assert ("buffinfo", "min_level") in {(g.table, g.field) for g in gaps}
     assert any("scale" in g.reason for g in gaps), gaps
