@@ -36,10 +36,16 @@ def _write(p: Path, target: str, field, new, op: str = "set") -> None:
 
 
 def test_unsupported_op_is_reported(tmp_path):
-    # op=scale isn't implemented yet (#71); the field itself is real+covered,
-    # so the ONLY reason this skips is the op -> a genuine surfaced gap.
-    _write(tmp_path / "scale.field.json", "buffinfo.pabgb", "min_level", 2,
-           op="scale")
+    # op=scale parses (it takes a 'factor', not a 'new') but isn't applied
+    # yet (#71), so validate_intents skips it -> a genuine surfaced gap.
+    # NOTE: scale needs 'factor' -- writing 'new' makes the parser reject the
+    # whole file (which the scanner treats as non-Format-3), so it must be a
+    # well-formed scale intent to exercise the unsupported-op path.
+    (tmp_path / "scale.field.json").write_text(json.dumps({
+        "format": 3, "target": "buffinfo.pabgb",
+        "intents": [{"entry": "", "key": 1, "field": "min_level",
+                     "op": "scale", "factor": 2}],
+    }))
     gaps = coverage_scan.scan([str(tmp_path)])
     assert ("buffinfo", "min_level") in {(g.table, g.field) for g in gaps}
     assert any("scale" in g.reason for g in gaps), gaps
