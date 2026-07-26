@@ -72,11 +72,23 @@ _FIELD_MAP: dict[str, tuple[str, int, str, int]] = {
     # publishes the offsets when its f32-2.0 gate confirms the position, so
     # a record whose layout can't be verified simply has no offset key here
     # and is refused by name below -- never written at a guessed position.
-    # `character_weight` is deliberately still absent: its slot could not be
-    # distinguished from the gate field itself, so it stays unmapped.
     "default_action_action_index": (
         "_defaultActionActionIndex_offset", 0, "<I", 4),
     "f36": ("_f36_offset", 0, "<I", 4),
+    # `character_weight` is the SAME SLOT under a different DMM name, and
+    # that is documented by the mod author rather than inferred. Character
+    # Creator 7.5 shipped as raw offset patches with hand-written labels;
+    # for the record 7.6 calls `character_weight` (Kliff_Clone), writing
+    # the same value 1287066785, 7.5's label reads:
+    #     offset=4503  "Kliff_Clone _defaultActionActionIndex -> ..."
+    # The other three records carry the same value under the name
+    # `default_action_action_index` in 7.6 and the identical
+    # `_defaultActionActionIndex` label in 7.5, so the two names are one
+    # field renamed between DMM versions. Mapping it here means the write
+    # still only happens where the parser's gate has confirmed the
+    # position; on a record it cannot locate, this is refused like any
+    # other unlocatable field.
+    "character_weight": ("_defaultActionActionIndex_offset", 0, "<I", 4),
 }
 
 # CURRENT DMM Mod Builder naming (Character Creator / Female Animations 7.6,

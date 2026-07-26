@@ -335,3 +335,73 @@ def test_gate_is_unambiguous_first_anchor_is_the_only_pass(table):
             assert rec.get("_defaultActionActionIndex_offset") == passes[0]
         else:
             assert rec.get("_defaultActionActionIndex_offset") is None
+
+
+# ── the mod author's own offsets, as an independent oracle ─────────────
+#
+# Character Creator 7.5 shipped the SAME edits as raw offset patches with
+# hand-written labels naming each field. Those offsets were derived by the
+# mod author independently of anything in this repo, which makes them a
+# ground truth for the walker: where the walker publishes an offset it
+# must agree exactly, and where it cannot verify a position it must stay
+# silent rather than write a wrong one.
+#
+# From "CharacterCreator_Female Animations.json" (Nexus 837, v7.5), the
+# four `_defaultActionActionIndex` patches (all 00000000 -> A114B74C):
+_AUTHOR_75_OFFSETS = {
+    "Kliff": 464,
+    "Kliff_Clone": 4503,
+    "Kliff_AI": 8414,
+    "PlayerAll": 43321,
+}
+
+
+def test_kliff_clone_is_refused_because_the_walk_lands_4_bytes_short(table):
+    """The regression this exists to prevent.
+
+    Checked against the live 1.15 table, the walker's offsets agree with
+    the author's exactly for Kliff (464), Kliff_AI (8414) and PlayerAll
+    (43321) — but for Kliff_Clone, whose list is empty (count=0), the
+    computed position is 4499 while the author's real one is 4503. Four
+    bytes short, i.e. the neighbouring field.
+
+    So the gate MUST refuse Kliff_Clone. An earlier, looser gate (any
+    _f36 in 0..3) accepted that position and would have written into the
+    wrong field; only the stricter check catches it. Precision matters
+    more than coverage here: a refused field is a visible "can't do
+    that", a wrong write is silent corruption.
+    """
+    body, header = table
+    idx = parse_pabgh_index(header)
+    order = sorted(idx.items(), key=lambda kv: kv[1])
+    published = {}
+    for rank, (key, start) in enumerate(order):
+        end = (order[rank + 1][1]
+               if rank + 1 < len(order) else len(body))
+        rec = parse_entry(body, start, end)
+        if rec and rec.get("name"):
+            published[rec["name"]] = (
+                rec.get("_defaultActionActionIndex_offset"), start, end)
+
+    off, start, end = published["Kliff_Clone"]
+    assert off is None, (
+        "Kliff_Clone's computed position is 4 bytes short of the mod "
+        "author's own offset — publishing it would corrupt the "
+        "neighbouring field")
+
+    # And the records it does place must land inside their own record.
+    for name in ("Kliff", "Kliff_AI", "PlayerAll"):
+        off, start, end = published[name]
+        assert off is not None, f"{name} should be locatable"
+        assert start <= off < end, (
+            f"{name}'s offset {off} escaped its own record "
+            f"[{start}, {end})")
+
+
+def test_character_weight_is_the_same_slot_as_default_action_action_index():
+    """7.6 renamed `_defaultActionActionIndex` to `character_weight` for
+    one record; both must resolve to the same offset key so the rename
+    doesn't silently drop the edit."""
+    from cdumm.engine.characterinfo_writer import _FIELD_MAP
+    assert (_FIELD_MAP["character_weight"]
+            == _FIELD_MAP["default_action_action_index"])
