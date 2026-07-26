@@ -122,12 +122,13 @@ def test_all_17_hash_block_intents_apply_and_match_the_source(table):
     offsets are right, not merely that a write happened."""
     body, header = table
     changes = build_characterinfo_changes(body, header, _MOD_INTENTS)
-    # 17 hash-block intents + the 6 post-block ones the walker can now
-    # locate and gate-verify (#302: default_action_action_index / f36 on
-    # Kliff, Kliff_AI, PlayerAll). Kliff_Clone fails the f32-2.0 gate and
-    # character_weight is still unmapped, so 2 remain refused.
-    assert len(changes) == 23, (
-        f"expected 23 locatable intents, got {len(changes)}")
+    # 17 hash-block intents + the 7 post-block ones the walker locates
+    # and gate-verifies (#302: default_action_action_index / f36 across
+    # all five records, Kliff_Clone included). Only character_weight
+    # remains refused — its slot could not be distinguished from a
+    # neighbouring one, so it is never written.
+    assert len(changes) == 24, (
+        f"expected 24 locatable intents, got {len(changes)}")
 
     patched = _apply(body, changes)
     assert len(patched) == len(body), "writes must not resize the table"
@@ -195,11 +196,10 @@ def test_post_block_fields_are_walked_or_refused_never_guessed(table):
     assert not [r for r, f in written if f == "character_weight"], (
         "character_weight is unmapped and must stay refused")
 
-    # Kliff_Clone fails the gate (its list count is 0 and the preceding
-    # u32 is not 2.0f), so no post-block field may be written for it.
-    assert not [f for r, f in written
-                if r == "Kliff_Clone" and f in _POST_BLOCK], (
-        "Kliff_Clone fails the position gate; nothing may be written")
+    # Kliff_Clone's list is empty (count=0) but its fields still decode,
+    # so the gate passes and its f36 is written like any other record.
+    assert ("Kliff_Clone", "f36") in written, (
+        "Kliff_Clone passes the enum gate; its f36 must be located")
 
     # Where the gate passes, the walk is trusted: these must apply.
     for rec in ("Kliff", "Kliff_AI", "PlayerAll"):
@@ -229,9 +229,16 @@ def test_walked_post_block_matches_the_mod_source_record(table):
     assert got["Damian"].get("_f36") == 2
     # Kliff's current value is 0 — the mod's job is to make it Damian's.
     assert got["Kliff"].get("_defaultActionActionIndex") == 0
-    # Kliff_Clone must publish NO offsets (gate refused).
-    assert got["Kliff_Clone"].get("_defaultActionActionIndex") is None
-    assert got["Kliff_Clone"].get("_f36_offset") is None
+    # Kliff_Clone's list is empty (count=0) yet its fields still decode;
+    # its f36 must land inside the enum the gate checks.
+    assert got["Kliff_Clone"].get("_f36") == 0
+    # Every record that decodes must have an f36 inside the 0..3 enum —
+    # that IS the gate, so a published offset always satisfies it.
+    for name, rec in got.items():
+        if rec.get("_f36") is not None:
+            assert 0 <= rec["_f36"] <= 3, (
+                f"{name} published an offset whose f36 ({rec['_f36']}) is "
+                f"outside the enum the gate guarantees")
 
 
 # ── the discriminator, and legacy mods are untouched ────────────────────
@@ -323,8 +330,8 @@ def test_gate_is_unambiguous_first_anchor_is_the_only_pass(table):
                 cnt = _s.unpack_from("<I", body, i + 36)[0]
                 t = i + 44 + cnt * 4
                 if (t + 8 <= end and t - 4 >= i
-                        and _s.unpack_from("<I", body, t - 4)[0]
-                        == cp._POST_BLOCK_GATE):
+                        and _s.unpack_from("<I", body, t + 4)[0]
+                        <= cp._POST_BLOCK_F36_MAX):
                     passes.append(t)
             pos = i + 1
         assert len(passes) <= 1, (

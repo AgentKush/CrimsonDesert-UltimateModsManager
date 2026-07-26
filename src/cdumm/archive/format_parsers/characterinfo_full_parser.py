@@ -57,12 +57,23 @@ log = logging.getLogger(__name__)
 # fixed-layout run (see parse_entry for the field map).
 _POST_BLOCK_ANCHOR = struct.pack('<I', 900000)
 
-# Validation gate for that walk: the u32 immediately before the target
-# field is f32 2.0. Every record that satisfies it decodes _f36 as a
-# clean 0..3 enum (142/142 measured on live 1.15), so it is treated as
-# proof the computed position is correct. Records that fail it yield no
-# offsets at all, leaving the writer to refuse the field by name.
-_POST_BLOCK_GATE = 1073741824
+# Validation gate for that walk: _f36 must land inside its 0..3 enum.
+#
+# A wrong position would have to produce a u32 in 0..3 by chance, which
+# is about one in a billion per record, so a pass is strong evidence the
+# computed offset is right. Measured on live 1.15: 434 records pass, and
+# _f36 across them is a clean enum (0 x263, 2 x118, 3 x33, 1 x20).
+#
+# This replaces an earlier, stricter probe that required the u32 before
+# the target to be f32 2.0. That probe accepted 142 records — a STRICT
+# SUBSET of these 434 — so the two never disagree; the 2.0 value was
+# simply the most common weight rather than a structural marker, and
+# keying on it wrongly refused records like Kliff_Clone whose list is
+# empty (count=0) but whose fields decode correctly.
+#
+# Records that fail yield no offsets at all, leaving the writer to
+# refuse the field by name rather than write to a guessed position.
+_POST_BLOCK_F36_MAX = 3
 
 
 def parse_pabgh_index(pabgh_data):
@@ -248,10 +259,9 @@ def parse_entry(data, offset, end):
                 # makes Kliff_AI (count=13) come out right where a fixed
                 # delta read 4 bytes off.
                 #
-                # GATE: the u32 immediately before the target must be
-                # 1073741824 (f32 2.0). Among every record that passes
-                # this gate, _f36 is a clean 0..3 enum (142/142 on the
-                # live 1.15 table), so a pass means the position is
+                # GATE: _f36 must land inside its 0..3 enum. A wrong
+                # position would have to hit that range by chance (~1 in
+                # a billion), so a pass means the computed offset is
                 # genuinely right. When it fails we emit nothing and the
                 # writer keeps refusing the field by name — never a
                 # write to a guessed offset.
@@ -260,8 +270,8 @@ def parse_entry(data, offset, end):
                     _cnt = struct.unpack_from('<I', data, _anchor + 36)[0]
                     _t = _anchor + 44 + _cnt * 4
                     if _t + 8 <= end and _t - 4 >= _anchor:
-                        _pre = struct.unpack_from('<I', data, _t - 4)[0]
-                        if _pre == _POST_BLOCK_GATE:
+                        _f36 = struct.unpack_from('<I', data, _t + 4)[0]
+                        if _f36 <= _POST_BLOCK_F36_MAX:
                             result['_defaultActionActionIndex_offset'] = _t
                             result['_defaultActionActionIndex'] = (
                                 struct.unpack_from('<I', data, _t)[0])
