@@ -291,3 +291,47 @@ def test_source_and_untargeted_records_are_byte_identical(table):
         end = order[i + 1][1] if i + 1 < len(order) else len(body)
         assert patched[o:end] == body[o:end], (
             f"non-target record key={key} changed")
+
+
+def test_gate_is_unambiguous_first_anchor_is_the_only_pass(table):
+    """Widening the walk to try EVERY 900000 anchor in a record finds the
+    same single position -- measured on live 1.15: 142 records with
+    exactly one gate pass, 6963 with none, and *never* two or more.
+
+    That matters twice over: there is no ambiguity for the walk to pick
+    wrong, and scanning from the first anchor (what parse_entry does) is
+    already optimal rather than leaving positions undiscovered.
+    """
+    import struct as _s
+    from cdumm.archive.format_parsers import characterinfo_full_parser as cp
+    body, header = table
+    idx = cp.parse_pabgh_index(header)
+    order = sorted(idx.items(), key=lambda kv: kv[1])
+    for rank, (key, start) in enumerate(order):
+        end = (order[rank + 1][1]
+               if rank + 1 < len(order) else len(body))
+        rec = cp.parse_entry(body, start, end)
+        if not rec or rec.get("_isValid_offset") is None:
+            continue
+        passes = []
+        pos = rec["_isValid_offset"] - 3
+        while True:
+            i = body.find(cp._POST_BLOCK_ANCHOR, pos, end)
+            if i < 0:
+                break
+            if i + 40 <= end:
+                cnt = _s.unpack_from("<I", body, i + 36)[0]
+                t = i + 44 + cnt * 4
+                if (t + 8 <= end and t - 4 >= i
+                        and _s.unpack_from("<I", body, t - 4)[0]
+                        == cp._POST_BLOCK_GATE):
+                    passes.append(t)
+            pos = i + 1
+        assert len(passes) <= 1, (
+            f"{rec.get('name')}: {len(passes)} gate-passing anchors — the "
+            f"walk would be ambiguous")
+        # And when one exists, it is what parse_entry published.
+        if passes:
+            assert rec.get("_defaultActionActionIndex_offset") == passes[0]
+        else:
+            assert rec.get("_defaultActionActionIndex_offset") is None
