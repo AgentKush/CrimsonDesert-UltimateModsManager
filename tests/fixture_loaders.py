@@ -79,6 +79,34 @@ def has_vanilla113(name: str) -> bool:
         return False
 
 
+@lru_cache(maxsize=8)
+def load_vanilla115(name: str) -> bytes:
+    """Load a CD 1.15.00 vanilla extract (e.g. "equipslotinfo.pabgb").
+
+    Same contract as :func:`load_vanilla110` / :func:`load_vanilla113`.
+    Added for equipslotinfo, whose opaque per-record block shrank from
+    66 bytes (1.10) to 63 -- a change no committed fixture could show,
+    because ``tests/test_equipslotinfo_writer.py`` pointed at the
+    gitignored ``issue_repro/190/`` copy and so all four of its tests
+    skipped in CI and on every fresh clone. Finding C7 again, and again
+    the fix is to commit the bytes: these two tables are 1.7 KB
+    compressed.
+    """
+    packed = _TESTS_DIR / "fixtures" / "vanilla115" / (name + ".zlib")
+    if packed.exists():
+        return zlib.decompress(packed.read_bytes())
+    raise FileNotFoundError(
+        f"vanilla115 fixture {name!r} absent from tests/fixtures")
+
+
+def has_vanilla115(name: str) -> bool:
+    try:
+        load_vanilla115(name)
+        return True
+    except FileNotFoundError:
+        return False
+
+
 class _FixtureHandle110:
     """Same handle, over the CD 1.10 fixtures.
 

@@ -7,31 +7,40 @@ the targeted records' hash lists, preserves every other byte
 verbatim, and rebuilds the companion .pabgh offsets because the entry
 grows.
 
-Trust anchor: the record model (u32 etl_count + hashes + 66B fixed
-block per record, u16 unk + u32 count entry head, 20B-item footer +
-0xb954d87c terminator) must round-trip every entry of the extracted
-CD 1.10 vanilla file byte-identically.
+Trust anchor: the record model (u32 etl_count + hashes + an opaque
+per-record block, u16 unk + u32 count entry head, 20B-item footer +
+0xb954d87c terminator) must round-trip every entry of the vanilla file
+byte-identically.
+
+**Two things were wrong here and this module now pins both.**
+
+1. The opaque block size was hardcoded at 66 -- the value RE'd against
+   CD 1.10. On 1.15 it is 63, so the walk desynced at the second record
+   of every multi-record entry and the writer refused every intent.
+   The mod applied nothing while reporting no skipped intents.
+
+2. These tests could not have caught that, because they were gated on
+   ``issue_repro/190/`` -- a gitignored directory that is not in the
+   repo. All four skipped in CI and on every fresh clone. That is
+   audit finding C7 again (see tests/fixture_loaders.py), so the fix is
+   the same: commit the bytes. The two tables are 1.7 KB compressed.
+
+The mod's own file is NOT committed (it is someone else's work); only
+the two integer lists it sets, which are data.
 """
 from __future__ import annotations
 
-import json
-import struct
-import zipfile
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
 import pytest
 
-_BASE = Path(__file__).resolve().parents[1] / "issue_repro" / "190"
-_BODY = _BASE / "vanilla" / "equipslotinfo.pabgb"
-_HDR = _BASE / "vanilla" / "equipslotinfo.pabgh"
-_MODZIP = _BASE / "mod837_file10646.zip"
-_MODJSON = "CharacterCreator/Female Rapier and Shield Module.json"
+from tests.fixture_loaders import has_vanilla115, load_vanilla115
 
-
-def _have_fixtures() -> bool:
-    return _BODY.exists() and _HDR.exists() and _MODZIP.exists()
+_FIXTURE = "equipslotinfo.pabgb"
+_needs_fixture = pytest.mark.skipif(
+    not has_vanilla115(_FIXTURE),
+    reason="vanilla115 equipslotinfo fixture absent")
 
 
 @dataclass
@@ -43,18 +52,31 @@ class _Intent:
     new: Any
 
 
-def _mod_intents():
-    with zipfile.ZipFile(_MODZIP) as z:
-        data = json.loads(z.read(_MODJSON))
+def _body() -> bytes:
+    return load_vanilla115("equipslotinfo.pabgb")
+
+
+def _header() -> bytes:
+    return load_vanilla115("equipslotinfo.pabgh")
+
+
+def _mod_intents() -> list[_Intent]:
+    """The Female Rapier and Shield Module's two intents.
+
+    Transcribed from the mod's Format 3 JSON rather than read out of
+    the mod archive, so the test carries no third-party file.
+    """
     return [
-        _Intent(entry=r.get("entry", ""), key=r["key"], field=r["field"],
-                op=r.get("op", "set"), new=r["new"])
-        for r in data["targets"][0]["intents"]
+        _Intent(entry="", key=1, field="entries[0].etl_hashes", op="set",
+                new=[1584411264, 2594511993, 2327795645, 1187101662]),
+        _Intent(entry="", key=1, field="entries[1].etl_hashes", op="set",
+                new=[257028056, 1334259611, 1584411264, 2594511993,
+                     2327795645, 517658843, 1187101662]),
     ]
 
 
 def _entries(body, header):
-    from cdumm.semantic.parser import parse_pabgh_index, _parse_entry_header
+    from cdumm.semantic.parser import _parse_entry_header, parse_pabgh_index
     ks, offs = parse_pabgh_index(header, "equipslotinfo")
     spans = sorted(offs.values()) + [len(body)]
     out = {}
@@ -65,28 +87,91 @@ def _entries(body, header):
     return out
 
 
-@pytest.mark.skipif(not _have_fixtures(), reason="190 fixtures absent")
+# ── the drift itself ────────────────────────────────────────────────
+
+@_needs_fixture
+def test_block_size_is_derived_not_the_hardcoded_1_10_value():
+    """The regression that made the mod a no-op.
+
+    66 is what #190 measured on CD 1.10. The shipped table needs 63.
+    Deriving it is what keeps the writer working across game patches.
+    """
+    from cdumm.engine.equipslotinfo_writer import (
+        _FIXED_BLOCK, derive_fixed_block)
+    assert derive_fixed_block(_body(), _header()) == 63
+    assert _FIXED_BLOCK == 66, (
+        "the legacy default should stay 66 so nothing silently changes "
+        "for callers that don't derive")
+
+
+@_needs_fixture
+def test_the_legacy_block_size_desyncs_this_table():
+    """Proof the fix is load-bearing: 66 must NOT parse this table.
+
+    If a future refactor made 66 work again, deriving would be
+    pointless -- and, worse, ambiguous.
+    """
+    from cdumm.engine.equipslotinfo_writer import (
+        EquipslotWriteRefused, parse_entry_records)
+    body, header = _body(), _header()
+    _off, payload, end = _entries(body, header)[1]
+    with pytest.raises(EquipslotWriteRefused):
+        parse_entry_records(body, payload, end, 66)
+
+
+@_needs_fixture
+def test_derivation_is_unambiguous():
+    """Exactly one candidate may round-trip every entry.
+
+    ``derive_fixed_block`` raises when several qualify; this pins that
+    the real table is not one of those cases, so the writer isn't
+    quietly picking between equals.
+    """
+    from cdumm.engine.equipslotinfo_writer import (
+        _FIXED_BLOCK_MAX, parse_entry_records, serialize_entry_payload)
+    body, header = _body(), _header()
+    ents = _entries(body, header)
+    winners = []
+    for block in range(_FIXED_BLOCK_MAX):
+        try:
+            for _key, (_o, payload, end) in ents.items():
+                unk, recs, footer = parse_entry_records(
+                    body, payload, end, block)
+                assert serialize_entry_payload(
+                    unk, recs, footer, block) == body[payload:end]
+        except Exception:  # noqa: BLE001
+            continue
+        winners.append(block)
+    assert winners == [63]
+
+
+# ── the model ───────────────────────────────────────────────────────
+
+@_needs_fixture
 def test_every_vanilla_entry_round_trips_byte_exact():
     from cdumm.engine.equipslotinfo_writer import (
-        parse_entry_records, serialize_entry_payload)
-    body = _BODY.read_bytes()
-    header = _HDR.read_bytes()
+        derive_fixed_block, parse_entry_records, serialize_entry_payload)
+    body, header = _body(), _header()
+    block = derive_fixed_block(body, header)
     ents = _entries(body, header)
-    assert len(ents) == 14
+    assert len(ents) == 17
     for key, (_off, payload, end) in ents.items():
-        unk, records, footer = parse_entry_records(body, payload, end)
-        assert serialize_entry_payload(unk, records, footer) == \
+        unk, records, footer = parse_entry_records(
+            body, payload, end, block)
+        assert serialize_entry_payload(unk, records, footer, block) == \
             body[payload:end], f"entry {key} mis-round-tripped"
 
 
-@pytest.mark.skipif(not _have_fixtures(), reason="190 fixtures absent")
+# ── the mod ─────────────────────────────────────────────────────────
+
+@_needs_fixture
 def test_female_rapier_module_applies_end_to_end():
     from cdumm.engine.equipslotinfo_writer import (
-        build_equipslotinfo_changes, parse_entry_records)
-    from cdumm.semantic.parser import parse_pabgh_index, _parse_entry_header
+        build_equipslotinfo_changes, derive_fixed_block, parse_entry_records)
+    from cdumm.semantic.parser import _parse_entry_header, parse_pabgh_index
 
-    body = _BODY.read_bytes()
-    header = _HDR.read_bytes()
+    body, header = _body(), _header()
+    block = derive_fixed_block(body, header)
     intents = _mod_intents()
     assert len(intents) == 2
 
@@ -110,7 +195,8 @@ def test_female_rapier_module_applies_end_to_end():
     _, _, payload = _parse_entry_header(patched, offs[1], ks)
     spans = sorted(offs.values()) + [len(patched)]
     end = spans[spans.index(offs[1]) + 1]
-    _unk, records, _footer = parse_entry_records(patched, payload, end)
+    _unk, records, _footer = parse_entry_records(
+        patched, payload, end, block)
 
     assert records[0][1] == [v & 0xFFFFFFFF for v in intents[0].new]
     assert records[1][1] == [v & 0xFFFFFFFF for v in intents[1].new]
@@ -119,9 +205,9 @@ def test_female_rapier_module_applies_end_to_end():
     _, _, vpayload = _parse_entry_header(body, voffs[1], vk)
     vspans = sorted(voffs.values()) + [len(body)]
     vend = vspans[vspans.index(voffs[1]) + 1]
-    _vu, vrecords, _vf = parse_entry_records(body, vpayload, vend)
+    _vu, vrecords, _vf = parse_entry_records(body, vpayload, vend, block)
     assert [r[1] for r in records[2:]] == [r[1] for r in vrecords[2:]]
-    # fixed blocks preserved verbatim for ALL records
+    # opaque blocks preserved verbatim for ALL records
     assert [r[2] for r in records] == [r[2] for r in vrecords]
 
     # pabgh: every entry after entry 1 shifts by exactly +growth
@@ -130,19 +216,32 @@ def test_female_rapier_module_applies_end_to_end():
         assert offs[key] == expect, key
 
 
-@pytest.mark.skipif(not _have_fixtures(), reason="190 fixtures absent")
+@_needs_fixture
+def test_the_mod_actually_changes_bytes():
+    """The user-visible symptom, stated as an assertion.
+
+    Before the fix this produced zero changes -- CDUMM reported the
+    intents as supported and the mod did nothing in game.
+    """
+    from cdumm.engine.equipslotinfo_writer import build_equipslotinfo_changes
+    pabgb_changes, _pabgh = build_equipslotinfo_changes(
+        _body(), _header(), _mod_intents())
+    assert pabgb_changes, "the writer produced no change at all"
+    assert any(c["original"] != c["patched"] for c in pabgb_changes), (
+        "the writer produced a change that patches nothing")
+
+
+@_needs_fixture
 def test_out_of_range_record_index_refuses():
     from cdumm.engine.equipslotinfo_writer import (
         EquipslotWriteRefused, build_equipslotinfo_changes)
-    body = _BODY.read_bytes()
-    header = _HDR.read_bytes()
     bad = _Intent(entry="", key=1, field="entries[99].etl_hashes",
                   op="set", new=[1, 2, 3])
     with pytest.raises(EquipslotWriteRefused, match="out of range"):
-        build_equipslotinfo_changes(body, header, [bad])
+        build_equipslotinfo_changes(_body(), _header(), [bad])
 
 
-@pytest.mark.skipif(not _have_fixtures(), reason="190 fixtures absent")
+@_needs_fixture
 def test_validator_accepts_the_indexed_field_path():
     from cdumm.engine.format3_handler import Format3Intent, validate_intents
     intents = [
