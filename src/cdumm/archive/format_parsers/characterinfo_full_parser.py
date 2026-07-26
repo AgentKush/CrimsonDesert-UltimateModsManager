@@ -50,6 +50,20 @@ import struct
 
 log = logging.getLogger(__name__)
 
+# Post-bool-block walk (GitHub #302). The bool run that follows the
+# hash block is variable length, so nothing past it can be reached by a
+# fixed offset. It is terminated by this u32 constant, which is present
+# in 100% of the live table's 7105 records and marks the start of a
+# fixed-layout run (see parse_entry for the field map).
+_POST_BLOCK_ANCHOR = struct.pack('<I', 900000)
+
+# Validation gate for that walk: the u32 immediately before the target
+# field is f32 2.0. Every record that satisfies it decodes _f36 as a
+# clean 0..3 enum (142/142 measured on live 1.15), so it is treated as
+# proof the computed position is correct. Records that fail it yield no
+# offsets at all, leaving the writer to refuse the field by name.
+_POST_BLOCK_GATE = 1073741824
+
 
 def parse_pabgh_index(pabgh_data):
     """Parse characterinfo.pabgh: u16 count, then count * (u32 key + u32 offset)."""
@@ -217,6 +231,43 @@ def parse_entry(data, offset, end):
 
                 result['_boolBlock'] = bool_fields
                 result['_parsed_bytes'] = (bool_start + 40) - offset
+
+                # Post-bool-block walk (GitHub #302). The bool run is
+                # VARIABLE length, which is why every fixed offset past
+                # it lands on the wrong field; the run is followed by the
+                # u32 constant 900000, and from there the layout is
+                # fixed:
+                #   +0 900000 | +4 hash | +8 hash | +12..19 zeros
+                #   +20 u32=1 | +24 u32=1201 | +28 u32=1 | +32 u32=0
+                #   +36 COUNT | +40 [COUNT * u32] | 2.0f | TARGET | f36
+                # so the target is COMPUTED, never guessed:
+                #   target = anchor + 44 + count * 4
+                # Verified on the live table: Damian lands exactly on the
+                # two values the Character Creator 7.6 mod copies onto
+                # Kliff (1287066785 and 2), and the count term is what
+                # makes Kliff_AI (count=13) come out right where a fixed
+                # delta read 4 bytes off.
+                #
+                # GATE: the u32 immediately before the target must be
+                # 1073741824 (f32 2.0). Among every record that passes
+                # this gate, _f36 is a clean 0..3 enum (142/142 on the
+                # live 1.15 table), so a pass means the position is
+                # genuinely right. When it fails we emit nothing and the
+                # writer keeps refusing the field by name — never a
+                # write to a guessed offset.
+                _anchor = data.find(_POST_BLOCK_ANCHOR, bool_start, end)
+                if _anchor >= 0 and _anchor + 40 <= end:
+                    _cnt = struct.unpack_from('<I', data, _anchor + 36)[0]
+                    _t = _anchor + 44 + _cnt * 4
+                    if _t + 8 <= end and _t - 4 >= _anchor:
+                        _pre = struct.unpack_from('<I', data, _t - 4)[0]
+                        if _pre == _POST_BLOCK_GATE:
+                            result['_defaultActionActionIndex_offset'] = _t
+                            result['_defaultActionActionIndex'] = (
+                                struct.unpack_from('<I', data, _t)[0])
+                            result['_f36_offset'] = _t + 4
+                            result['_f36'] = struct.unpack_from(
+                                '<I', data, _t + 4)[0]
             else:
                 result['_partial_parse'] = True
 

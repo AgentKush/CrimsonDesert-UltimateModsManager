@@ -55,6 +55,17 @@ _FIELD_MAP: dict[str, tuple[str, int, str, int]] = {
     "skeleton_name": ("_skeletonName_offset", 0, "<I", 4),
     "lookup_25": ("_skeletonVariationName_offset", 0, "<I", 4),
     "flag_c": ("_flagC_offset", 0, "<B", 1),
+    # GitHub #302: the two post-bool-block fields the Character Creator 7.6
+    # mod also sets. The parser now WALKS to them (variable-length bool run
+    # -> 900000 anchor -> count-driven list -> these two u32s) and only
+    # publishes the offsets when its f32-2.0 gate confirms the position, so
+    # a record whose layout can't be verified simply has no offset key here
+    # and is refused by name below -- never written at a guessed position.
+    # `character_weight` is deliberately still absent: its slot could not be
+    # distinguished from the gate field itself, so it stays unmapped.
+    "default_action_action_index": (
+        "_defaultActionActionIndex_offset", 0, "<I", 4),
+    "f36": ("_f36_offset", 0, "<I", 4),
 }
 
 # CURRENT DMM Mod Builder naming (Character Creator / Female Animations 7.6,

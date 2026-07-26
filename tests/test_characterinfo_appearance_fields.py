@@ -122,8 +122,12 @@ def test_all_17_hash_block_intents_apply_and_match_the_source(table):
     offsets are right, not merely that a write happened."""
     body, header = table
     changes = build_characterinfo_changes(body, header, _MOD_INTENTS)
-    assert len(changes) == 17, (
-        f"expected 17 locatable intents, got {len(changes)}")
+    # 17 hash-block intents + the 6 post-block ones the walker can now
+    # locate and gate-verify (#302: default_action_action_index / f36 on
+    # Kliff, Kliff_AI, PlayerAll). Kliff_Clone fails the f32-2.0 gate and
+    # character_weight is still unmapped, so 2 remain refused.
+    assert len(changes) == 23, (
+        f"expected 23 locatable intents, got {len(changes)}")
 
     patched = _apply(body, changes)
     assert len(patched) == len(body), "writes must not resize the table"
@@ -171,16 +175,63 @@ def test_lookup_24_writes_its_real_slot_not_the_type_tag_constant(table):
 
 # ── the deferred fields are skipped, not guessed ────────────────────────
 
-def test_post_block_fields_are_skipped_not_written(table):
-    """default_action_action_index / character_weight / f36 sit in the
-    1.13 variable-length post-block region and cannot be fix-located, so
-    they are reported unsupported rather than written to a guess."""
+def test_post_block_fields_are_walked_or_refused_never_guessed(table):
+    """The 1.13 variable-length post-block region is now WALKED (#302):
+    the parser follows the variable bool run to the 900000 anchor, reads
+    the list count, computes ``target = anchor + 44 + count*4`` and only
+    publishes offsets when the f32-2.0 gate confirms the position.
+
+    So default_action_action_index / f36 are written where the gate
+    passes, and everything unverified is still refused by name — the
+    contract that matters is that nothing lands on a guess.
+    """
     body, header = table
     changes = build_characterinfo_changes(body, header, _MOD_INTENTS)
-    written = {c["label"].split(".", 1)[1] for c in changes}
-    assert not (_POST_BLOCK & written), (
-        f"a post-block field was written to a guessed offset: "
-        f"{_POST_BLOCK & written}")
+    written = {(c["label"].split(".", 1)[0], c["label"].split(".", 1)[1])
+               for c in changes}
+
+    # character_weight could not be distinguished from the gate field, so
+    # it must never be written for any record.
+    assert not [r for r, f in written if f == "character_weight"], (
+        "character_weight is unmapped and must stay refused")
+
+    # Kliff_Clone fails the gate (its list count is 0 and the preceding
+    # u32 is not 2.0f), so no post-block field may be written for it.
+    assert not [f for r, f in written
+                if r == "Kliff_Clone" and f in _POST_BLOCK], (
+        "Kliff_Clone fails the position gate; nothing may be written")
+
+    # Where the gate passes, the walk is trusted: these must apply.
+    for rec in ("Kliff", "Kliff_AI", "PlayerAll"):
+        assert (rec, "default_action_action_index") in written, (
+            f"{rec}.default_action_action_index should now be located")
+        assert (rec, "f36") in written, f"{rec}.f36 should now be located"
+
+
+def test_walked_post_block_matches_the_mod_source_record(table):
+    """Byte-exact proof the computed position is right, not merely
+    plausible: Damian is the record the mod copies, and the walker reads
+    exactly the two values the mod writes elsewhere (1287066785 / 2)."""
+    from cdumm.archive.format_parsers.characterinfo_full_parser import (
+        parse_entry, parse_pabgh_index,
+    )
+    body, header = table
+    idx = parse_pabgh_index(header)
+    order = sorted(idx.items(), key=lambda kv: kv[1])
+    got = {}
+    for rank, (key, start) in enumerate(order):
+        end = (order[rank + 1][1]
+               if rank + 1 < len(order) else len(body))
+        rec = parse_entry(body, start, end)
+        if rec and rec.get("name"):
+            got[rec["name"]] = rec
+    assert got["Damian"].get("_defaultActionActionIndex") == 1287066785
+    assert got["Damian"].get("_f36") == 2
+    # Kliff's current value is 0 — the mod's job is to make it Damian's.
+    assert got["Kliff"].get("_defaultActionActionIndex") == 0
+    # Kliff_Clone must publish NO offsets (gate refused).
+    assert got["Kliff_Clone"].get("_defaultActionActionIndex") is None
+    assert got["Kliff_Clone"].get("_f36_offset") is None
 
 
 # ── the discriminator, and legacy mods are untouched ────────────────────
