@@ -37,13 +37,15 @@ import struct
 
 import pytest
 
-from tests.fixture_loaders import load_vanilla113
-from cdumm.engine.characterinfo_writer import (
-    build_characterinfo_changes, SUPPORTED_FIELDS,
-)
 from cdumm.archive.format_parsers.characterinfo_full_parser import (
-    parse_pabgh_index, parse_entry,
+    parse_entry,
+    parse_pabgh_index,
 )
+from cdumm.engine.characterinfo_writer import (
+    SUPPORTED_FIELDS,
+    build_characterinfo_changes,
+)
+from tests.fixture_loaders import load_vanilla113
 
 # The real 7.6 mod's intents: (entry_name, key, field, new_value).
 _HASH = 0  # marker for readability only
@@ -213,7 +215,8 @@ def test_walked_post_block_matches_the_mod_source_record(table):
     plausible: Damian is the record the mod copies, and the walker reads
     exactly the two values the mod writes elsewhere (1287066785 / 2)."""
     from cdumm.archive.format_parsers.characterinfo_full_parser import (
-        parse_entry, parse_pabgh_index,
+        parse_entry,
+        parse_pabgh_index,
     )
     body, header = table
     idx = parse_pabgh_index(header)
@@ -303,6 +306,7 @@ def test_gate_is_unambiguous_first_anchor_is_the_only_pass(table):
     already optimal rather than leaving positions undiscovered.
     """
     import struct as _s
+
     from cdumm.archive.format_parsers import characterinfo_full_parser as cp
     body, header = table
     idx = cp.parse_pabgh_index(header)
