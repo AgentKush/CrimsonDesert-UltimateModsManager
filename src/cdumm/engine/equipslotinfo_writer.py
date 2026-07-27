@@ -1,28 +1,37 @@
 """Format 3 writer for equipslotinfo.pabgb ``entries[N].etl_hashes``
 (GitHub #190, Character Creator's Female Rapier and Shield Module).
 
-Layout (clean-room RE against the CD 1.10 vanilla file; every one of
-the 14 entries round-trips byte-exact under this model, see
-tests/test_equipslotinfo_writer.py):
+Layout (clean-room RE, every entry of the vanilla file round-trips
+byte-exact under this model, see tests/test_equipslotinfo_writer.py):
 
 entry payload (after u32 entry_id + u32 name_len + name + NUL):
     u16  unk                  (0..4 in vanilla; category/page index)
     u32  record_count
     record * record_count
-    u32  footer_count         (0 in 13 of 14 entries; 5 in entry 701)
+    u32  footer_count         (0 in most entries; 5 in entry 701)
     footer_item * footer_count  (opaque 20 bytes each)
     u32  const 0xb954d87c     (entry terminator)
 
 record:
     u32  etl_count
     u32 * etl_count           (the ``etl_hashes`` the mods set)
-    66B  fixed block          (opaque; carries an 8-byte hash pair at
-                               +26 that is constant in most records)
+    NB   opaque block         (preserved verbatim; N is per-version,
+                               see :func:`derive_fixed_block`)
 
 The DMM field path ``entries[N].etl_hashes`` addresses record N of the
 store entry selected by the intent ``key``. Mods grow or shrink the
-hash list of EXISTING records; the fixed 66-byte block is preserved
-verbatim from vanilla, so nothing unmapped is ever synthesized.
+hash list of EXISTING records; the opaque block is preserved verbatim
+from vanilla, so nothing unmapped is ever synthesized.
+
+**The opaque block's size is per-game-version and is derived from the
+table, not hardcoded.** #190 RE'd it as 66 bytes on CD 1.10; on 1.15 it
+is 63. A hardcoded 66 desyncs at the second record of every multi-record
+entry ("implausible etl count ... at 97"), so the writer refused every
+intent and Character Creator's Female Rapier and Shield Module applied
+nothing while reporting no skips. :func:`derive_fixed_block` recovers
+the real size by requiring a candidate to re-serialize EVERY entry
+byte-exact, and refuses when zero or several candidates qualify -- so a
+future layout change surfaces as a clean refusal, never a wrong write.
 """
 from __future__ import annotations
 
@@ -35,6 +44,14 @@ from cdumm.semantic.parser import parse_pabgh_index, _parse_entry_header
 logger = logging.getLogger(__name__)
 
 _FIXED_BLOCK = 66
+"""Legacy default (CD 1.10). Only used when a caller doesn't pass an
+explicit size; ``build_equipslotinfo_changes`` always derives one."""
+
+# Search bound for derive_fixed_block. The observed sizes are 63 and 66;
+# 256 leaves generous headroom for a future layout without making the
+# sweep expensive (the table is ~17 KB).
+_FIXED_BLOCK_MAX = 256
+
 _FOOTER_ITEM = 20
 _TERMINATOR = 0xB954D87C
 
@@ -45,7 +62,8 @@ class EquipslotWriteRefused(ValueError):
     """The intent cannot be applied without risking a corrupt table."""
 
 
-def parse_entry_records(body: bytes, payload: int, entry_end: int
+def parse_entry_records(body: bytes, payload: int, entry_end: int,
+                        block: int = _FIXED_BLOCK
                         ) -> tuple[int, list[tuple[int, list[int], bytes]],
                                    bytes]:
     """Parse one entry's payload.
@@ -55,6 +73,9 @@ def parse_entry_records(body: bytes, payload: int, entry_end: int
     bytes from footer_count through the terminator inclusive.
     Raises :class:`EquipslotWriteRefused` when the bytes do not match
     the verified model.
+
+    ``block`` is the opaque per-record block size for this game version
+    (see :func:`derive_fixed_block`).
     """
     u16 = lambda p: struct.unpack_from("<H", body, p)[0]
     u32 = lambda p: struct.unpack_from("<I", body, p)[0]
@@ -72,12 +93,12 @@ def parse_entry_records(body: bytes, payload: int, entry_end: int
         if c > 64:
             raise EquipslotWriteRefused(
                 f"record {i}: implausible etl count {c} at {p}")
-        if p + 4 + 4 * c + _FIXED_BLOCK > entry_end:
+        if p + 4 + 4 * c + block > entry_end:
             raise EquipslotWriteRefused(f"record {i} overruns entry")
         hashes = [u32(p + 4 + 4 * j) for j in range(c)]
-        fixed = body[p + 4 + 4 * c:p + 4 + 4 * c + _FIXED_BLOCK]
+        fixed = body[p + 4 + 4 * c:p + 4 + 4 * c + block]
         records.append((c, hashes, fixed))
-        p += 4 + 4 * c + _FIXED_BLOCK
+        p += 4 + 4 * c + block
     if p + 4 > entry_end:
         raise EquipslotWriteRefused("footer count overruns entry")
     fcount = u32(p)
@@ -95,20 +116,75 @@ def parse_entry_records(body: bytes, payload: int, entry_end: int
 
 def serialize_entry_payload(unk: int,
                             records: list[tuple[int, list[int], bytes]],
-                            footer: bytes) -> bytes:
+                            footer: bytes,
+                            block: int = _FIXED_BLOCK) -> bytes:
     out = bytearray()
     out += struct.pack("<H", unk)
     out += struct.pack("<I", len(records))
     for _c, hashes, fixed in records:
-        if len(fixed) != _FIXED_BLOCK:
+        if len(fixed) != block:
             raise EquipslotWriteRefused(
-                f"fixed block must be {_FIXED_BLOCK} bytes")
+                f"fixed block must be {block} bytes")
         out += struct.pack("<I", len(hashes))
         for h in hashes:
             out += struct.pack("<I", h & 0xFFFFFFFF)
         out += fixed
     out += footer
     return bytes(out)
+
+
+def _entry_spans(body: bytes, header: bytes
+                 ) -> list[tuple[int, int, int]]:
+    """Return ``(key, payload_offset, entry_end)`` for every entry."""
+    key_size, offsets = parse_pabgh_index(header, "equipslotinfo")
+    if not offsets:
+        return []
+    sorted_offs = sorted(offsets.values()) + [len(body)]
+    spans = []
+    for key, off in offsets.items():
+        end = sorted_offs[sorted_offs.index(off) + 1]
+        _eid, _name, payload = _parse_entry_header(body, off, key_size)
+        spans.append((key, payload, end))
+    return spans
+
+
+def derive_fixed_block(body: bytes, header: bytes) -> int:
+    """Recover the opaque per-record block size from the table itself.
+
+    Pearl Abyss changed this between game versions (66 bytes on CD 1.10,
+    63 on 1.15), and a wrong value silently desyncs the record walk. The
+    size is recoverable without any version knowledge because the entry
+    must tile exactly: a candidate is accepted only if EVERY entry both
+    parses and re-serializes byte-identically under it.
+
+    Returns the single qualifying size. Raises
+    :class:`EquipslotWriteRefused` when none qualifies (unknown layout)
+    or when several do (ambiguous) -- refusing is always preferable to
+    writing at a position we cannot prove.
+    """
+    spans = _entry_spans(body, header)
+    if not spans:
+        raise EquipslotWriteRefused("pabgh index has no entries")
+    winners = []
+    for block in range(_FIXED_BLOCK_MAX):
+        for _key, payload, end in spans:
+            try:
+                unk, records, footer = parse_entry_records(
+                    body, payload, end, block)
+            except EquipslotWriteRefused:
+                break
+            if serialize_entry_payload(
+                    unk, records, footer, block) != body[payload:end]:
+                break
+        else:
+            winners.append(block)
+    if len(winners) == 1:
+        return winners[0]
+    raise EquipslotWriteRefused(
+        f"cannot determine the opaque record block size for this "
+        f"equipslotinfo layout ({len(winners)} candidates round-trip "
+        f"all {len(spans)} entries: {winners}); refusing rather than "
+        f"guessing a write position")
 
 
 def build_equipslotinfo_changes(
@@ -189,13 +265,21 @@ def build_equipslotinfo_changes(
     if not per_key:
         return [], None
 
+    # The opaque block size is per-game-version; derive it from this
+    # table before touching a byte (see derive_fixed_block).
+    block = derive_fixed_block(vanilla_body, vanilla_header)
+    if block != _FIXED_BLOCK:
+        logger.info(
+            "equipslotinfo writer: opaque record block is %d bytes on "
+            "this game version (legacy default %d)", block, _FIXED_BLOCK)
+
     replacements: dict[int, tuple[int, int, bytes]] = {}
     for key, idx_map in per_key.items():
         off = offsets[key]
         entry_end = sorted_offs[sorted_offs.index(off) + 1]
         _, _, payload = _parse_entry_header(vanilla_body, off, key_size)
         unk, records, footer = parse_entry_records(
-            vanilla_body, payload, entry_end)
+            vanilla_body, payload, entry_end, block)
         # Round-trip identity (audit 2026-06-11, the iteminfo/skill
         # writers gate on an explicit identity serialize): no separate
         # pre-flight is needed here because parse_entry_records and
@@ -206,8 +290,11 @@ def build_equipslotinfo_changes(
         # EquipslotWriteRefused for anything outside the verified
         # model instead of parsing lossily. Untouched records
         # therefore reproduce their vanilla bytes exactly;
-        # tests/test_equipslotinfo_writer.py pins the 14-entry
-        # round-trip on the real table.
+        # tests/test_equipslotinfo_writer.py pins the whole-table
+        # round-trip on the committed vanilla extract. Since #190 the
+        # block size is derived rather than assumed, and
+        # derive_fixed_block already proved this exact round-trip for
+        # every entry before we get here.
         for idx, hashes in idx_map.items():
             if not (0 <= idx < len(records)):
                 raise EquipslotWriteRefused(
@@ -215,7 +302,7 @@ def build_equipslotinfo_changes(
                     f"(entry has {len(records)} records)")
             c, _old, fixed = records[idx]
             records[idx] = (len(hashes), list(hashes), fixed)
-        new_payload = serialize_entry_payload(unk, records, footer)
+        new_payload = serialize_entry_payload(unk, records, footer, block)
         replacements[key] = (payload, entry_end, new_payload)
         logger.info(
             "equipslotinfo writer: entry %d, %d record(s) updated, "
