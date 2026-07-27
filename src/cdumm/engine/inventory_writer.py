@@ -111,6 +111,20 @@ def build_inventory_changes(
         if rs is None:
             dropped.append((i, f"no inventory record named {entry!r}"))
             continue
+        # KNOWN LIMIT (review, GitHub #304): this search is unbounded, so a
+        # table that ever ships a record WITHOUT a marker would let it run
+        # into the next record and patch that record's slot counts instead.
+        # Every record in both committed fixtures (1.13 and 1.15) has
+        # exactly one marker -- 20 records, 20 markers, each inside its own
+        # bounds -- so the case is hypothetical today.
+        #
+        # The obvious bound (scan forward for the next
+        # `<u32 len><name><0x00>` envelope) does NOT work: records run to
+        # ~2.8 KB and their interior data contains byte runs that match that
+        # envelope shape, so the bound lands before the real marker and
+        # refuses all 20 working records. A correct bound needs the record
+        # boundaries derived some other way; deferred rather than shipped
+        # broken.
         m = vanilla_body.find(_MARK, rs)
         if m < 0:
             dropped.append((i, (f"inventory record {entry!r}: slot marker "
