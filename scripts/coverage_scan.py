@@ -34,8 +34,10 @@ _SRC = Path(__file__).resolve().parent.parent / "src"
 if _SRC.is_dir() and str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
-from cdumm.engine.format3_handler import (  # noqa: E402
-    parse_format3_mod_targets, validate_intents, _table_name_from_target,
+from cdumm.engine.format3_handler import (
+    _table_name_from_target,
+    parse_format3_mod_targets,
+    validate_intents,
 )
 
 Gap = collections.namedtuple("Gap", "table field reason mod")
@@ -53,13 +55,17 @@ def scan_file(path: Path) -> list[Gap]:
     """
     try:
         pairs = parse_format3_mod_targets(path)
-    except Exception:
+    except Exception:  # noqa: BLE001 -- see below
+        # Blind by design: this scanner is pointed at whole directories of
+        # mixed content, so "unparseable" is the common case, not an error.
+        # Narrowing this would mean enumerating every way a non-Format-3
+        # file can fail to parse, and a miss would abort a corpus scan.
         return []  # not a Format-3 mod (PAZ metadata, v2 patch, malformed)
     gaps: list[Gap] = []
     for target, intents in pairs:
         try:
             result = validate_intents(target, intents)
-        except Exception:
+        except Exception:  # noqa: BLE001, S112 -- see above; skip is the point
             continue
         table = _table_name_from_target(target)
         for intent, reason in result.skipped:
