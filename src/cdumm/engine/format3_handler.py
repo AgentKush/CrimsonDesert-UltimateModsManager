@@ -662,6 +662,12 @@ _V32_RESERVED_OPS = frozenset({
 # only needs to recognise the shape so the intent reaches that writer.
 _STATUSINFO_SLD_RE = re.compile(r"^stat_level_data\[\d+\]$")
 
+# statusgroupinfo status_info_list[N] path. The statusgroupinfo_writer
+# refuses records that don't tile under the known grammar and indexes that
+# more than one list could satisfy; this only recognises the shape.
+_STATUSGROUP_SIL_RE = re.compile(r"^status_info_list\[\d+\]$")
+
+
 def _partition_unsupported_op(
     intent: Format3Intent,
 ) -> str | None:
@@ -1516,6 +1522,15 @@ def _classify_intent(
     # doesn't fit once shifted -- each dropped cleanly at apply time with a
     # logged warning, mirroring the multichangeinfo/stringinfo early-accept.
     if tn_norm == "statusinfo" and _STATUSINFO_SLD_RE.match(intent.field) \
+            and type(getattr(intent, "new", None)) is int:
+        return None
+
+    # statusgroupinfo: status_info_list[N] holds a statusinfo record key.
+    # statusgroupinfo has no CDUMM PABGB schema, so the generic walker
+    # can't resolve it; the clean-room statusgroupinfo writer walks the
+    # record's list grammar and refuses anything it can't place uniquely.
+    if tn_norm == "statusgroupinfo" \
+            and _STATUSGROUP_SIL_RE.match(intent.field) \
             and type(getattr(intent, "new", None)) is int:
         return None
 
