@@ -45,9 +45,11 @@ Offsets are into the DECOMPRESSED file content. The handler:
 
 import json
 import logging
+import math
 import os
 import shutil
 import struct
+from collections import Counter
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -338,6 +340,63 @@ def detect_json_patches_all(path: Path) -> list[dict]:
     return valid
 
 
+#: Bytes sampled when testing whether a stored entry is ciphertext.
+#: ChaCha20 is a stream cipher keyed from offset 0, so decrypting a
+#: prefix yields the same bytes as the prefix of a full decrypt --
+#: verified against a real overlay at 1 KB, 4 KB and 8 KB.
+_ENCRYPTION_PROBE_BYTES = 64 * 1024
+
+#: A stored entry is only probed when it looks random. Real game tables
+#: are 47-64% zero bytes; ChaCha20 output is about 1 in 256. The gate
+#: keeps the probe (and its decrypt) off every ordinary file.
+_CIPHERTEXT_MAX_ZERO_FRACTION = 0.05
+
+#: Minimum entropy DROP, in bits/byte, before a decrypt is believed.
+#: Measured: genuinely encrypted content falls 3.26-4.29 bits when
+#: decrypted, because decryption reveals structure. Nothing else can --
+#: "decrypting" plaintext re-randomises it, so the change is 0 or
+#: negative: a plaintext game table goes UP 4.29-4.75, and an
+#: already-compressed payload stored as-is moves 0.002-0.014 the wrong
+#: way. 1.0 leaves a 3x margin on the true side and is never approached
+#: from the false side.
+_MIN_ENTROPY_DROP = 1.0
+
+
+def _shannon_entropy(data: bytes) -> float:
+    """Bits per byte. 8.0 is uniformly random."""
+    if not data:
+        return 0.0
+    counts = Counter(data)
+    n = len(data)
+    return -sum((c / n) * math.log2(c / n) for c in counts.values())
+
+
+def _looks_encrypted(raw: bytes, basename: str) -> bool:
+    """True when ``raw`` is ciphertext that ``decrypt`` can open.
+
+    Decides by comparison, never by a threshold on ``raw`` alone: a
+    stored-uncompressed entry may legitimately BE high-entropy plaintext
+    (an already-compressed payload), and that is indistinguishable from
+    ciphertext by entropy, zero-fraction or any other property of the
+    bytes in isolation. What separates them is what decryption DOES --
+    it reveals structure in real ciphertext and adds noise to anything
+    else, so the test is directional and cannot fire on plaintext.
+    """
+    if len(raw) < 256:
+        return False                      # too small to measure
+    sample = raw[:_ENCRYPTION_PROBE_BYTES]
+    if sample.count(0) / len(sample) > _CIPHERTEXT_MAX_ZERO_FRACTION:
+        return False                      # far too structured to be cipher
+    try:
+        opened = decrypt(sample, basename)
+    except Exception:                     # noqa: BLE001 - probe only
+        return False
+    if len(opened) != len(sample):
+        return False
+    return (_shannon_entropy(sample) - _shannon_entropy(opened)
+            >= _MIN_ENTROPY_DROP)
+
+
 def decompress_entry(raw: bytes, entry: PazEntry) -> bytes:
     """Decompress raw PAZ entry bytes based on the entry's compression type.
 
@@ -435,6 +494,20 @@ def decompress_entry(raw: bytes, entry: PazEntry) -> bytes:
         return result
 
     if entry.encrypted:
+        return decrypt(raw, basename)
+
+    # Uncompressed entry, and the filename heuristic said "plaintext".
+    # The heuristic only knows ui/ text formats (.xml/.css/.html/.js), so
+    # a mod-authored overlay that encrypts anything else -- a .pabgb game
+    # table, say -- was returned as raw ciphertext and looked like a
+    # corrupt file rather than an encrypted one. Every compressed path
+    # above already self-corrects (LZ4 fails -> retry via decrypt); this
+    # was the one route with no detection at all.
+    if _looks_encrypted(raw, basename):
+        logger.info(
+            "Corrected encrypted flag for %s (stored uncompressed, "
+            "content is ChaCha20 ciphertext)", entry.path)
+        entry._encrypted_override = True
         return decrypt(raw, basename)
 
     return raw
