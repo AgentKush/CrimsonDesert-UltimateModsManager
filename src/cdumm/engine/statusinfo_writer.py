@@ -104,8 +104,8 @@ def build_statusinfo_changes(
             continue
         op = getattr(i, "op", "set") or "set"
         if op != "set":
-            dropped.append((i, f"op {op!r} not supported for stat_level_data "
-                               f"(only 'set')"))
+            dropped.append((i, (f"op {op!r} not supported for stat_level_data "
+                               f"(only 'set')")))
             continue
         raw_key = getattr(i, "key", None)
         try:
@@ -115,14 +115,14 @@ def build_statusinfo_changes(
             continue
         idx = int(m.group(1))
         if not 0 <= idx < _SLD_COUNT:
-            dropped.append((i, f"stat_level_data index {idx} out of range "
-                               f"0..{_SLD_COUNT - 1}"))
+            dropped.append((i, (f"stat_level_data index {idx} out of range "
+                               f"0..{_SLD_COUNT - 1}")))
             continue
         packed = _pack_i64(getattr(i, "new", None)) \
             if isinstance(getattr(i, "new", None), int) else None
         if packed is None:
-            dropped.append((i, f"value {getattr(i, 'new', None)!r} does not "
-                               f"fit a 64-bit stat_level_data element"))
+            dropped.append((i, (f"value {getattr(i, 'new', None)!r} does not "
+                               f"fit a 64-bit stat_level_data element")))
             continue
         by_key.setdefault(key, []).append((idx, packed, i))
 
@@ -146,10 +146,10 @@ def build_statusinfo_changes(
         # stat (84-byte tail) has no such array -- refuse, never write.
         if len(tail) != _RATE_TAIL_LEN:
             for _, _, i in writes:
-                dropped.append((i, f"record key {key} is not a rate stat "
+                dropped.append((i, (f"record key {key} is not a rate stat "
                                    f"(tail {len(tail)}B, expected "
                                    f"{_RATE_TAIL_LEN}B) -- it has no "
-                                   f"stat_level_data"))
+                                   f"stat_level_data")))
             continue
         new_rec = bytearray(rec)
         blk = tail_start + _SLD_TAIL_OFFSET
@@ -167,3 +167,4 @@ def build_statusinfo_changes(
             "patched": bytes(new_rec)[blk: blk + span].hex(),
         })
     return changes, dropped
+
