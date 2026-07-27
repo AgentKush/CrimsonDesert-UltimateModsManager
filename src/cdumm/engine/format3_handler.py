@@ -1152,6 +1152,14 @@ LIST_WRITERS: dict[tuple[str, str], str] = {
         "inventory_writer.build_inventory_changes",
     ("inventory", "need_save_slots"):
         "inventory_writer.build_inventory_changes",
+    # knowledgeinfo is_default (recipe / elemental unlock mods). The
+    # schema declares _isDefault as a direct_15B tagged primitive, which
+    # validate_intents refuses because the schema doesn't say where in
+    # those bytes the value sits. knowledgeinfo_writer locates it.
+    ("knowledgeinfo", "is_default"):
+        "knowledgeinfo_writer.build_knowledgeinfo_changes",
+    ("knowledgeinfo", "isDefault"):
+        "knowledgeinfo_writer.build_knowledgeinfo_changes",
     # skill: current DMM addresses ONE element of the resource-stat list
     # and one field inside it, by letter -- ``use_resource_stat_list[0]
     # .d``. ``_routable`` normalizes ``[0]`` to ``[]``, the same wildcard
