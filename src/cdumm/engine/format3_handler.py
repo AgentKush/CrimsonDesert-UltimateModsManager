@@ -1135,6 +1135,16 @@ LIST_WRITERS: dict[tuple[str, str], str] = {
         "inventory_writer.build_inventory_changes",
     ("inventory", "need_save_slot_count"):
         "inventory_writer.build_inventory_changes",
+    # Current DMM Mod Builder naming (the ``_count`` suffix was dropped).
+    # AXIOM's "Inventory Space 240/700" uses these and applied 0 bytes
+    # because only the legacy names were registered. Same slots -- see
+    # inventory_writer._SLOT_FIELD_OFFSET.
+    ("inventory", "default_slots"):
+        "inventory_writer.build_inventory_changes",
+    ("inventory", "max_slots"):
+        "inventory_writer.build_inventory_changes",
+    ("inventory", "need_save_slots"):
+        "inventory_writer.build_inventory_changes",
 }
 
 
