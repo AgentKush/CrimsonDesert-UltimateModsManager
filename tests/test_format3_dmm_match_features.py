@@ -18,7 +18,6 @@ from cdumm.engine.format3_handler import (
     validate_intents,
 )
 from cdumm.semantic.parser import parse_pabgh_index
-
 from tests.fixture_loaders import has_vanilla113, load_vanilla113
 
 FIXTURE = "iteminfo.pabgb"

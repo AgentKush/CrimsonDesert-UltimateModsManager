@@ -31,7 +31,7 @@ def _mod(tmp_path, file, intents):
 def test_parser_accepts_scale_intent(tmp_path):
     p = _mod(tmp_path, "dropsetinfo.pabgb", [
         {"field": "list[*].raw_40", "op": "scale", "factor": 100, "match": {}}])
-    (target, intents), = parse_format3_mod_targets(p)
+    (_target, intents), = parse_format3_mod_targets(p)
     assert len(intents) == 1
     it = intents[0]
     assert it.op == "scale" and it.factor == 100 and it.new is None
@@ -66,3 +66,4 @@ def test_set_intent_still_requires_new(tmp_path):
         {"field": "max_stack_count", "match": {}, "op": "set"}])  # no new
     with pytest.raises(ValueError):
         parse_format3_mod_targets(p)
+
