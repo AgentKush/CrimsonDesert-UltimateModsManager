@@ -1104,6 +1104,14 @@ LIST_WRITERS: dict[tuple[str, str], str] = {
         "skill_writer.build_skill_intent_change",
     ("skill", "_buffLevelList"):
         "skill_writer.build_skill_intent_change",
+    # knowledgeinfo is_default (recipe / elemental unlock mods). The
+    # schema declares _isDefault as a direct_15B tagged primitive, which
+    # validate_intents refuses because the schema doesn't say where in
+    # those bytes the value sits. knowledgeinfo_writer locates it.
+    ("knowledgeinfo", "is_default"):
+        "knowledgeinfo_writer.build_knowledgeinfo_changes",
+    ("knowledgeinfo", "isDefault"):
+        "knowledgeinfo_writer.build_knowledgeinfo_changes",
 }
 
 
