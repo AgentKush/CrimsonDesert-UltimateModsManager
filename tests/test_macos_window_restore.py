@@ -7,8 +7,7 @@ from types import SimpleNamespace
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QSystemTrayIcon
 
-import cdumm.gui.app_icon as app_icon
-import cdumm.gui.fluent_window as fluent_window
+from cdumm.gui import app_icon, fluent_window
 from cdumm.gui.fluent_window import CdummWindow
 
 

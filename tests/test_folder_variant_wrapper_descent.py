@@ -14,7 +14,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from cdumm.gui.preset_picker import (
-    find_folder_variants, descend_to_folder_variants,
+    descend_to_folder_variants,
+    find_folder_variants,
 )
 
 

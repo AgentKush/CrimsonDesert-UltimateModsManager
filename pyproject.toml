@@ -28,7 +28,11 @@ dev = [
     "pytest-qt>=4.4",
     "pytest-xdist>=3.5",
     "pyinstaller>=6.0",
-    "ruff>=0.4",
+    # Pinned, not a floor: ruff enables new rules in minor releases, so a
+    # range means CI and your machine can disagree about whether the same
+    # code is clean. Keep in step with the pin in
+    # .github/workflows/windows-tests.yml, and bump both in one deliberate PR.
+    "ruff==0.16.0",
 ]
 
 [build-system]

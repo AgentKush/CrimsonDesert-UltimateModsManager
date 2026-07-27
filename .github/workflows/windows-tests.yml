@@ -52,7 +52,18 @@ jobs:
         with:
           python-version: '3.13'
       - name: Install ruff
-        run: python -m pip install ruff
+        # PINNED deliberately. Unpinned, a ruff release enabling new rules
+        # fails this gate on a PR that changed nothing -- which is exactly
+        # what happened on the #308 merge (e242e88): the PR passed on an
+        # older ruff, then master failed with 6 findings under 0.16.0, on
+        # identical code. A linter that can turn red on its own is one people
+        # learn to ignore, which defeats the point of the gate above.
+        #
+        # Bump this on purpose, in its own PR, so the new findings land as
+        # reviewable work rather than as a surprise on someone else's change.
+        # Keep it in step with the `ruff==` pin in pyproject.toml's dev extra
+        # so local runs match CI.
+        run: python -m pip install ruff==0.16.0
       - name: New files must be clean (gate)
         shell: bash
         run: |
