@@ -15,11 +15,10 @@ import pytest
 
 from cdumm.engine.format3_handler import Format3Intent, validate_intents
 from cdumm.engine.inventory_writer import (
-    _find_record_start,
     _MARK,
+    _find_record_start,
     build_inventory_changes,
 )
-
 from tests.fixture_loaders import has_vanilla113, load_vanilla113
 
 FIXTURE = "inventory.pabgb"

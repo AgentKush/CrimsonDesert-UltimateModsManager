@@ -23,7 +23,6 @@ import pytest
 from cdumm.engine.format3_handler import Format3Intent, validate_intents
 from cdumm.engine.statusinfo_writer import build_statusinfo_changes
 from cdumm.semantic.parser import parse_pabgh_index
-
 from tests.fixture_loaders import has_vanilla113, load_vanilla113
 
 FIXTURE = "statusinfo.pabgb"
@@ -99,7 +98,7 @@ def test_every_other_record_is_byte_identical():
     body = load_vanilla113("statusinfo.pabgb")
     header = load_vanilla113("statusinfo.pabgh")
     intents = [_intent(MOVE_SPEED, i, 2_500_000_000) for i in range(16)]
-    changes, dropped = build_statusinfo_changes(body, header, intents)
+    changes, _dropped = build_statusinfo_changes(body, header, intents)
     modified = _apply(body, changes)
 
     _, offsets = parse_pabgh_index(header, "statusinfo")
@@ -240,3 +239,4 @@ def test_end_to_end_cdmod_to_byte_change(tmp_path):
     assert len(modified) == len(body)
     _, rec = _record(modified, header, MOVE_SPEED)
     assert _stat_level_data(rec) == [2_500_000_000] * 16
+
