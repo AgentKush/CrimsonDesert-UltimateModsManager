@@ -33,6 +33,7 @@ Single-line wire-up in apply_engine.py is the next commit.
 from __future__ import annotations
 
 import logging
+import re
 import struct
 from pathlib import Path
 from typing import Callable, NamedTuple
@@ -1665,19 +1666,30 @@ def _intents_to_v2_changes(
     #      gives a tid/offset/type for primitive writes.
     if not has_cdumm_schema:
         fs_entries_no_schema = load_field_schema(table_name)
+        def _has_list_writer(field: str) -> bool:
+            # Indexed paths are registered under a wildcard key
+            # ('entries[].etl_hashes', 'use_resource_stat_list[].d'),
+            # exactly as validate_intents._routable normalizes them.
+            # Matching only the raw field here is why skill's indexed
+            # element paths passed validation and then produced no
+            # change at all.
+            if (table_name, field) in LIST_WRITERS:
+                return True
+            normalized = re.sub(r"\[\d+\]", "[]", field or "")
+            return (table_name, normalized) in LIST_WRITERS
+
         list_routable = [
-            i for i in intents
-            if (table_name, i.field) in LIST_WRITERS
+            i for i in intents if _has_list_writer(i.field)
         ]
         fs_routable = [
             i for i in intents
-            if (table_name, i.field) not in LIST_WRITERS
+            if not _has_list_writer(i.field)
             and i.field in fs_entries_no_schema
             and i.old is None
         ]
         raw_routable = [
             i for i in intents
-            if (table_name, i.field) not in LIST_WRITERS
+            if not _has_list_writer(i.field)
             and i.old is not None
         ]
         if not list_routable and not fs_routable and not raw_routable:
@@ -1970,10 +1982,19 @@ def _intents_to_v2_changes(
                      or _is_iteminfo_nested_path(intent.field))):
             iteminfo_batch.append(intent)
             continue
-        if (table_name == "skill"
-                and (table_name, intent.field) in LIST_WRITERS):
-            skill_batch.append(intent)
-            continue
+        if table_name == "skill":
+            # Whole-list names come from LIST_WRITERS; current DMM also
+            # addresses one element by letter
+            # (``use_resource_stat_list[0].d``), which the same
+            # whole-table writer handles.
+            from cdumm.engine.skill_writer import (
+                parse_indexed_element_field,
+            )
+            if ((table_name, intent.field) in LIST_WRITERS
+                    or parse_indexed_element_field(intent.field)
+                    is not None):
+                skill_batch.append(intent)
+                continue
 
         if intent.key not in entry_bounds:
             continue
