@@ -675,9 +675,13 @@ def expand_format3_into_aggregated(
     # variable-length _buffer string per record (records change length)
     # and rebuilds the companion stringinfo.pabgh offsets in one pass
     # (GitHub #224 Female Armor Module).
+    # statusgroupinfo.pabgb is whole-table because the writer walks each
+    # record's list grammar itself (statusgroupinfo has no CDUMM schema).
+    # The writes are length-preserving, so no .pabgh rebuild.
     _WHOLE_TABLE_TARGETS = {
         "iteminfo.pabgb", "skill.pabgb", "multichangeinfo.pabgb",
-        "storeinfo.pabgb", "equipslotinfo.pabgb", "stringinfo.pabgb"}
+        "storeinfo.pabgb", "equipslotinfo.pabgb", "stringinfo.pabgb",
+        "statusgroupinfo.pabgb"}
     whole_table_intents: dict[str, list] = {}
     whole_table_mod_names: dict[str, list[str]] = {}
     # Per-INTENT mod attribution, index-aligned with
@@ -1118,6 +1122,75 @@ def expand_format3_into_aggregated(
                     len(batched), len(contributing_mods), len(pabgb_changes),
                     ", + pabgh offset rebuild"
                     if pabgh_change is not None else "")
+                continue
+
+            # statusgroupinfo.pabgb: status_info_list[i] holds a statusinfo
+            # record key. Length-preserving u32 element writes, so no
+            # companion .pabgh rebuild. The writer refuses any record that
+            # does not tile exactly under the known list grammar, and any
+            # index another list in the same record could also satisfy.
+            if target == "statusgroupinfo.pabgb":
+                from cdumm.engine.statusgroupinfo_writer import (
+                    build_statusgroupinfo_changes,
+                )
+                try:
+                    pabgb_changes, dropped = build_statusgroupinfo_changes(
+                        vanilla_body, vanilla_header, batched)
+                except Exception:
+                    logger.exception(
+                        "Format 3 statusgroupinfo writer crashed on %d "
+                        "intent(s)", len(batched))
+                    pabgb_changes, dropped = [], []
+                if dropped:
+                    drop_lines = []
+                    for _it, _reason in dropped[:5]:
+                        _label = (getattr(_it, "entry", "")
+                                  or f"key={getattr(_it, 'key', '?')}")
+                        drop_lines.append(
+                            f"{_label}.{getattr(_it, 'field', '?')}: "
+                            f"{_reason}")
+                    more_n = len(dropped) - len(drop_lines)
+                    logger.warning(
+                        "Format 3 statusgroupinfo writer refused %d of %d "
+                        "intent(s): %s", len(dropped), len(batched),
+                        "; ".join(f"{getattr(i, 'field', '?')} ({r})"
+                                  for i, r in dropped))
+                    if warnings_out is not None:
+                        warnings_out.append(
+                            f"Format 3: {len(dropped)} statusgroupinfo "
+                            f"intent(s) skipped: " + "; ".join(drop_lines)
+                            + (f"; and {more_n} more (see log)"
+                               if more_n > 0 else ""))
+                if not pabgb_changes:
+                    logger.warning(
+                        "Format 3 statusgroupinfo: %d intent(s) from %d "
+                        "mod(s) produced 0 record changes",
+                        len(batched), len(contributing_mods))
+                    if warnings_out is not None:
+                        warnings_out.append(
+                            f"Format 3 mod(s) "
+                            f"{', '.join(repr(n) for n in contributing_mods)} "
+                            f"produced 0 byte changes for "
+                            f"'statusgroupinfo.pabgb'. The targeted group key "
+                            f"may be missing from this game version, or the "
+                            f"list slot already held the requested key.")
+                    continue
+                contrib_ids = list(whole_table_mod_ids.get(target, []))
+                for c in pabgb_changes:
+                    c["_target_file"] = target
+                    if contrib_ids:
+                        c["_source_mod_ids"] = list(contrib_ids)
+                aggregated.setdefault(target, []).extend(pabgb_changes)
+                if participating_mod_ids is not None:
+                    for mid in contrib_ids:
+                        participating_mod_ids.add(mid)
+                for c in pabgb_changes:
+                    n_bytes_changed += len(c.get("patched", "")) // 2
+                logger.info(
+                    "Format 3 statusgroupinfo writer: applied %d intent(s) "
+                    "across %d mod(s), %d change(s)",
+                    len(batched) - len(dropped), len(contributing_mods),
+                    len(pabgb_changes))
                 continue
 
             # storeinfo.pabgb (GitHub #183) and equipslotinfo.pabgb

@@ -67,6 +67,11 @@ logger = logging.getLogger(__name__)
 
 _SUPPORTED_OPS = frozenset({"set"})
 
+# statusgroupinfo status_info_list[N] path. The statusgroupinfo_writer
+# refuses records that don't tile under the known grammar and indexes that
+# more than one list could satisfy; this only recognises the shape.
+_STATUSGROUP_SIL_RE = re.compile(r"^status_info_list\[\d+\]$")
+
 
 _raw_schema_cache: dict[str, dict] | None = None
 
@@ -1416,6 +1421,15 @@ def _classify_intent(
     # the writer re-checks before committing.
     if tn_norm == "stringinfo" and intent.field.lstrip("_").lower() == (
             "buffer") and isinstance(getattr(intent, "new", None), str):
+        return None
+
+    # statusgroupinfo: status_info_list[N] holds a statusinfo record key.
+    # statusgroupinfo has no CDUMM PABGB schema, so the generic walker
+    # can't resolve it; the clean-room statusgroupinfo writer walks the
+    # record's list grammar and refuses anything it can't place uniquely.
+    if tn_norm == "statusgroupinfo" \
+            and _STATUSGROUP_SIL_RE.match(intent.field) \
+            and type(getattr(intent, "new", None)) is int:
         return None
 
     # GitHub #150 (Female Animations) + #192 (mesh swap): characterinfo's
