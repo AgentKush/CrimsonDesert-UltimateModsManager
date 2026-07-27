@@ -161,6 +161,32 @@ _VARIANT_TAIL_SIZES: dict[int, int] = {
     107: 2,   # round 2: 1 homogeneous entry
     109: 4,   # round 2: 1 homogeneous entry
     116: 12,  # round 2: 3 homogeneous entries
+    # -- Round 3 (whole-entry exact tiling) ------------------------
+    # Rounds 1-2 only used entries that were single-item or fully
+    # homogeneous, which left every mixed-tag entry unreachable. The
+    # stronger constraint is that an entry's list region
+    # [buff_data_list_offset, min_level_offset) must tile EXACTLY into
+    # buff_data_count items. For an entry whose only unknown is one
+    # tag, that forces the tag's size; sweeping 0..399 and requiring
+    # EVERY record containing the tag to tile exactly yields a unique
+    # answer or none. Only unique answers are recorded here.
+    #
+    # Cross-check that this method agrees with the earlier rounds: it
+    # returns NO candidate for 37, 95 and 115 -- precisely the tags the
+    # note above independently identified as variable-tail. It also
+    # returns none for 25, 34, 52 and 84, which are therefore variable
+    # or need a structural decoder, and stay out.
+    #
+    # Effect: entries tiling exactly 199 -> 227 of 290.
+    4: 13,    # round 3: 6 records
+    20: 88,   # round 3: 3 records
+    26: 5,    # round 3: 1 record
+    28: 1,    # round 3: 1 record
+    63: 17,   # round 3: 6 records
+    71: 8,    # round 3: 1 record
+    72: 1,    # round 3: 1 record
+    78: 12,   # round 3: 1 record
+    98: 10,   # round 3: 4 records -- unblocks Ultra Hard Mode
 }
 
 
