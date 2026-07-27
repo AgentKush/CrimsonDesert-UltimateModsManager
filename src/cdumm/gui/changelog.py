@@ -21,6 +21,21 @@ _UNRELEASED_NOTES: list[str] = [
 
 CHANGELOG = [
     {
+        "version": "3.7.0",
+        "date": "2026-07-27",
+        "notes": [
+            "<b>Character Creator mods apply properly again.</b> Three separate things were stopping them. The shield module quietly applied nothing because CDUMM was using a record size from an older game build instead of reading it from your actual files. The appearance and model fields Character Creator 7.6 sets were not being written at all. And packs where the race and gender folders sit inside another folder never showed the picker, so you could not choose a variant. All three are fixed. Found via woowoots on GitHub (#302, #190).",
+            "<b>Ultra Hard Mode works.</b> It sets five values on one buff record and was writing none of them, while reporting success. The buff table stores entries whose lengths vary, and CDUMM did not know the size of eleven of those entry types, so it lost its place partway through the record and everything after that point became unreachable. Those sizes are now worked out from the game's own files. Ultra Hard Mode goes from 0 of 5 values applied to 5 of 5.",
+            "<b>CDUMM now blocks Apply if the game updates while it is open.</b> Previously it warned you but still let you apply, and applying mods built against the old files could crash the game on launch. It now stops and points you at Rescan Game Files, which unlocks Apply again straight away. Found via a bug report on GitHub (#307).",
+            "<b>Mods packaged as a folder inside a same-named folder now import on Windows.</b> Some tools export a mod that way, and the doubled long name could push the path past a Windows length limit, so the import failed with a confusing error. Found via falobos76 on GitHub (#191).",
+            "<b>Variant packs keep the option you picked when you update them.</b> If you chose a stack size and later dropped in an updated version of the same pack, CDUMM silently put you back on the first option in the list. Your choice now survives the update.",
+            "<b>macOS: the window comes back after you close the game.</b> Once CDUMM hid itself, clicking its Dock icon or menu bar entry did nothing and the only way back was to relaunch it. Contributed by lwjiyuan (#300).",
+            "<b>macOS: Find Culprit Mod works.</b> It was only looking for the Windows game executable, so it never found a running game on a Mac (#299).",
+            "<b>Clearer messages when a mod cannot be fully applied.</b> Skipped-file notices are now readable in dark theme and can be selected and copied, and when CDUMM cannot place part of a mod it names the exact fields involved instead of suggesting your game version is wrong.",
+            "Thanks to AgentKush for the bulk of this release, to lwjiyuan for the macOS window fix, and to falobos76 and woowoots for the detailed reports and files that made these reproducible.",
+        ],
+    },
+    {
         "version": "3.6.0",
         "date": "2026-07-18",
         "notes": [
