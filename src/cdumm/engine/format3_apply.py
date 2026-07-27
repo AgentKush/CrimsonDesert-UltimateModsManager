@@ -35,7 +35,7 @@ from __future__ import annotations
 import logging
 import struct
 from pathlib import Path
-from typing import Callable
+from typing import Callable, NamedTuple
 
 # The writer's field-name resolver, shared on purpose: a `match` key must
 # accept exactly the spellings a `field` key accepts, and copying the rule
@@ -1455,8 +1455,23 @@ def _intents_to_v2_changes(
     # Route buffinfo through the clean-room buffinfo parser instead,
     # which knows the actual on-disk layout.
     if table_name == "buffinfo":
-        return _buffinfo_intents_to_changes(
-            vanilla_body, vanilla_header, intents)
+        unresolved: list[BuffinfoUnresolved] = []
+        changes = _buffinfo_intents_to_changes(
+            vanilla_body, vanilla_header, intents, unresolved)
+        if unresolved:
+            # Say WHICH fields couldn't be placed. The caller's fallback
+            # message ("the targeted entry may not exist in this game
+            # version") is wrong for this case -- the entry exists, the
+            # item walk just stalls inside it -- and it sends mod authors
+            # chasing a version mismatch that isn't there.
+            logger.warning(
+                "Format 3 buffinfo: %d intent(s) could not be placed "
+                "because the item walk stalls inside the record; the "
+                "entry exists but that item's variant body isn't "
+                "decoded yet. Unplaced: %s",
+                len(unresolved),
+                ", ".join(f"{u.key}.{u.field}" for u in unresolved[:8]))
+        return changes
 
     # characterinfo.pabgb has a CDUMM PABGB schema, but it is a
     # positional name-less decompiled structure, so the generic walker
@@ -2002,9 +2017,17 @@ _BUFFINFO_DTYPE_PACK = {
 }
 
 
+class BuffinfoUnresolved(NamedTuple):
+    """One buffinfo intent the item walk could not reach."""
+    field: str
+    entry: str
+    key: int
+
+
 def _buffinfo_intents_to_changes(
     vanilla_body: bytes, vanilla_header: bytes,
     intents: list[Format3Intent],
+    unresolved_out: list[BuffinfoUnresolved] | None = None,
 ) -> list[dict]:
     """Resolve buffinfo intents through the clean-room buffinfo parser.
 
@@ -2016,9 +2039,21 @@ def _buffinfo_intents_to_changes(
 
     Intents whose key isn't in PABGH, whose field path isn't yet
     resolvable (e.g. items past an unknown variant), or whose new
-    value doesn't fit the declared width, are silently dropped , the
-    same shape the v2 aggregator uses. The expand_format3 caller
-    surfaces "0 byte changes" warnings for whole-mod dropouts.
+    value doesn't fit the declared width, are dropped , the same shape
+    the v2 aggregator uses.
+
+    ``unresolved_out``, when given, collects the intents whose path the
+    item walk could not reach. Resolvability is **per record**, not per
+    path shape: the same ``buff_data_list[N].data.variant.body.f01``
+    resolves on most entries but stalls at item 0 of
+    ``BuffLevel_Difficulty_Boss`` (Ultra Hard Mode), where the walk
+    can't get past that item's variant body. The validator therefore
+    cannot pre-screen these by name -- it has no table bytes -- so
+    without this list the caller only knew "0 byte changes" and told
+    the user their entry might not exist in this game version, which is
+    wrong and unactionable. See GitHub #190-era equipslotinfo for the
+    same lesson: never report success, or a misleading failure, for a
+    write we couldn't place.
     """
     from cdumm._vendor.buffinfo_parser import locate_buff_field
 
@@ -2063,6 +2098,9 @@ def _buffinfo_intents_to_changes(
                 located = hit
                 break
         if located is None:
+            if unresolved_out is not None:
+                unresolved_out.append(BuffinfoUnresolved(
+                    intent.field, intent.entry, intent.key))
             continue
         rel_in_entry, width, dtype = located
         if dtype == "cstring":
