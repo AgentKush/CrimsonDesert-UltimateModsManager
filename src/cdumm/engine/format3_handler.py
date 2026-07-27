@@ -72,6 +72,12 @@ _SUPPORTED_OPS = frozenset({"set"})
 # only needs to recognise the shape so the intent reaches that writer.
 _STATUSINFO_SLD_RE = re.compile(r"^stat_level_data\[\d+\]$")
 
+# interactioninfo pivot range path (Fast Pickup mods). The writer bounds
+# the index and refuses records it can't frame; this only needs to
+# recognise the shape so the intent reaches that writer.
+_INTERACTION_PIVOT_RE = re.compile(
+    r"^interaction_pivot_list\[\d+\]\.raw_[ab]$")
+
 
 _raw_schema_cache: dict[str, dict] | None = None
 
@@ -1160,6 +1166,15 @@ LIST_WRITERS: dict[tuple[str, str], str] = {
         "knowledgeinfo_writer.build_knowledgeinfo_changes",
     ("knowledgeinfo", "isDefault"):
         "knowledgeinfo_writer.build_knowledgeinfo_changes",
+    # interactioninfo pivot range (Fast Pickup mods). _interactionPivotList
+    # is field #26 of InteractionInfo with type None -- no descriptor -- so
+    # the generic walker can't reach it (parse_records returns 0 records for
+    # this table). interactioninfo_writer locates the pair by its 16-zero
+    # frame and refuses when that isn't unambiguous.
+    ("interactioninfo", "interaction_pivot_list[].raw_a"):
+        "interactioninfo_writer.build_interactioninfo_changes",
+    ("interactioninfo", "interaction_pivot_list[].raw_b"):
+        "interactioninfo_writer.build_interactioninfo_changes",
     # skill: current DMM addresses ONE element of the resource-stat list
     # and one field inside it, by letter -- ``use_resource_stat_list[0]
     # .d``. ``_routable`` normalizes ``[0]`` to ``[]``, the same wildcard
@@ -1246,6 +1261,13 @@ def _diagnose_unsupported_intent(
         # resolved by the clean-room characterinfo writer.
         if tn == "characterinfo" and field in (
                 "upper_chart.group_lookup", "lower_chart.group_lookup"):
+            return None
+        # Fast Pickup: interactioninfo interaction_pivot_list[N].raw_a /
+        # .raw_b are resolved by the clean-room interactioninfo writer,
+        # which frames the pivot's f32 range pair and refuses when it
+        # can't locate it unambiguously.
+        if tn == "interactioninfo" and re.match(
+                r"^interaction_pivot_list\[\d+\]\.raw_[ab]$", field or ""):
             return None
         return (
             f"field '{field}' targets a nested struct sub-field "
@@ -1497,6 +1519,18 @@ def _classify_intent(
     # logged warning, mirroring the multichangeinfo/stringinfo early-accept.
     if tn_norm == "statusinfo" and _STATUSINFO_SLD_RE.match(intent.field) \
             and isinstance(getattr(intent, "new", None), int):
+        return None
+
+    # interactioninfo (Fast Pickup - Increase Range): the pivot list is
+    # field #26 of InteractionInfo with type None, so the generic walker
+    # has no descriptor for it and parse_records returns no records at
+    # all for this table. interactioninfo_writer frames the pivot's f32
+    # range pair instead, and refuses any record where it cannot locate
+    # that frame unambiguously -- dropped cleanly at apply time with a
+    # logged warning, the same contract as the other clean-room writers.
+    if tn_norm == "interactioninfo" and _INTERACTION_PIVOT_RE.match(
+            intent.field or "") and isinstance(
+                getattr(intent, "new", None), int):
         return None
 
     # skill: current DMM addresses one element of a list and one field
