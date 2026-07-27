@@ -89,23 +89,23 @@ def build_inventory_changes(
         field = getattr(i, "field", "") or ""
         off = _SLOT_FIELD_OFFSET.get(field)
         if off is None:
-            dropped.append((i, f"field {field!r} is not an inventory slot "
-                               f"field (default/max/need_save_slot_count)"))
+            dropped.append((i, (f"field {field!r} is not an inventory slot "
+                               f"field (default/max/need_save_slot_count)")))
             continue
         if (getattr(i, "op", "set") or "set") != "set":
-            dropped.append((i, f"op {getattr(i, 'op', None)!r} not supported "
-                               f"for inventory (only 'set')"))
+            dropped.append((i, (f"op {getattr(i, 'op', None)!r} not supported "
+                               f"for inventory (only 'set')")))
             continue
         entry = getattr(i, "entry", "") or ""
         if not entry:
-            dropped.append((i, "inventory intent has no entry (the inventory "
-                               "record name, e.g. 'CampWareHouse')"))
+            dropped.append((i, ("inventory intent has no entry (the inventory "
+                               "record name, e.g. 'CampWareHouse')")))
             continue
         val = getattr(i, "new", None)
         if not isinstance(val, int) or isinstance(val, bool) \
                 or not 0 <= val <= _U16_MAX:
-            dropped.append((i, f"value {val!r} is out of the u16 range "
-                               f"0..{_U16_MAX} for an inventory slot count"))
+            dropped.append((i, (f"value {val!r} is out of the u16 range "
+                               f"0..{_U16_MAX} for an inventory slot count")))
             continue
         rs = _find_record_start(vanilla_body, entry)
         if rs is None:
@@ -113,8 +113,8 @@ def build_inventory_changes(
             continue
         m = vanilla_body.find(_MARK, rs)
         if m < 0:
-            dropped.append((i, f"inventory record {entry!r}: slot marker "
-                               f"not found"))
+            dropped.append((i, (f"inventory record {entry!r}: slot marker "
+                               f"not found")))
             continue
         by_rec.setdefault((rs, m), []).append((off, val))
 
@@ -133,3 +133,4 @@ def build_inventory_changes(
             "patched": bytes(new_blk).hex(),
         })
     return changes, dropped
+
