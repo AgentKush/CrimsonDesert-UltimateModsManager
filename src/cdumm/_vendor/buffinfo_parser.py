@@ -161,6 +161,32 @@ _VARIANT_TAIL_SIZES: dict[int, int] = {
     107: 2,   # round 2: 1 homogeneous entry
     109: 4,   # round 2: 1 homogeneous entry
     116: 12,  # round 2: 3 homogeneous entries
+    # -- Round 3 (whole-entry exact tiling) ------------------------
+    # Rounds 1-2 only used entries that were single-item or fully
+    # homogeneous, which left every mixed-tag entry unreachable. The
+    # stronger constraint is that an entry's list region
+    # [buff_data_list_offset, min_level_offset) must tile EXACTLY into
+    # buff_data_count items. For an entry whose only unknown is one
+    # tag, that forces the tag's size; sweeping 0..399 and requiring
+    # EVERY record containing the tag to tile exactly yields a unique
+    # answer or none. Only unique answers are recorded here.
+    #
+    # Cross-check that this method agrees with the earlier rounds: it
+    # returns NO candidate for 37, 95 and 115 -- precisely the tags the
+    # note above independently identified as variable-tail. It also
+    # returns none for 25, 34, 52 and 84, which are therefore variable
+    # or need a structural decoder, and stay out.
+    #
+    # Effect: entries tiling exactly 199 -> 227 of 290.
+    4: 13,    # round 3: 6 records
+    20: 88,   # round 3: 3 records
+    26: 5,    # round 3: 1 record
+    28: 1,    # round 3: 1 record
+    63: 17,   # round 3: 6 records
+    71: 8,    # round 3: 1 record
+    72: 1,    # round 3: 1 record
+    78: 12,   # round 3: 1 record
+    98: 10,   # round 3: 4 records -- unblocks Ultra Hard Mode
 }
 
 
@@ -227,6 +253,31 @@ _VARIANT_BODY_FIELDS: dict[int, tuple[str, list[tuple[str, str, int, int]]]] = {
           [("f00", "u32", 0, 4)]),
     116: ("AddCritiacalRateByMaterialKeyBuffData",
           [("f00", "u32", 0, 4), ("f01", "u64", 4, 8)]),
+    # Tag 98's engine class name is not known; the placeholder makes
+    # that explicit rather than inventing a plausible-looking one. The
+    # LAYOUT is derived, not guessed:
+    #
+    #   * it is tag 104's shape (u8 selector + u64 value) plus one
+    #     trailing byte, and 1 + 8 + 1 accounts for the whole 10-byte
+    #     tail -- the same "fields tile the tail exactly" property every
+    #     other entry in this table has.
+    #   * across all 28 tag-98 items in vanilla, the i64 at offset 1 is
+    #     divisible by 1000 in 28/28 cases and sits on a tidy 50000
+    #     grid in [-500000, +500000]. No other 8-byte offset comes
+    #     close: offset 0 gives 26/28 with absurd magnitudes (+-128
+    #     million) and offset 2 gives 0/28.
+    #   * byte 0 takes values {0, 2} and byte 9 takes {0, 1} -- small
+    #     selectors, matching tag 104's u8 f00.
+    #
+    # Declared u64 for consistency with every other value field here,
+    # though the vanilla data shows it is really signed (negative
+    # values are ordinary debuffs). Reads of a negative render as a
+    # large unsigned number; writes of a negative are refused by the
+    # packer. Introducing an i64 dtype would touch the apply layer and
+    # every existing tag, so it is deliberately left alone.
+    98: ("UnknownTag98BuffData",
+         [("f00", "u8", 0, 1), ("f01", "u64", 1, 8),
+          ("f02", "u8", 9, 1)]),
 }
 
 # Reverse: variant name -> tag. Used to detect no-op
