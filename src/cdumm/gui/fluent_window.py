@@ -1073,8 +1073,15 @@ class CdummWindow(FluentWindow):
         # menu-triggered QApplication.quit()). Without this, those
         # paths would leave the lock in place and the next launch
         # would report a false crash. BMAD A4.
+        # NB: deliberately NO local `from PySide6.QtWidgets import
+        # QApplication` inside this try. A local import binds QApplication
+        # as a function-local name for the WHOLE of __init__, shadowing the
+        # module-level import. The later QApplication.instance() call that
+        # wires applicationStateChanged would then silently depend on this
+        # try block having succeeded -- and had it ever raised, that line
+        # would be an UnboundLocalError during window construction: a
+        # startup crash, on every platform. Use the module-level import.
         try:
-            from PySide6.QtWidgets import QApplication
             _app = QApplication.instance()
             if _app is not None:
                 _app.aboutToQuit.connect(
