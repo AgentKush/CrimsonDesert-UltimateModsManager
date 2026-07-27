@@ -38,6 +38,17 @@ _SLOT_FIELD_OFFSET = {          # bytes before the marker, and u16 width
     "need_save_slot_count": -6,
     "default_slot_count": -4,
     "max_slot_count": -2,
+    # CURRENT DMM Mod Builder naming. The Mod Builder dropped the
+    # ``_count`` suffix, so AXIOM's "Inventory Space 240/700" ships
+    # ``default_slots`` / ``max_slots`` and applied ZERO bytes -- the
+    # writer that could serve it was registered only under the legacy
+    # names. Same slots, same order, same widths; confirmed against
+    # donr484's Max Inventory Storage (Nexus 1561), which ships the same
+    # edits as labelled raw byte offsets for CD1.15.00 and lands on
+    # exactly the positions these aliases resolve to.
+    "default_slots": -4,
+    "max_slots": -2,
+    "need_save_slots": -6,
 }
 _U16_MAX = 0xFFFF
 
