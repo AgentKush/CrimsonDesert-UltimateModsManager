@@ -4599,7 +4599,15 @@ def _import_format3_variant_pack_as_multi(
         mv = import_multi_variant(
             presets, source, game_dir, mods_dir, db,
             existing_mod_id=existing_mod_id,
-            initial_selection={presets[0][0]})
+            # Seed a selection only on a FIRST import. On a re-import,
+            # import_multi_variant carries the previously-enabled variant
+            # over -- but its carryover branch runs only when
+            # initial_selection is None. Passing a set unconditionally made
+            # that branch unreachable, so re-dropping an updated pack
+            # silently reset the user's pick (e.g. Fat Stacks 999999x) to
+            # the alphabetically-first variant.
+            initial_selection=(
+                None if existing_mod_id is not None else {presets[0][0]}))
     except Exception as e:  # noqa: BLE001 — fall back to the caller's error
         logger.error(
             "variant-pack multi-import failed (%s); caller falls back", e,
