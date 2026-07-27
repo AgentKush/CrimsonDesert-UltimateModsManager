@@ -1152,6 +1152,18 @@ LIST_WRITERS: dict[tuple[str, str], str] = {
         "inventory_writer.build_inventory_changes",
     ("inventory", "need_save_slots"):
         "inventory_writer.build_inventory_changes",
+    # skill: current DMM addresses ONE element of the resource-stat list
+    # and one field inside it, by letter -- ``use_resource_stat_list[0]
+    # .d``. ``_routable`` normalizes ``[0]`` to ``[]``, the same wildcard
+    # mechanism #190 added for equipslotinfo, so one entry per leaf
+    # covers every index. skill_writer.parse_indexed_element_field is the
+    # authority for which leaves resolve; test_skill_indexed_element.py
+    # pins these two in sync.
+    **{("skill", f"use_resource_stat_list[].{leaf}"):
+       "skill_writer.build_skill_intent_change"
+       for leaf in ("a", "b", "c", "d", "e", "f",
+                    "stat_type", "stat_hash", "flag",
+                    "value", "hash2", "hash3")},
 }
 
 
@@ -1478,6 +1490,20 @@ def _classify_intent(
     if tn_norm == "statusinfo" and _STATUSINFO_SLD_RE.match(intent.field) \
             and isinstance(getattr(intent, "new", None), int):
         return None
+
+    # skill: current DMM addresses one element of a list and one field
+    # inside it by letter -- ``use_resource_stat_list[0].d``. The legacy
+    # whole-list names (``_useResourceStatList``) are in LIST_WRITERS and
+    # match above; these indexed paths never did, so Timuela's "Focus
+    # Aerial Roll doesn't cost Spirit" was refused outright. skill_writer
+    # resolves the letter against the vendored parser's own wire order
+    # and refuses any element or field the record doesn't actually have.
+    if tn_norm == "skill" and isinstance(
+            getattr(intent, "new", None), int) \
+            and not isinstance(getattr(intent, "new", None), bool):
+        from cdumm.engine.skill_writer import parse_indexed_element_field
+        if parse_indexed_element_field(intent.field) is not None:
+            return None
 
     # GitHub #150 (Female Animations) + #192 (mesh swap): characterinfo's
     # PABGB schema is a positional name-less decompiled structure, so the
