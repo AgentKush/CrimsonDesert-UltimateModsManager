@@ -1459,18 +1459,27 @@ def _intents_to_v2_changes(
         changes = _buffinfo_intents_to_changes(
             vanilla_body, vanilla_header, intents, unresolved)
         if unresolved:
-            # Say WHICH fields couldn't be placed. The caller's fallback
-            # message ("the targeted entry may not exist in this game
-            # version") is wrong for this case -- the entry exists, the
-            # item walk just stalls inside it -- and it sends mod authors
-            # chasing a version mismatch that isn't there.
+            # Say WHICH fields couldn't be placed, so a mod author isn't
+            # left guessing.
+            #
+            # "The entry exists" IS proven here: a key that isn't in the
+            # PABGH index continues earlier without appending, so anything
+            # in this list was found and only failed to resolve INSIDE the
+            # record. The reason it failed is NOT proven -- this same
+            # branch is reached when every field-name alias fails, so a
+            # typo inside a buff_data_list[...] path (which the handler's
+            # blanket early-accept lets through) lands here too. Name both
+            # possibilities rather than asserting the one we can't tell
+            # apart from the other.
+            shown = ", ".join(f"{u.key}.{u.field}" for u in unresolved[:8])
+            if len(unresolved) > 8:
+                shown += f"; and {len(unresolved) - 8} more"
             logger.warning(
-                "Format 3 buffinfo: %d intent(s) could not be placed "
-                "because the item walk stalls inside the record; the "
-                "entry exists but that item's variant body isn't "
-                "decoded yet. Unplaced: %s",
-                len(unresolved),
-                ", ".join(f"{u.key}.{u.field}" for u in unresolved[:8]))
+                "Format 3 buffinfo: %d intent(s) could not be placed. The "
+                "entry exists, but the field path could not be resolved "
+                "inside it -- either an undecoded variant body the item "
+                "walk stalls on, or an unknown field name. Unplaced: %s",
+                len(unresolved), shown)
         return changes
 
     # characterinfo.pabgb has a CDUMM PABGB schema, but it is a
