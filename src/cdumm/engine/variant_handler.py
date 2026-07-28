@@ -41,7 +41,10 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import shutil
+import tempfile
+from contextlib import suppress
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -328,6 +331,48 @@ def build_variants_metadata(
     return variants
 
 
+class VariantStagingError(RuntimeError):
+    """A staged re-import didn't produce everything it promised.
+
+    Raised before anything the user already has is touched, so the
+    caller can abort with the installed mod still intact.
+    """
+
+
+def verify_staged_variants(
+    presets: list[tuple[Path, dict]], staged_dir: Path,
+) -> None:
+    """Check the staged copy actually contains every variant.
+
+    ``copy_variants_to_mod_dir`` logs and continues when a copy fails,
+    so "it returned" is not evidence that the files are there. A
+    re-import that swaps a half-populated directory over the user's
+    installed mod would lose variants silently, which is the same
+    class of problem as GitHub #314 with a quieter failure mode.
+
+    Raises :class:`VariantStagingError` naming what's missing.
+    """
+    expected = _disambiguate_basenames(presets)
+    vdir = staged_dir / "variants"
+    missing = [
+        expected.get(src, src.name) for src, _data in presets
+        if not (vdir / expected.get(src, src.name)).is_file()
+    ]
+    if missing:
+        raise VariantStagingError(
+            f"{len(missing)} of {len(presets)} variant file(s) did not "
+            f"copy: {', '.join(sorted(missing)[:5])}"
+            + (" ..." if len(missing) > 5 else ""))
+    empty = [
+        expected.get(src, src.name) for src, _data in presets
+        if (vdir / expected.get(src, src.name)).stat().st_size == 0
+    ]
+    if empty:
+        raise VariantStagingError(
+            f"{len(empty)} staged variant file(s) are empty: "
+            f"{', '.join(sorted(empty)[:5])}")
+
+
 def copy_variants_to_mod_dir(
     presets: list[tuple[Path, dict]],
     mod_dir: Path,
@@ -538,57 +583,118 @@ def import_multi_variant(
     version = first.get("version")
     description = first.get("description")
 
-    if existing_mod_id is not None:
-        mod_id = existing_mod_id
-        db.connection.execute(
-            "DELETE FROM mod_deltas WHERE mod_id = ?", (mod_id,))
-        old_dir = mods_dir / str(mod_id)
-        if old_dir.exists():
-            shutil.rmtree(old_dir, ignore_errors=True)
-        # Bug from Faisal 2026-05-03 (NPC Trust Gain "Click To Update"
-        # left pill red): the re-import path was rewriting deltas and
-        # the mod_dir but leaving the identity fields stale. Result:
-        # mods.version stayed at the OLD version after a successful
-        # update, so the next Nexus update check kept flagging the mod
-        # as outdated. Mirror the INSERT branch's identity fields here.
-        db.connection.execute(
-            "UPDATE mods SET name = ?, author = ?, version = ?, "
-            "description = ?, game_version_hash = ?, "
-            "last_apply_skipped_count = 0, "
-            "last_apply_skip_summary = NULL WHERE id = ?",
-            (mod_name, author, version, description,
-             game_ver_hash, mod_id))
-    else:
-        priority = db.connection.execute(
-            "SELECT COALESCE(MAX(priority), 0) + 1 FROM mods"
-        ).fetchone()[0]
-        cur = db.connection.execute(
-            "INSERT INTO mods (name, mod_type, priority, author, version, "
-            "description, game_version_hash, configurable) "
-            "VALUES (?, 'paz', ?, ?, ?, ?, ?, 1)",
-            (mod_name, priority, author, version, description, game_ver_hash),
-        )
-        mod_id = cur.lastrowid
-
-    mod_dir = mods_dir / str(mod_id)
-    mod_dir.mkdir(parents=True, exist_ok=True)
-
-    copy_variants_to_mod_dir(presets, mod_dir)
-
     merged_meta = {
         "name": mod_name,
         "author": author,
         "version": version,
         "description": description,
     }
-    merged_path = synthesize_merged_json(mod_dir, variants_meta, merged_meta)
 
-    db.connection.execute(
-        "UPDATE mods SET json_source = ?, variants = ?, configurable = 1 "
-        "WHERE id = ?",
-        (str(merged_path), json.dumps(variants_meta), mod_id),
-    )
-    db.connection.commit()
+    # GitHub #314: stage first, swap last. This used to DELETE the
+    # deltas and rmtree the mod directory and only THEN start copying
+    # the new files in, so a disk-full, a locked file, an antivirus hold
+    # on a freshly written file or a permissions blip between the two
+    # left the user's installed mod deleted with nothing to put back.
+    # The caller catches broadly and reports "couldn't import", so it
+    # read as though nothing had happened.
+    #
+    # Now everything is built in a sibling directory first. The old
+    # content is not touched until the replacement is complete AND
+    # verified, the swap is a rename, and the previous directory is kept
+    # until the database has committed , so any failure along the way
+    # can put it back.
+    mods_dir.mkdir(parents=True, exist_ok=True)
+    staging = Path(tempfile.mkdtemp(prefix=".import-", dir=mods_dir))
+    backup: Path | None = None
+    swapped = False
+    try:
+        copy_variants_to_mod_dir(presets, staging)
+        verify_staged_variants(presets, staging)
+        merged_name = synthesize_merged_json(
+            staging, variants_meta, merged_meta).name
+
+        if existing_mod_id is not None:
+            mod_id = existing_mod_id
+            db.connection.execute(
+                "DELETE FROM mod_deltas WHERE mod_id = ?", (mod_id,))
+            # Bug from Faisal 2026-05-03 (NPC Trust Gain "Click To Update"
+            # left pill red): the re-import path was rewriting deltas and
+            # the mod_dir but leaving the identity fields stale. Result:
+            # mods.version stayed at the OLD version after a successful
+            # update, so the next Nexus update check kept flagging the mod
+            # as outdated. Mirror the INSERT branch's identity fields here.
+            db.connection.execute(
+                "UPDATE mods SET name = ?, author = ?, version = ?, "
+                "description = ?, game_version_hash = ?, "
+                "last_apply_skipped_count = 0, "
+                "last_apply_skip_summary = NULL WHERE id = ?",
+                (mod_name, author, version, description,
+                 game_ver_hash, mod_id))
+        else:
+            priority = db.connection.execute(
+                "SELECT COALESCE(MAX(priority), 0) + 1 FROM mods"
+            ).fetchone()[0]
+            cur = db.connection.execute(
+                "INSERT INTO mods (name, mod_type, priority, author, "
+                "version, description, game_version_hash, configurable) "
+                "VALUES (?, 'paz', ?, ?, ?, ?, ?, 1)",
+                (mod_name, priority, author, version, description,
+                 game_ver_hash),
+            )
+            mod_id = cur.lastrowid
+
+        mod_dir = mods_dir / str(mod_id)
+        merged_path = mod_dir / merged_name
+        db.connection.execute(
+            "UPDATE mods SET json_source = ?, variants = ?, configurable = 1 "
+            "WHERE id = ?",
+            (str(merged_path), json.dumps(variants_meta), mod_id),
+        )
+
+        # The swap. Everything above is reversible; from here the old
+        # directory is only ever moved aside, never removed, until the
+        # commit below has succeeded.
+        if mod_dir.exists():
+            backup = mods_dir / f".replaced-{mod_id}-{os.getpid()}"
+            if backup.exists():
+                shutil.rmtree(backup, ignore_errors=True)
+            os.replace(mod_dir, backup)
+        os.replace(staging, mod_dir)
+        swapped = True
+        staging = None
+
+        db.connection.commit()
+    except Exception:
+        with suppress(Exception):
+            db.connection.rollback()
+        # Restore whenever the old directory was moved aside, whether or
+        # not the replacement made it into place. Keying this off
+        # ``swapped`` instead would let the finally-block delete the
+        # backup when the second rename was the thing that failed , the
+        # very data loss this is meant to prevent.
+        if backup is not None:
+            with suppress(Exception):
+                if swapped:
+                    shutil.rmtree(mod_dir, ignore_errors=True)
+            with suppress(Exception):
+                os.replace(backup, mod_dir)
+                backup = None
+            logger.error(
+                "variant re-import failed %s the swap; restored the "
+                "previous mod directory for mod_id=%s",
+                "after" if swapped else "during", existing_mod_id)
+        else:
+            logger.error(
+                "variant re-import failed before touching the installed "
+                "mod (mod_id=%s); nothing was removed", existing_mod_id)
+        raise
+    finally:
+        if staging is not None:
+            shutil.rmtree(staging, ignore_errors=True)
+        if backup is not None:
+            # Only reached on the success path (the handler above clears
+            # it when it puts the directory back).
+            shutil.rmtree(backup, ignore_errors=True)
 
     # Adjacent fix from systematic-debugging review of the version-
     # update bug: the apply fingerprint hashes mods.json_source PATH
