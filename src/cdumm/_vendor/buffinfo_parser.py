@@ -1049,6 +1049,70 @@ def walk_buff_data_items(entry_bytes: bytes) -> tuple[list[int], str]:
     return starts, (WALK_TILES if position == end else WALK_MISMATCH)
 
 
+#: Upper bound on a variant tail, from the round-3 derivation sweep
+#: (0..399). Used to sanity-check a tail size derived from a single
+#: record rather than looked up.
+_MAX_PLAUSIBLE_TAIL = 399
+
+
+def _last_item_tail_is_plausible(entry_bytes: bytes, starts: list[int]) -> bool:
+    """Can the ONE unknown tail at the end of the list be accounted for?
+
+    Only meaningful when the walk placed every item and stopped on the
+    last one, so exactly one tail size is missing. That size isn't a
+    lookup, it's forced: the list has to reach ``min_level_offset``, so
+    the missing tail must be ``min_level_offset - payload_end``.
+
+    That makes it a real check rather than an assumption. If a size
+    earlier in the record has drifted, the walk arrives at the last item
+    in the wrong place and the forced tail comes out negative (drifted
+    long) or absurdly large (drifted short). Either way it fails here.
+    """
+    entry = parse_entry(entry_bytes)
+    if not starts or len(starts) != entry.buff_data_count:
+        return False              # more than the last tail is unknown
+    try:
+        hdr = parse_item_header(entry_bytes, starts[-1])
+        if hdr.absent_flag != 0:
+            return False          # an absent item has no tail to derive
+        common = parse_payload_common(entry_bytes, hdr.payload_offset)
+    except ValueError:
+        return False
+    required = entry.min_level_offset - common.end_offset
+    return 0 <= required <= _MAX_PLAUSIBLE_TAIL
+
+
+def resolvable_item_count(
+    entry_bytes: bytes, starts: list[int], outcome: str,
+) -> int:
+    """How many of ``starts`` are safe to hand out as write targets.
+
+    GitHub #325. #313 refused only ``WALK_MISMATCH``, on the reasoning
+    that items placed before a block were each reached over known-size
+    predecessors. That reasoning is wrong when the drifted size IS one
+    of those predecessors: the walk loses its place early, then stops
+    later for an unrelated reason (an unknown tag), and reports
+    ``WALK_BLOCKED`` while holding offsets that are already wrong.
+
+    Refusing only the items at or after the block point does not help ,
+    the damage is upstream of it. Measured over every single-tag
+    perturbation of the shipped size table, that rule returns exactly as
+    many wrong offsets as no rule at all.
+
+    So a blocked walk publishes only item 0, which needs no walking and
+    is therefore correct whatever the sizes say , unless the one missing
+    tail is at the very end and can be derived and sanity-checked, which
+    is what rescues the records that block on their final item.
+    """
+    if outcome == WALK_TILES:
+        return len(starts)
+    if outcome == WALK_MISMATCH:
+        return 0                  # the sizes contradict the table
+    if _last_item_tail_is_plausible(entry_bytes, starts):
+        return len(starts)
+    return 1 if starts else 0
+
+
 def locate_buff_field(
     entry_bytes: bytes, field_path: str,
 ) -> tuple[int, int, str] | None:
@@ -1099,16 +1163,11 @@ def locate_buff_field(
         if n >= entry.buff_data_count:
             return None  # past the end of the list
         starts, outcome = walk_buff_data_items(entry_bytes)
-        if outcome == WALK_MISMATCH:
-            # Every item was stepped over with a known size, yet the walk
-            # did not finish on min_level_offset. The sizes contradict the
-            # table, so nothing derived from them can be trusted , not even
-            # item 0, because a wrong buff_data_list_offset shows up the
-            # same way. Refuse the whole record (GitHub #313).
-            return None
-        if n >= len(starts):
-            # The walk stopped before item n , an unknown variant tag or an
-            # unreadable header in between. Item n's position is unknown.
+        # Only the offsets the walk can actually vouch for are usable.
+        # A mismatch discredits the whole record; a blocked walk
+        # discredits everything past item 0 unless the single missing
+        # tail sits at the end and can be derived (GitHub #313, #325).
+        if n >= resolvable_item_count(entry_bytes, starts, outcome):
             return None
         position = starts[n]
         header = parse_item_header(entry_bytes, position)
