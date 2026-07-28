@@ -6252,9 +6252,20 @@ class CdummWindow(FluentWindow):
             except Exception as e:
                 logger.debug("live game-change apply check failed: %s", e)
         if stale:
+            # GitHub #326: two different situations reach this point and
+            # they need different advice. Either the game really did
+            # change under us, or the last rescan couldn't read the game
+            # version at all (antivirus or Steam holding the exe), which
+            # leaves the OLD fingerprint stored and looks identical here.
+            # Saying "the game was updated" in the second case is simply
+            # false, and since #315 correctly stopped clearing the flag,
+            # it is now the message that reliably appears.
+            unread = not self._snapshot_stamped_version()
             InfoBar.error(
-                title=tr("apply.rescan_required_title"),
-                content=tr("apply.rescan_required_body"),
+                title=tr("apply.version_unreadable_title" if unread
+                         else "apply.rescan_required_title"),
+                content=tr("apply.version_unreadable_body" if unread
+                           else "apply.rescan_required_body"),
                 duration=-1, position=InfoBarPosition.TOP, parent=self)
             return
 
@@ -8141,7 +8152,13 @@ class CdummWindow(FluentWindow):
                 title=tr("infobar.snapshot_no_version"),
                 content=tr("infobar.snapshot_no_version_msg", count=count),
                 duration=12000, position=InfoBarPosition.TOP, parent=self)
-        self._log_activity("snapshot", tr("activity.msg_snapshot_created", count=count))
+        # GitHub #326: the Activity log outlives the toast and is where
+        # someone retracing their steps looks, so it has to record what
+        # actually happened rather than always claiming success.
+        self._log_activity(
+            "snapshot",
+            tr("activity.msg_snapshot_created", count=count) if stamped
+            else tr("activity.msg_snapshot_no_version", count=count))
 
     def _snapshot_stamped_version(self) -> bool:
         """Did the last snapshot manage to stamp the game version?
