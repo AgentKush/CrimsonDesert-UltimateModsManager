@@ -406,6 +406,7 @@ class SnapshotWorker(QObject):
             # snapshot and main.py's startup check (stored_fp !=
             # current_fp) re-prompted recovery on every launch forever.
             # Writing it here cannot lose to that cross-process race.
+            stamped = False
             try:
                 from cdumm.engine.version_detector import detect_game_version
                 fp = detect_game_version(self._game_dir)
@@ -414,6 +415,7 @@ class SnapshotWorker(QObject):
                         "INSERT INTO config (key, value) VALUES (?, ?) "
                         "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
                         ("game_version_fingerprint", fp))
+                    stamped = True
                     logger.info(
                         "Snapshot: stamped game_version_fingerprint=%s", fp)
                 else:
@@ -425,6 +427,25 @@ class SnapshotWorker(QObject):
                 # Logged, not swallowed silently — a stamp failure here is
                 # the #163 loop trigger and must be diagnosable.
                 logger.warning("Snapshot: fingerprint stamp failed: %s", _e_fp)
+
+            # #315: record WHETHER the stamp happened, in this same
+            # transaction. A snapshot that couldn't read the exe leaves the
+            # OLD fingerprint stored, so the next Apply compares live
+            # against stale and blocks — right after the user ran the
+            # rescan the banner told them to run. Until now the only trace
+            # was a log line, and the caller cleared the game-updated flag
+            # regardless, so the UI had no way to tell "snapshot is
+            # current" from "snapshot is current but the version is
+            # unknown". Those need different advice, so they get recorded
+            # differently.
+            try:
+                self._thread_db.connection.execute(
+                    "INSERT INTO config (key, value) VALUES (?, ?) "
+                    "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                    ("last_snapshot_version_stamped", "1" if stamped else "0"))
+            except Exception as _e_flag:  # noqa: BLE001 -- never fail the snapshot
+                logger.warning(
+                    "Snapshot: could not record stamp outcome: %s", _e_flag)
 
             self._thread_db.connection.commit()
         except Exception:
