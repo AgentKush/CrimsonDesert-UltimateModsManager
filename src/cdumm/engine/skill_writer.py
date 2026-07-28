@@ -16,6 +16,7 @@ were skipped at validation time.
 """
 from __future__ import annotations
 import logging
+import re
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
@@ -36,6 +37,70 @@ SUPPORTED_FIELDS = {
     "_useResourceStatList",
     "_buffLevelList",
 }
+
+
+# Current DMM Mod Builder addresses ONE element of a list and ONE field
+# inside it, by letter: ``use_resource_stat_list[0].d``. The letters are
+# positional over the element's WIRE order, which the vendored parser
+# spells out in ``_parse_resource_stat`` (22 bytes, matching the
+# ``cnt * 22`` stride the record walker uses):
+#
+#     a stat_type  u8      b stat_hash  u32     c flag   u8
+#     d value      i64     e hash2      u32     f hash3  u32
+#
+# So ``.d`` is ``value`` -- the resource cost. Timuela's "Focus Aerial
+# Roll doesn't cost Spirit" sets it on three dash skills whose vanilla
+# value is -20000.
+_RESOURCE_STAT_LETTERS = ("stat_type", "stat_hash", "flag",
+                          "value", "hash2", "hash3")
+
+#: Signed wire types inside a resource-stat element. DMM emits values as
+#: unsigned, so ``d`` arrives as 18446744073709551615 rather than -1.
+_RESOURCE_STAT_SIGNED = {"value": 64}
+
+_INDEXED_ELEMENT_RE = re.compile(
+    r"^(?P<list>[a-z_]+)\[(?P<idx>\d+)\]\.(?P<leaf>[a-z_0-9]+)$")
+
+#: Current-DMM list names -> the parser's key for the same list.
+_LIST_ALIASES = {
+    "use_resource_stat_list": "_useResourceStatList",
+    "buff_level_list": "_buffLevelList",
+}
+
+
+def _as_signed(value: int, bits: int) -> int:
+    """Reinterpret an unsigned wire value as its signed equivalent.
+
+    DMM writes ``d`` (an i64) as an unsigned u64, so
+    ``0xFFFFFFFFFFFFFFFF`` means ``-1``, not "a colossal cost". Without
+    this the value doesn't fit ``<q`` and the whole table write fails.
+    """
+    span = 1 << bits
+    if 0 <= value < span:
+        return value - span if value >= span // 2 else value
+    return value
+
+
+def parse_indexed_element_field(field: str
+                                ) -> tuple[str, int, str] | None:
+    """``use_resource_stat_list[0].d`` -> ``("_useResourceStatList", 0,
+    "value")``, or None when the path isn't one we can resolve."""
+    m = _INDEXED_ELEMENT_RE.match((field or "").strip())
+    if m is None:
+        return None
+    parser_key = _LIST_ALIASES.get(m.group("list"))
+    if parser_key != "_useResourceStatList":
+        # Only the resource-stat element layout is known. buff levels
+        # are a list OF lists and have no letter mapping yet.
+        return None
+    leaf = m.group("leaf")
+    if len(leaf) == 1 and "a" <= leaf <= "f":
+        name = _RESOURCE_STAT_LETTERS[ord(leaf) - ord("a")]
+    elif leaf in _RESOURCE_STAT_LETTERS:
+        name = leaf
+    else:
+        return None
+    return parser_key, int(m.group("idx")), name
 
 
 def _shape_ok(field: str, new) -> bool:
@@ -193,10 +258,12 @@ def build_skill_intent_change(
                 "skill writer: key %d / entry %r not in table, "
                 "skipping", intent.key, intent.entry)
             continue
-        if intent.field not in SUPPORTED_FIELDS:
+        indexed = parse_indexed_element_field(intent.field)
+        if indexed is None and intent.field not in SUPPORTED_FIELDS:
             skipped_field += 1
             logger.warning(
-                "skill writer: field %r not supported (only %s); "
+                "skill writer: field %r not supported (only %s, or an "
+                "indexed element like use_resource_stat_list[0].d); "
                 "intent on key=%d dropped",
                 intent.field, ", ".join(sorted(SUPPORTED_FIELDS)),
                 intent.key)
@@ -207,6 +274,35 @@ def build_skill_intent_change(
                 "skill writer: op %r not supported (only 'set'); "
                 "intent on key=%d field=%r dropped",
                 intent.op, intent.key, intent.field)
+            continue
+        if indexed is not None:
+            list_key, idx, leaf = indexed
+            lst = target_entry.get(list_key)
+            if not isinstance(lst, list) or not 0 <= idx < len(lst) \
+                    or not isinstance(lst[idx], dict) \
+                    or leaf not in lst[idx]:
+                skipped_shape += 1
+                logger.warning(
+                    "skill writer: %s[%d].%s does not exist on key=%d "
+                    "(list has %d element(s)); skipping rather than "
+                    "creating a field the game never had",
+                    list_key, idx, leaf, intent.key,
+                    len(lst) if isinstance(lst, list) else 0)
+                continue
+            if isinstance(intent.new, bool) \
+                    or not isinstance(intent.new, int):
+                skipped_shape += 1
+                logger.warning(
+                    "skill writer: %s[%d].%s expects an integer, got "
+                    "%r; skipping", list_key, idx, leaf, intent.new)
+                continue
+            bits = _RESOURCE_STAT_SIGNED.get(leaf)
+            value = _as_signed(intent.new, bits) if bits else intent.new
+            lst[idx][leaf] = value
+            applied += 1
+            logger.debug(
+                "skill writer: key=%d %s[%d].%s -> %d",
+                intent.key, list_key, idx, leaf, value)
             continue
         if not _shape_ok(intent.field, intent.new):
             skipped_shape += 1
