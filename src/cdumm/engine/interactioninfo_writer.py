@@ -19,13 +19,22 @@ The schema names them. ``InteractionPivotOverrideData`` ends::
 
     _interactionUpperHeight   f32    4
     _targetGotoOffset         12B    (a 3-float vector)
-    _interactionDistance      f32    4     <- raw_a
-    _interactionLowerHeight   f32    4     <- raw_b
+    _interactionDistance      f32    4     <- raw_a, in declaration order
+    _interactionLowerHeight   f32    4     <- raw_b, in declaration order
 
 So when the upper height is 0.0 and the goto offset is (0, 0, 0) -- the
 common case -- the pair is preceded by exactly **16 zero bytes**. That is
 a typed prediction from the schema, not a pattern noticed in a hex dump,
 and it is what this writer looks for.
+
+The 16-zero frame and the two f32 slots after it are **measured**. Which
+of the two slots is ``_interactionDistance`` and which is
+``_interactionLowerHeight`` is only **inferred from declaration order**,
+and declaration order is not always wire order in this format (BuffInfo
+pairwise-swaps). Nothing here depends on getting that right: ``raw_a``
+is written at +0 and ``raw_b`` at +4 regardless, which is the same
+mapping DMM uses, so a mod round-trips either way. Only the ``<-``
+annotations above would be wrong.
 
 Locating it
 -----------
@@ -37,8 +46,18 @@ the next two f32 are in ``[0.01, 100.0]`` -- a sane interaction range.
   is the right one (``Gimmick_PickUp`` 2.5/2.5, ``SmallAnimal_Skin``
   1.5/2.0, ``Animal_Skin`` 1.7/2.0, ``Gimmick_Collect`` 2.5/3.0,
   ``Insect_Catch`` 2.5/2.6);
-* 291 of 393 records resolve uniquely, 8 have no match and 94 have more
-  than one.
+* 295 of 393 records resolve uniquely, 8 have no match and 90 have more
+  than one. (291/94 in an earlier revision of this docstring predated the
+  4-byte-aligned candidate grid below and was never re-measured --
+  ``test_ambiguous_records_are_refused_not_guessed`` pins the real
+  numbers now.)
+
+Independent evidence the pair is a real range field rather than
+arbitrary bytes that happen to pass the filter: all 295 located values
+are multiples of 0.05, against only 54 of the 89 other aligned float
+pairs in the same records that pass the same ``[0.01, 100.0]`` filter.
+The rule says nothing about quantisation, so this is a property of the
+data, not of the locator.
 
 Records in that last group are **refused**, not guessed at. The
 16-zero frame only holds when upper height and goto offset are zero; on
@@ -73,10 +92,27 @@ _MIN_RANGE = 0.01
 _MAX_RANGE = 100.0
 
 #: Field spelling -> byte offset within the located pair.
+#:
+#: Index 0 only. The locator finds ONE pair per record, so nothing here
+#: can place ``interaction_pivot_list[1]`` or beyond; those are refused
+#: rather than silently resolved to element 0.
+#:
+#: Which of the two is ``_interactionDistance`` and which is
+#: ``_interactionLowerHeight`` is inferred from the surrounding field
+#: order, not proved. It affects only the comments here -- ``raw_a`` and
+#: ``raw_b`` are written at their own offsets either way -- but if disk
+#: order pairwise-swaps the way BuffInfo's does, the two names belong the
+#: other way round.
 _PAIR_FIELDS = {
-    "interaction_pivot_list[0].raw_a": 0,   # _interactionDistance
-    "interaction_pivot_list[0].raw_b": 4,   # _interactionLowerHeight
+    "interaction_pivot_list[0].raw_a": 0,   # probably _interactionDistance
+    "interaction_pivot_list[0].raw_b": 4,   # probably _interactionLowerHeight
 }
+
+#: The exact field spellings this writer can place. The apply dispatch
+#: routes ONLY these to the writer and lets everything else on
+#: interactioninfo fall through to the generic path, so the two can't
+#: drift apart (GitHub #317 review).
+SUPPORTED_FIELDS = frozenset(_PAIR_FIELDS)
 
 
 def _record_bounds(header: bytes, body: bytes) -> dict[int, tuple[int, int]]:

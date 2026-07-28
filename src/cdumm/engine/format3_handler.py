@@ -67,11 +67,15 @@ logger = logging.getLogger(__name__)
 
 _SUPPORTED_OPS = frozenset({"set"})
 
-# interactioninfo pivot range path (Fast Pickup mods). The writer bounds
-# the index and refuses records it cannot frame; this only needs to
-# recognise the shape so the intent reaches that writer.
+# interactioninfo pivot range path (Fast Pickup mods). Element 0 only:
+# the locator frames ONE pivot pair per record, so there is nothing for a
+# higher index to resolve to. Accepting ``[1]`` here would either write
+# it to element 0 or (once apply routes only the writer's own
+# SUPPORTED_FIELDS) drop it silently; rejecting it at validation instead
+# surfaces it as an unsupported field before Apply runs (GitHub #317
+# review). The writer still refuses records it cannot frame.
 _INTERACTION_PIVOT_RE = re.compile(
-    r"^interaction_pivot_list\[\d+\]\.raw_[ab]$")
+    r"^interaction_pivot_list\[0\]\.raw_[ab]$")
 
 
 _raw_schema_cache: dict[str, dict] | None = None
@@ -1193,10 +1197,11 @@ def _diagnose_unsupported_intent(
         if tn == "characterinfo" and field in (
                 "upper_chart.group_lookup", "lower_chart.group_lookup"):
             return None
-        # Fast Pickup: interactioninfo interaction_pivot_list[N].raw_a /
+        # Fast Pickup: interactioninfo interaction_pivot_list[0].raw_a /
         # .raw_b are resolved by the clean-room interactioninfo writer,
         # which frames the pivot range pair and refuses when it cannot
-        # locate it unambiguously.
+        # locate it unambiguously. Higher indexes fall through to the
+        # message below -- they are genuinely not implemented.
         if tn == "interactioninfo" and _INTERACTION_PIVOT_RE.match(
                 field or ""):
             return None

@@ -188,14 +188,56 @@ def test_ambiguous_records_are_refused_not_guessed():
     assert (located, len(bounds)) == (295, 393)
 
 
+def _is_multiple_of(value: float, step: float = 0.05) -> bool:
+    return abs(round(value / step) - value / step) < 1e-4
+
+
 @_needs
-def test_every_located_pair_is_a_plausible_range():
+def test_located_pairs_are_designer_authored_not_arbitrary_floats():
+    """Independent evidence that the locator lands on a real range field.
+
+    ``locate_pivot_pair`` filters on ``[0.01, 100.0]`` and says nothing
+    about quantisation, so "every located value is a multiple of 0.05"
+    is not implied by the rule -- it is a property of the data. Measured
+    on the live 1.15 table:
+
+    * located pairs: **295 / 295** are multiples of 0.05;
+    * every OTHER aligned float pair in the same records that passes the
+      same ``[0.01, 100.0]`` filter: only **54 / 89** (60.7%).
+
+    A locator landing on arbitrary bytes would look like the control
+    group. Asserting the range instead would be circular -- the rule
+    guarantees it -- which is what this test used to do (#317 review).
+    """
     body, header = _table()
     bounds = _record_bounds(header, body)
+    located = 0
     for lo, hi in bounds.values():
         pos = locate_pivot_pair(body, lo, hi)
         if pos is None:
             continue
+        located += 1
         for off in (0, 4):
             v = struct.unpack_from("<f", body, pos + off)[0]
-            assert _MIN_RANGE <= v <= _MAX_RANGE, v
+            assert _is_multiple_of(v), (pos + off, v)
+    assert located == 295
+
+
+@_needs
+def test_quantisation_is_not_implied_by_the_range_filter():
+    """The control arm of the test above: without it, 100% quantisation
+    could just mean every float in the region is quantised."""
+    body, header = _table()
+    bounds = _record_bounds(header, body)
+    total = quantised = 0
+    for lo, hi in bounds.values():
+        pos = locate_pivot_pair(body, lo, hi)
+        for off in range(lo, hi - 8, 4):
+            if off == pos:
+                continue
+            a = struct.unpack_from("<f", body, off)[0]
+            b = struct.unpack_from("<f", body, off + 4)[0]
+            if _MIN_RANGE <= a <= _MAX_RANGE and _MIN_RANGE <= b <= _MAX_RANGE:
+                total += 1
+                quantised += _is_multiple_of(a) and _is_multiple_of(b)
+    assert (quantised, total) == (54, 89)
