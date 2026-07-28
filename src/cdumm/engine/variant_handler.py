@@ -679,10 +679,21 @@ def import_multi_variant(
             with suppress(Exception):
                 os.replace(backup, mod_dir)
                 backup = None
-            logger.error(
-                "variant re-import failed %s the swap; restored the "
-                "previous mod directory for mod_id=%s",
-                "after" if swapped else "during", existing_mod_id)
+            if backup is None:
+                logger.error(
+                    "variant re-import failed %s the swap; restored the "
+                    "previous mod directory for mod_id=%s",
+                    "after" if swapped else "during", existing_mod_id)
+            else:
+                # The restore itself failed, so ``backup = None`` above
+                # never ran. Do not claim a recovery that didn't happen --
+                # this is the message someone reads while trying to get
+                # their mod back. The finally-block leaves the backup in
+                # place and logs where to find it.
+                logger.error(
+                    "variant re-import failed %s the swap AND the previous "
+                    "mod directory could not be restored for mod_id=%s",
+                    "after" if swapped else "during", existing_mod_id)
         else:
             logger.error(
                 "variant re-import failed before touching the installed "
@@ -692,9 +703,29 @@ def import_multi_variant(
         if staging is not None:
             shutil.rmtree(staging, ignore_errors=True)
         if backup is not None:
-            # Only reached on the success path (the handler above clears
-            # it when it puts the directory back).
-            shutil.rmtree(backup, ignore_errors=True)
+            # Delete the backup ONLY once the mod directory is confirmed
+            # back in place. Two paths reach here with ``backup`` still
+            # set and the directory missing, and in both the backup is
+            # the user's only remaining copy:
+            #
+            #   * the restoring ``os.replace(backup, mod_dir)`` above sits
+            #     inside ``suppress(Exception)``, so when IT fails the
+            #     following ``backup = None`` never runs;
+            #   * a BaseException (KeyboardInterrupt, SystemExit) raised
+            #     after the backup rename skips ``except Exception``
+            #     entirely, while this block still runs.
+            #
+            # Keying this off "we reached the finally" rather than "the
+            # directory is actually there" re-creates exactly the data
+            # loss this staging rewrite exists to eliminate.
+            if mod_dir.exists():
+                shutil.rmtree(backup, ignore_errors=True)
+            else:
+                logger.error(
+                    "variant re-import for mod_id=%s could not restore the "
+                    "mod directory; the previous copy has been LEFT IN "
+                    "PLACE at %s -- move it back to %s to recover",
+                    existing_mod_id, backup, mod_dir)
 
     # Adjacent fix from systematic-debugging review of the version-
     # update bug: the apply fingerprint hashes mods.json_source PATH

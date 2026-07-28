@@ -227,3 +227,51 @@ def test_failures_are_reported_rather_than_swallowed(
             [_preset(installed["src"], "alpha.json")], installed["src"],
             installed["game_dir"], installed["mods_dir"], db,
             existing_mod_id=installed["mod_id"])
+
+
+def test_backup_survives_when_the_restore_itself_fails(
+        installed, db, monkeypatch):
+    """The last copy must never be deleted while the mod directory is gone.
+
+    The restoring ``os.replace(backup, mod_dir)`` runs inside
+    ``suppress(Exception)``, so when IT fails the following
+    ``backup = None`` never executes. A ``finally`` that deletes the
+    backup unconditionally then destroys the user's only remaining copy --
+    re-creating the exact data loss this staging rewrite exists to
+    eliminate.
+
+    Both renames fail here: the swap, and then the restore.
+    """
+    import os as _os
+
+    mod_dir = installed["mods_dir"] / str(installed["mod_id"])
+    before = _snapshot(mod_dir)
+
+    real_replace = _os.replace
+    calls = {"n": 0}
+
+    def doomed(src, dst):
+        calls["n"] += 1
+        if calls["n"] >= 2:      # staging -> mod_dir, then backup -> mod_dir
+            raise PermissionError("file in use by another process")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(vh.os, "replace", doomed)
+
+    newer = [_preset(installed["src"], "alpha.json"),
+             _preset(installed["src"], "beta.json")]
+    with pytest.raises(PermissionError):
+        vh.import_multi_variant(
+            newer, installed["src"], installed["game_dir"],
+            installed["mods_dir"], db,
+            existing_mod_id=installed["mod_id"])
+
+    # The restore could not run, so the directory is legitimately absent.
+    # What must NOT happen is the backup being deleted along with it.
+    surviving = [d for d in installed["mods_dir"].iterdir()
+                 if d.is_dir() and d.name.startswith(".replaced-")]
+    assert surviving, (
+        "the backup was deleted while the mod directory was missing -- "
+        "the user's only remaining copy is gone")
+    assert _snapshot(surviving[0]) == before, (
+        "the surviving backup must still hold the original content")
