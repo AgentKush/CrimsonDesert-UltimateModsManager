@@ -357,9 +357,25 @@ _CIPHERTEXT_MAX_ZERO_FRACTION = 0.05
 #: "decrypting" plaintext re-randomises it, so the change is 0 or
 #: negative: a plaintext game table goes UP 4.29-4.75, and an
 #: already-compressed payload stored as-is moves 0.002-0.014 the wrong
-#: way. 1.0 leaves a 3x margin on the true side and is never approached
-#: from the false side.
+#: way, and realistic content never came within 0.7 of the threshold
+#: across 42,000 trials.
+#:
+#: The "never approached from the false side" claim does NOT hold at small
+#: sizes, which is why _MIN_PROBE_BYTES below is 1024 rather than 256. On
+#: a 256-byte block with a deliberately flat byte histogram -- the worst
+#: case for this test -- the drop is ~0.82 on average and crosses 1.0 for
+#: roughly 1 key in 1000, because at that size the entropy estimate is
+#: noisy enough for the keystream to cancel structure by chance. Measured
+#: max drop by size: 256 -> +1.01, 512 -> +0.54, 1024 -> +0.25,
+#: 2048 -> +0.12. At 1024 the margin is 4x and nothing fires.
 _MIN_ENTROPY_DROP = 1.0
+
+#: Smallest entry the probe will judge. Below this the entropy estimate is
+#: too noisy to separate ciphertext from a high-entropy plaintext block:
+#: at 256 bytes a flat-histogram block false-fires for about 1 key in
+#: 1000. 1024 leaves a 4x margin. Entries smaller than this are simply not
+#: examined, which is the pre-existing behaviour for them anyway.
+_MIN_PROBE_BYTES = 1024
 
 
 def _shannon_entropy(data: bytes) -> float:
@@ -382,8 +398,8 @@ def _looks_encrypted(raw: bytes, basename: str) -> bool:
     it reveals structure in real ciphertext and adds noise to anything
     else, so the test is directional and cannot fire on plaintext.
     """
-    if len(raw) < 256:
-        return False                      # too small to measure
+    if len(raw) < _MIN_PROBE_BYTES:
+        return False                      # too small to measure reliably
     sample = raw[:_ENCRYPTION_PROBE_BYTES]
     if sample.count(0) / len(sample) > _CIPHERTEXT_MAX_ZERO_FRACTION:
         return False                      # far too structured to be cipher
