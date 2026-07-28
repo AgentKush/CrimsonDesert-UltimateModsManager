@@ -33,6 +33,7 @@ Single-line wire-up in apply_engine.py is the next commit.
 from __future__ import annotations
 
 import logging
+import re
 import struct
 from pathlib import Path
 from typing import Callable, NamedTuple
@@ -202,6 +203,14 @@ def _match_value_equals(got, want) -> bool:
     """
     if got is None:
         return False
+    # DMM Mod Builder emits operator objects for match conditions; the one it
+    # uses is ``{"$in": [...]}`` (any-of), e.g. ``{"key": {"$in": [1, 4, 6]}}``.
+    # Treat it exactly like the bare-list any-of below.
+    if isinstance(want, dict) and len(want) == 1 and "$in" in want:
+        cands = want["$in"]
+        if isinstance(cands, (list, tuple)):
+            return any(_match_value_equals(got, w) for w in cands)
+        return _match_value_equals(got, cands)
     if isinstance(want, (list, tuple)) and not isinstance(got, (list, tuple)):
         return any(_match_value_equals(got, w) for w in want)
     if got == want:
@@ -219,19 +228,31 @@ def _match_value_equals(got, want) -> bool:
     return False
 
 
+# DMM Mod Builder names the record-identity match fields ``key`` and
+# ``string_key``; CDUMM's decoded records carry them as ``_key`` and ``_name``.
+# Alias them so a DMM selector like ``{"string_key": "Riding_Dragon_1"}`` or
+# ``{"key": {"$in": [1, 4, 6]}}`` resolves against the record metadata.
+_DMM_MATCH_FIELD_ALIASES = {"key": "_key", "string_key": "_name"}
+_MATCH_META = ("_name", "_key", "_entry_id")
+
+
 def _match_record_keys(records: dict, match: dict) -> list:
     """Keys of every record in ``records`` whose fields all satisfy the
-    ``match`` conditions (AND). Preserves ``records`` iteration order."""
+    ``match`` conditions (AND). Preserves ``records`` iteration order.
+    An empty ``match`` matches every record (all([]) is True)."""
+    def _read(key, rec, mf):
+        amf = _DMM_MATCH_FIELD_ALIASES.get(mf, mf)
+        if amf == "_key":
+            # the record id is the dict key; some decoders also stamp _key.
+            return rec.get("_key", key)
+        if amf in _MATCH_META:
+            return rec.get(amf)
+        return _lookup_record_field(rec, mf)
+
     out = []
     for key, rec in records.items():
-        if all(
-            _match_value_equals(
-                rec.get(mf) if mf in ("_name", "_key", "_entry_id")
-                else _lookup_record_field(rec, mf),
-                mv,
-            )
-            for mf, mv in match.items()
-        ):
+        if all(_match_value_equals(_read(key, rec, mf), mv)
+               for mf, mv in match.items()):
             out.append(key)
     return out
 
@@ -678,7 +699,7 @@ def expand_format3_into_aggregated(
     _WHOLE_TABLE_TARGETS = {
         "iteminfo.pabgb", "skill.pabgb", "multichangeinfo.pabgb",
         "storeinfo.pabgb", "equipslotinfo.pabgb", "stringinfo.pabgb",
-        "knowledgeinfo.pabgb"}
+        "inventory.pabgb", "statusinfo.pabgb", "knowledgeinfo.pabgb"}
     whole_table_intents: dict[str, list] = {}
     whole_table_mod_names: dict[str, list[str]] = {}
     # Per-INTENT mod attribution, index-aligned with
@@ -1119,6 +1140,145 @@ def expand_format3_into_aggregated(
                     len(batched), len(contributing_mods), len(pabgb_changes),
                     ", + pabgh offset rebuild"
                     if pabgh_change is not None else "")
+                continue
+
+            # inventory.pabgb (DMM Mod Builder "max inventory" mods):
+            # default/max/need_save_slot_count u16 writes on records located
+            # by name. Length-preserving, no companion .pabgh rebuild.
+            if target == "inventory.pabgb":
+                from cdumm.engine.inventory_writer import (
+                    build_inventory_changes,
+                )
+                try:
+                    pabgb_changes, dropped = build_inventory_changes(
+                        vanilla_body, vanilla_header, batched)
+                except Exception as e:
+                    logger.error(
+                        "Format 3 inventory writer crashed on %d "
+                        "intent(s): %s", len(batched), e, exc_info=True)
+                    pabgb_changes, dropped = [], []
+                if dropped:
+                    drop_lines = []
+                    for _it, _reason in dropped[:5]:
+                        _label = (getattr(_it, "entry", "")
+                                  or f"key={getattr(_it, 'key', '?')}")
+                        drop_lines.append(
+                            f"{_label}.{getattr(_it, 'field', '?')}: "
+                            f"{_reason}")
+                    more_n = len(dropped) - len(drop_lines)
+                    logger.warning(
+                        "Format 3 inventory writer refused %d of %d "
+                        "intent(s): %s", len(dropped), len(batched),
+                        "; ".join(f"{getattr(i, 'field', '?')} ({r})"
+                                  for i, r in dropped))
+                    if warnings_out is not None:
+                        warnings_out.append(
+                            f"Format 3: {len(dropped)} inventory intent(s) "
+                            f"skipped: " + "; ".join(drop_lines)
+                            + (f"; and {more_n} more (see log)"
+                               if more_n > 0 else ""))
+                if not pabgb_changes:
+                    logger.warning(
+                        "Format 3 inventory: %d intent(s) from %d mod(s) "
+                        "produced 0 record changes",
+                        len(batched), len(contributing_mods))
+                    if warnings_out is not None:
+                        warnings_out.append(
+                            f"Format 3 mod(s) "
+                            f"{', '.join(repr(n) for n in contributing_mods)} "
+                            f"produced 0 byte changes for 'inventory.pabgb'. "
+                            f"The named inventory record may not exist in "
+                            f"this game version, or every slot count already "
+                            f"held the requested value.")
+                    continue
+                contrib_ids = list(whole_table_mod_ids.get(target, []))
+                for c in pabgb_changes:
+                    c["_target_file"] = target
+                    if contrib_ids:
+                        c["_source_mod_ids"] = list(contrib_ids)
+                aggregated.setdefault(target, []).extend(pabgb_changes)
+                if participating_mod_ids is not None:
+                    for mid in contrib_ids:
+                        participating_mod_ids.add(mid)
+                for c in pabgb_changes:
+                    n_bytes_changed += len(c.get("patched", "")) // 2
+                logger.info(
+                    "Format 3 inventory writer: applied %d intent(s) "
+                    "across %d mod(s), %d record change(s)",
+                    len(batched) - len(dropped), len(contributing_mods),
+                    len(pabgb_changes))
+                continue
+
+            # statusinfo.pabgb (DIRECT SPEED stat mods): stat_level_data[i]
+            # uint64 element writes on the four rate records, stored as
+            # 24-bit fixed point. Length-preserving, so NO companion .pabgh
+            # rebuild. The writer refuses any record that isn't a 212-byte
+            # rate record, so it can never corrupt a regular stat that has
+            # no stat_level_data array.
+            if target == "statusinfo.pabgb":
+                from cdumm.engine.statusinfo_writer import (
+                    build_statusinfo_changes,
+                )
+                try:
+                    pabgb_changes, dropped = build_statusinfo_changes(
+                        vanilla_body, vanilla_header, batched)
+                except Exception:
+                    logger.exception(
+                        "Format 3 statusinfo writer crashed on %d intent(s)",
+                        len(batched))
+                    pabgb_changes, dropped = [], []
+                if dropped:
+                    drop_lines = []
+                    for _it, _reason in dropped[:5]:
+                        _label = (getattr(_it, "entry", "")
+                                  or f"key={getattr(_it, 'key', '?')}")
+                        drop_lines.append(
+                            f"{_label}.{getattr(_it, 'field', '?')}: "
+                            f"{_reason}")
+                    more_n = len(dropped) - len(drop_lines)
+                    logger.warning(
+                        "Format 3 statusinfo writer refused %d of %d "
+                        "intent(s): %s", len(dropped), len(batched),
+                        "; ".join(f"{getattr(i, 'field', '?')} ({r})"
+                                  for i, r in dropped))
+                    if warnings_out is not None:
+                        warnings_out.append(
+                            f"Format 3: {len(dropped)} statusinfo intent(s) "
+                            f"skipped: " + "; ".join(drop_lines)
+                            + (f"; and {more_n} more (see log)"
+                               if more_n > 0 else ""))
+                if not pabgb_changes:
+                    logger.warning(
+                        "Format 3 statusinfo: %d intent(s) from %d mod(s) "
+                        "produced 0 record changes",
+                        len(batched), len(contributing_mods))
+                    if warnings_out is not None:
+                        warnings_out.append(
+                            f"Format 3 mod(s) "
+                            f"{', '.join(repr(n) for n in contributing_mods)} "
+                            f"produced 0 byte changes for 'statusinfo.pabgb'. "
+                            f"The targeted stat key may be missing from this "
+                            f"game version, the record may not be a rate stat "
+                            f"(only MoveSpeedRate, AttackSpeedRate, "
+                            f"CriticalRate and DHIT carry stat_level_data), or "
+                            f"every element already held the requested value.")
+                    continue
+                contrib_ids = list(whole_table_mod_ids.get(target, []))
+                for c in pabgb_changes:
+                    c["_target_file"] = target
+                    if contrib_ids:
+                        c["_source_mod_ids"] = list(contrib_ids)
+                aggregated.setdefault(target, []).extend(pabgb_changes)
+                if participating_mod_ids is not None:
+                    for mid in contrib_ids:
+                        participating_mod_ids.add(mid)
+                for c in pabgb_changes:
+                    n_bytes_changed += len(c.get("patched", "")) // 2
+                logger.info(
+                    "Format 3 statusinfo writer: applied %d intent(s) "
+                    "across %d mod(s), %d record change(s)",
+                    len(batched) - len(dropped), len(contributing_mods),
+                    len(pabgb_changes))
                 continue
 
             # knowledgeinfo.pabgb ("Unlock All ... Recipes" / elementals):
@@ -1569,19 +1729,30 @@ def _intents_to_v2_changes(
     #      gives a tid/offset/type for primitive writes.
     if not has_cdumm_schema:
         fs_entries_no_schema = load_field_schema(table_name)
+        def _has_list_writer(field: str) -> bool:
+            # Indexed paths are registered under a wildcard key
+            # ('entries[].etl_hashes', 'use_resource_stat_list[].d'),
+            # exactly as validate_intents._routable normalizes them.
+            # Matching only the raw field here is why skill's indexed
+            # element paths passed validation and then produced no
+            # change at all.
+            if (table_name, field) in LIST_WRITERS:
+                return True
+            normalized = re.sub(r"\[\d+\]", "[]", field or "")
+            return (table_name, normalized) in LIST_WRITERS
+
         list_routable = [
-            i for i in intents
-            if (table_name, i.field) in LIST_WRITERS
+            i for i in intents if _has_list_writer(i.field)
         ]
         fs_routable = [
             i for i in intents
-            if (table_name, i.field) not in LIST_WRITERS
+            if not _has_list_writer(i.field)
             and i.field in fs_entries_no_schema
             and i.old is None
         ]
         raw_routable = [
             i for i in intents
-            if (table_name, i.field) not in LIST_WRITERS
+            if not _has_list_writer(i.field)
             and i.old is not None
         ]
         if not list_routable and not fs_routable and not raw_routable:
@@ -1874,10 +2045,19 @@ def _intents_to_v2_changes(
                      or _is_iteminfo_nested_path(intent.field))):
             iteminfo_batch.append(intent)
             continue
-        if (table_name == "skill"
-                and (table_name, intent.field) in LIST_WRITERS):
-            skill_batch.append(intent)
-            continue
+        if table_name == "skill":
+            # Whole-list names come from LIST_WRITERS; current DMM also
+            # addresses one element by letter
+            # (``use_resource_stat_list[0].d``), which the same
+            # whole-table writer handles.
+            from cdumm.engine.skill_writer import (
+                parse_indexed_element_field,
+            )
+            if ((table_name, intent.field) in LIST_WRITERS
+                    or parse_indexed_element_field(intent.field)
+                    is not None):
+                skill_batch.append(intent)
+                continue
 
         if intent.key not in entry_bounds:
             continue

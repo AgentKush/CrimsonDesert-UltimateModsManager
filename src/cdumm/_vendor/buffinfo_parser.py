@@ -981,6 +981,74 @@ _WRAPPER_FIELDS: dict[str, tuple[str, int, str]] = {
 }
 
 
+#: Outcomes of :func:`walk_buff_data_items`.
+WALK_TILES = "tiles"        # every item placed, ended exactly on min_level
+WALK_BLOCKED = "blocked"    # stopped early: unknown tag or unreadable bytes
+WALK_MISMATCH = "mismatch"  # every size known, yet the region didn't add up
+
+
+def walk_buff_data_items(entry_bytes: bytes) -> tuple[list[int], str]:
+    """Locate the ``buff_data_list`` items, and report how the walk ended.
+
+    Returns ``(starts, outcome)``:
+
+    * ``starts`` , the byte offset of each item the walk could place.
+      Item 0 needs no walking at all (it begins at
+      ``buff_data_list_offset``), so it is always placed; each later item
+      is placed only after stepping over every item before it. The walk
+      stops at the first item it cannot step over, so ``len(starts)`` can
+      be shorter than ``buff_data_count``.
+    * ``outcome`` , one of ``WALK_TILES``, ``WALK_BLOCKED``,
+      ``WALK_MISMATCH``.
+
+    ``WALK_MISMATCH`` is the case this function exists for (GitHub #313).
+    The variant sizes in ``_VARIANT_TAIL_SIZES`` were derived from one
+    game version's table, and Pearl Abyss does change these layouts
+    between versions , equipslotinfo's record block moved 66 -> 63 across
+    1.10 -> 1.15. If a size drifts, the walk lands mid-record and every
+    offset it produces points at the wrong bytes, silently. The region
+    carries its own check: ``buff_data_count`` items must fill
+    ``[buff_data_list_offset, min_level_offset)`` with no slack and no
+    remainder. Every step was a known size and the total still didn't
+    land , so the sizes no longer describe this table, and nothing
+    derived from them is safe to write.
+
+    ``WALK_BLOCKED`` is deliberately NOT the same thing. Stopping on a
+    tag that isn't in the size table is a gap in coverage, not evidence
+    of drift, and it says nothing about the items already placed , each
+    of those was reached over known-size predecessors. Collapsing the two
+    would refuse writes that are provably correct: on the real 1.15 table
+    63 of 290 records stop on an unknown tag, and 34 of those stop on the
+    LAST item, which leaves ``starts`` full-length and would look
+    identical to a mismatch if only the length were checked.
+    """
+    entry = parse_entry(entry_bytes)
+    end = entry.min_level_offset
+    position = entry.buff_data_list_offset
+    starts: list[int] = []
+    for _ in range(entry.buff_data_count):
+        if position + _ITEM_HEADER_BYTES > end:
+            return starts, WALK_BLOCKED
+        try:
+            hdr = parse_item_header(entry_bytes, position)
+        except ValueError:
+            return starts, WALK_BLOCKED
+        starts.append(position)
+        if hdr.absent_flag != 0:
+            # Absent items have no payload, just the 5-byte header.
+            position += _ITEM_HEADER_BYTES
+            continue
+        try:
+            common = parse_payload_common(entry_bytes, hdr.payload_offset)
+        except ValueError:
+            return starts, WALK_BLOCKED
+        tag_size = _VARIANT_TAIL_SIZES.get(common.tag)
+        if tag_size is None:
+            return starts, WALK_BLOCKED   # can't step over an unknown variant
+        position = common.end_offset + tag_size
+    return starts, (WALK_TILES if position == end else WALK_MISMATCH)
+
+
 def locate_buff_field(
     entry_bytes: bytes, field_path: str,
 ) -> tuple[int, int, str] | None:
@@ -1030,27 +1098,19 @@ def locate_buff_field(
         entry = parse_entry(entry_bytes)
         if n >= entry.buff_data_count:
             return None  # past the end of the list
-        # Walk forward through items 0..n-1 to find item n's start.
-        position = entry.buff_data_list_offset
-        for _ in range(n):
-            try:
-                hdr = parse_item_header(entry_bytes, position)
-            except ValueError:
-                return None
-            if hdr.absent_flag != 0:
-                # Absent items have no payload, just the 5-byte header.
-                position += _ITEM_HEADER_BYTES
-                continue
-            try:
-                common = parse_payload_common(
-                    entry_bytes, hdr.payload_offset)
-            except ValueError:
-                return None
-            tag_size = _VARIANT_TAIL_SIZES.get(common.tag)
-            if tag_size is None:
-                # Unknown variant , can't safely walk past it.
-                return None
-            position = common.end_offset + tag_size
+        starts, outcome = walk_buff_data_items(entry_bytes)
+        if outcome == WALK_MISMATCH:
+            # Every item was stepped over with a known size, yet the walk
+            # did not finish on min_level_offset. The sizes contradict the
+            # table, so nothing derived from them can be trusted , not even
+            # item 0, because a wrong buff_data_list_offset shows up the
+            # same way. Refuse the whole record (GitHub #313).
+            return None
+        if n >= len(starts):
+            # The walk stopped before item n , an unknown variant tag or an
+            # unreadable header in between. Item n's position is unknown.
+            return None
+        position = starts[n]
         header = parse_item_header(entry_bytes, position)
         if tail == ".absent_flag":
             return header.absent_flag_offset, 1, "u8"
@@ -1064,8 +1124,11 @@ def locate_buff_field(
             if spec is None:
                 return None
             offset_attr, width, dtype = spec
-            payload = parse_payload_common(
-                entry_bytes, header.payload_offset)
+            try:
+                payload = parse_payload_common(
+                    entry_bytes, header.payload_offset)
+            except ValueError:
+                return None     # unreadable payload -> refuse, don't raise
             return getattr(payload, offset_attr), width, dtype
         # ``data.variant.type`` resolves to the tag byte itself ,
         # the variant tag IS the type discriminator. Apply path uses
@@ -1073,8 +1136,11 @@ def locate_buff_field(
         if tail == ".data.variant.type":
             if header.absent_flag != 0:
                 return None
-            payload = parse_payload_common(
-                entry_bytes, header.payload_offset)
+            try:
+                payload = parse_payload_common(
+                    entry_bytes, header.payload_offset)
+            except ValueError:
+                return None     # unreadable payload -> refuse, don't raise
             return payload.tag_offset, 1, "u8"
         # ``data.variant.body.fXX`` resolves to the field's offset
         # inside the variant tail. Variant tail starts at the end of
@@ -1085,8 +1151,11 @@ def locate_buff_field(
             if header.absent_flag != 0:
                 return None
             leaf = tail[len(".data.variant.body."):]
-            payload = parse_payload_common(
-                entry_bytes, header.payload_offset)
+            try:
+                payload = parse_payload_common(
+                    entry_bytes, header.payload_offset)
+            except ValueError:
+                return None     # unreadable payload -> refuse, don't raise
             variant = _VARIANT_BODY_FIELDS.get(payload.tag)
             if variant is None:
                 return None

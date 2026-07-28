@@ -1192,6 +1192,8 @@
   "infobar.import_empty": "Import leer",
   "infobar.snapshot_complete": "Snapshot abgeschlossen",
   "infobar.snapshot_complete_msg": "{count} Spieldateien indiziert. Du kannst jetzt Mods importieren.",
+  "infobar.snapshot_no_version": "Snapshot fertig — Spielversion unbekannt",
+  "infobar.snapshot_no_version_msg": "{count} Spieldateien indiziert, aber die Spielversion konnte nicht gelesen werden (CrimsonDesert.exe wird möglicherweise von einem Antivirenprogramm oder von Steam blockiert). Übernehmen kann weiterhin gesperrt sein — schließe Steam und führe „Spieldateien neu scannen“ erneut aus.",
   "nexus.invalid_url": "Ungültige URL",
   "nexus.invalid_url_body": "Keine Mod-ID in der URL gefunden.",
   "nexus.linked": "Verknüpft",

@@ -50,6 +50,10 @@ _FIELD_MAP: dict[str, tuple[str, int, str, int]] = {
     "upper_chart.group_lookup": (_BLK, 0, "<I", 4),
     "lower_chart.group_lookup":
         ("_lowerActionChartPackageGroupName_offset", 0, "<I", 4),
+    # GitHub #192 (Yorivel): mesh / visual-swap mods set the appearance
+    # hash and the model-path hash. Both are plain u32 name-hash slots
+    # in the same action-chart block (block+12 / block+16), located by
+    # the same parser walk as the four #150 u32 fields.
     "lookup_22": ("_appearanceName_stream_offset", 0, "<I", 4),
     "lookup_24": ("_characterPrefabPath_stream_offset", 0, "<I", 4),
     "skeleton_name": ("_skeletonName_offset", 0, "<I", 4),
@@ -78,6 +82,20 @@ _FIELD_MAP: dict[str, tuple[str, int, str, int]] = {
     # position; on a record it cannot locate, this is refused like any
     # other unlocatable field.
     "character_weight": ("_defaultActionActionIndex_offset", 0, "<I", 4),
+    # DMM "no dragon / companion re-summon cooldown" mods set this to 1 on
+    # mount/companion records (Riding_Dragon_1, Kliff, Damian, ...). It is a
+    # u64 re-summon cooldown the parser already decodes (only summonable
+    # entities have a nonzero value; ordinary NPCs read 0). Adding it here
+    # enables both validation (_CHARACTERINFO_FIELDS is this same set) and the
+    # in-place, length-preserving write.
+    #
+    # Byte delta 0: the parser publishes this offset immediately before its
+    # own `<Q` read at the same position, so the write lands where the read
+    # does. Verified in review against a measured run (change offset 64 vs
+    # parser offset 64). It belongs in _FIELD_MAP rather than
+    # _NEW_SCHEMA_MAP so legacy-vintage mods keep it -- SUPPORTED_FIELDS
+    # derives from _FIELD_MAP and picks it up automatically.
+    "call_mercenary_cool_time": ("_callMercenaryCoolTime_offset", 0, "<Q", 8),
 }
 
 # CURRENT DMM Mod Builder naming (Character Creator / Female Animations 7.6,
