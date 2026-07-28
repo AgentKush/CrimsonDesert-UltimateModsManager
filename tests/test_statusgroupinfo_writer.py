@@ -266,6 +266,124 @@ def test_refuses_a_record_that_does_not_tile():
     assert "does not match the known" in dropped[0][1]
 
 
+@pytest.mark.parametrize("bad", [0, 1, 999999, 1000075, 2000000, 2 ** 32 - 1])
+def test_refuses_keys_outside_the_statusinfo_key_space(bad):
+    """#320 review: `new` was only checked for being a 32-bit int, so
+    status_info_list[3] = 99999 was accepted and written. These lists
+    hold statusinfo record keys; anything outside 1000000-1000074 is a
+    dangling reference in a list the game dereferences."""
+    body, header = _tables()
+    changes, dropped = build_statusgroupinfo_changes(
+        body, header, [_intent(STAT_ON_ITEM, 3, bad)])
+    assert changes == [], f"{bad} must not be written"
+    assert "outside the statusinfo key space" in dropped[0][1]
+
+
+def test_the_key_space_bound_agrees_with_the_index_table_width():
+    """The bound isn't a magic number: the statusinfo snapshot has one
+    key per reverse-index slot. If those ever disagree the bound is
+    wrong, so pin the agreement rather than the literal."""
+    from cdumm.engine.stat_names import STAT_NAMES_CD113
+    from cdumm.engine.statusgroupinfo_writer import (
+        _TABLE_LEN,
+        _status_key_space,
+    )
+    assert len(STAT_NAMES_CD113) == _TABLE_LEN
+    lo, hi = _status_key_space()
+    assert (lo, hi) == (min(STAT_NAMES_CD113), max(STAT_NAMES_CD113))
+    assert hi - lo + 1 == _TABLE_LEN
+
+
+def test_every_key_the_mod_writes_is_inside_the_bound():
+    """The guard must not refuse the thing it exists to allow."""
+    body, header = _tables()
+    changes, dropped = build_statusgroupinfo_changes(
+        body, header, [_intent(STAT_ON_ITEM, 3, CRITICAL_DAMAGE)])
+    assert dropped == [], dropped
+    assert len(changes) == 1
+
+
+# ---------------------------------------------- the reverse index (#320)
+
+def _reverse_index_conflicts(body: bytes, header: bytes):
+    """Slots that claim two different statusinfo keys across the table.
+
+    table 0 is a reverse index over list 1: each occupied slot holds a
+    position in that record's list 1, and reading the key there gives
+    slot -> key. Vanilla is a clean global bijection.
+    """
+    _, offsets = parse_pabgh_index(header, "statusgroupinfo")
+    starts = sorted(offsets.values())
+    mapping, conflicts = {}, []
+    for key, o in offsets.items():
+        i = starts.index(o)
+        end = starts[i + 1] if i + 1 < len(starts) else len(body)
+        lists = parse_record(body, o, end)
+        assert lists is not None, key
+        # walk past the three lists to reach table 0
+        p = lists[-1][0] + 4 * lists[-1][1]
+        t0_start, t0_count = p + 4, struct.unpack_from("<I", body, p)[0]
+        l1_start, l1_count = lists[1]
+        for slot in range(t0_count):
+            pos = _elem(body, t0_start + 4 * slot)
+            if pos == 0xFFFFFFFF:
+                continue
+            assert pos < l1_count, (key, slot, pos)   # never out of range
+            sk = _elem(body, l1_start + 4 * pos)
+            if mapping.setdefault(slot, sk) != sk:
+                conflicts.append((slot, mapping[slot], sk))
+    return mapping, conflicts
+
+
+def test_vanilla_reverse_index_is_a_global_bijection():
+    body, header = _tables()
+    mapping, conflicts = _reverse_index_conflicts(body, header)
+    assert conflicts == [], conflicts
+    assert len(mapping) == 53
+
+
+def test_the_mods_write_leaves_the_reverse_index_semantically_stale():
+    """#320 review, reproduced and pinned.
+
+    The write changes list 1 without touching table 0, so slot 9 -- which
+    every other record uses for CriticalRate -- now resolves to
+    CriticalDamage on the two records the mod edits. This test asserts
+    the review's finding rather than hiding it: if a future change starts
+    maintaining the index, this test is what should be updated to say so.
+    """
+    body, header = _tables()
+    changes, _ = build_statusgroupinfo_changes(
+        body, header,
+        [_intent(STAT_ON_ITEM, 3, CRITICAL_DAMAGE),
+         _intent(STAT_ON_ITEM_NO_ASR, 3, CRITICAL_DAMAGE,
+                 entry="StatOnActivateByItemWithoutAttackSpeedRate")])
+    patched = _apply(body, changes)
+    _mapping, conflicts = _reverse_index_conflicts(patched, header)
+    # one per edited record, and the same slot both times
+    assert conflicts == [(9, 1000007, CRITICAL_DAMAGE)] * 2, conflicts
+
+
+def test_the_stale_slot_is_semantic_not_structural():
+    """What the review could not settle was harmless vs silently wrong vs
+    crash. A crash needs a pointer that dangles or leaves the list; this
+    pins that neither happens. Every record still tiles, every index
+    entry still points in range at a real element, and the write is
+    length-preserving."""
+    body, header = _tables()
+    changes, _ = build_statusgroupinfo_changes(
+        body, header,
+        [_intent(STAT_ON_ITEM, 3, CRITICAL_DAMAGE),
+         _intent(STAT_ON_ITEM_NO_ASR, 3, CRITICAL_DAMAGE,
+                 entry="StatOnActivateByItemWithoutAttackSpeedRate")])
+    patched = _apply(body, changes)
+    assert len(patched) == len(body)
+    assert sum(a != b for a, b in zip(body, patched)) == 2
+    # _reverse_index_conflicts asserts pos < l1_count on every entry of
+    # every record, and parse_record returns None unless the record tiles
+    # exactly -- so reaching the end here is the in-range/tiling proof.
+    _reverse_index_conflicts(patched, header)
+
+
 # ------------------------------------------------------------- the wiring
 
 def test_validate_intents_accepts_status_info_list():

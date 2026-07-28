@@ -53,10 +53,28 @@ The contents do settle it, the same way on both record families:
   named for granting stats cannot have an empty ``_statusInfoList``.
 
 So list 1 is ``status_info_list``. That is an inference from content rather
-than a byte-level proof, so the writer does not lean on it alone: an intent
-is refused whenever another list in the same record is also long enough to
-satisfy the index. Where the two could disagree, nothing is written; where
-they cannot, the answer is forced regardless of the naming.
+than a byte-level proof.
+
+How far the ambiguity guard actually reaches
+--------------------------------------------
+The writer refuses whenever another list in the same record is also long
+enough to satisfy the index. **That is a narrower guarantee than "the
+answer is forced regardless of the naming"**, which is what an earlier
+revision of this docstring claimed (#320 review). The guard only fires
+where two lists overlap; above ``len(list0)`` only list 1 fits, so the
+index resolves without the guard ever being consulted and the naming
+inference is load-bearing and unchecked -- roughly a hundred index
+positions across the table.
+
+It happens to be forced for the two records mod 2634 targets, because
+their list 0 and list 2 are empty, so no other list could take the
+index at all. For those two the answer really is naming-independent.
+Elsewhere it is the content argument above doing the work. Two further
+confirmations, both from the review rather than this PR's own evidence:
+every decoded value resolves to a real stat name, and record 1000007
+``StatOnActivateByItemWithoutAttackSpeedRate`` holds exactly record
+1000006's list 1 minus ``AttackSpeedRate`` -- the record's own name
+describes list 1's contents.
 """
 from __future__ import annotations
 
@@ -75,7 +93,37 @@ _N_TABLES = 2
 _TABLE_LEN = 75              # one entry per statusinfo record
 _MAX_COUNT = 4096            # sanity bound while walking
 
+#: These lists hold ``statusinfo`` record keys, so a value outside that
+#: key space is a dangling reference in a list the game dereferences --
+#: a plausible crash vector, and never what a mod means. The key space is
+#: 1000000..1000074, which is not a magic number here: it is the repo's
+#: own statusinfo snapshot (``stat_names.STAT_NAMES_CD113``, 75 keys),
+#: and 75 is exactly ``_TABLE_LEN`` -- the reverse-index tables carry one
+#: slot per statusinfo record. The two agreeing is the check that this
+#: bound is the real one. Verified at import.
+_MIN_STATUS_KEY = 1000000
+_MAX_STATUS_KEY = 1000074
+
 _FIELD_RE = re.compile(r"^status_info_list\[(\d+)\]$")
+
+
+def _status_key_space() -> tuple[int, int]:
+    """(min, max) statusinfo key, cross-checked against ``_TABLE_LEN``.
+
+    Falls back to the constants above if the snapshot is unavailable, so
+    a trimmed build still range-checks rather than accepting anything.
+    """
+    try:
+        from cdumm.engine.stat_names import STAT_NAMES_CD113 as names
+    except Exception:  # noqa: BLE001 -- optional module, bound still applies
+        return _MIN_STATUS_KEY, _MAX_STATUS_KEY
+    if len(names) != _TABLE_LEN:
+        logger.warning(
+            "statusgroupinfo: statusinfo snapshot has %d keys but the "
+            "reverse-index tables have %d slots; using the wider bound",
+            len(names), _TABLE_LEN)
+        return _MIN_STATUS_KEY, _MAX_STATUS_KEY
+    return min(names), max(names)
 
 
 def _read_list(body: bytes, p: int, end: int) -> tuple[int, int] | None:
@@ -143,6 +191,7 @@ def build_statusgroupinfo_changes(
                     for i in intents]
     starts = sorted(offsets.values())
     body_len = len(vanilla_body)
+    lo_key, hi_key = _status_key_space()
 
     changes: list[dict] = []
     for intent in intents:
@@ -163,6 +212,12 @@ def build_statusgroupinfo_changes(
             dropped.append((intent, (
                 f"value {new!r} is not a statusinfo record key "
                 f"(a 32-bit integer)")))
+            continue
+        if not lo_key <= new <= hi_key:
+            dropped.append((intent, (
+                f"value {new} is outside the statusinfo key space "
+                f"({lo_key}-{hi_key}); writing it would leave a dangling "
+                f"record reference in a list the game dereferences")))
             continue
         raw_key = getattr(intent, "key", None)
         try:
@@ -196,6 +251,10 @@ def build_statusgroupinfo_changes(
         if fits != [_STATUS_INFO_LIST]:
             # More than one list could take this index, so which one the
             # mod means is not forced by the data. Refuse rather than pick.
+            # Note this guard only reaches overlapping indexes -- above
+            # len(list0) only list 1 fits and the naming inference in the
+            # module docstring carries the write unchecked. See the
+            # "How far the ambiguity guard actually reaches" section.
             dropped.append((intent, (
                 f"status_info_list[{idx}] is ambiguous on record key "
                 f"{key}: lists {fits} could all hold that index")))
