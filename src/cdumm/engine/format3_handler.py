@@ -647,6 +647,11 @@ _V32_RESERVED_OPS = frozenset({
 })
 
 
+# statusinfo stat_level_data[N] path (DIRECT SPEED .cdmod stat mods). The
+# statusinfo_writer bounds N to 0..15 and refuses non-rate records; this
+# only needs to recognise the shape so the intent reaches that writer.
+_STATUSINFO_SLD_RE = re.compile(r"^stat_level_data\[\d+\]$")
+
 def _partition_unsupported_op(
     intent: Format3Intent,
 ) -> str | None:
@@ -1461,6 +1466,20 @@ def _classify_intent(
     # GitHub #224 (Female Armor Module): stringinfo's _buffer is a
     # length-prefixed variable-length string the PABGB schema drops
     # (stream=None), so the generic walker can't write it. The clean-room
+    # statusinfo (DIRECT SPEED .cdmod stat mods): stat_level_data[N] is a
+    # per-level uint64 element on the four rate records, stored as 24-bit
+    # fixed point. statusinfo's PABGB schema is positional and has no such
+    # array, so the generic walker can't resolve it; the clean-room
+    # statusinfo writer (statusinfo_writer.build_statusinfo_changes)
+    # locates the record by key and writes the element in place. The value
+    # must be a whole number, and the writer refuses any record that isn't
+    # a 212-byte rate record, any index outside 0..15, and any value that
+    # doesn't fit once shifted -- each dropped cleanly at apply time with a
+    # logged warning, mirroring the multichangeinfo/stringinfo early-accept.
+    if tn_norm == "statusinfo" and _STATUSINFO_SLD_RE.match(intent.field) \
+            and type(getattr(intent, "new", None)) is int:
+        return None
+
     # stringinfo writer (stringinfo_writer.build_stringinfo_changes)
     # locates the record by key, rewrites the buffer, and rebuilds the
     # companion .pabgh offsets. Accept the DMM name 'buffer' and the
