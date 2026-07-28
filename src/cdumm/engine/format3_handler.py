@@ -1163,6 +1163,14 @@ LIST_WRITERS: dict[tuple[str, str], str] = {
        for leaf in ("a", "b", "c", "d", "e", "f",
                     "stat_type", "stat_hash", "flag",
                     "value", "hash2", "hash3")},
+    # knowledgeinfo is_default (recipe / elemental unlock mods). The
+    # schema declares _isDefault as a direct_15B tagged primitive, which
+    # validate_intents refuses because the schema doesn't say where in
+    # those bytes the value sits. knowledgeinfo_writer locates it.
+    ("knowledgeinfo", "is_default"):
+        "knowledgeinfo_writer.build_knowledgeinfo_changes",
+    ("knowledgeinfo", "isDefault"):
+        "knowledgeinfo_writer.build_knowledgeinfo_changes",
 }
 
 
