@@ -294,6 +294,64 @@ def test_the_key_space_bound_agrees_with_the_index_table_width():
     assert hi - lo + 1 == _TABLE_LEN
 
 
+def test_key_space_falls_back_when_the_snapshot_is_unusable(monkeypatch,
+                                                            caplog):
+    """The bound is derived, so it has two failure modes: the snapshot
+    module missing (trimmed build) and the snapshot disagreeing with the
+    table width. Neither may silently drop the range check -- both must
+    fall back to the literal bound, and the disagreement must be logged.
+    """
+    import builtins
+    import logging
+
+    from cdumm.engine import stat_names
+    from cdumm.engine.statusgroupinfo_writer import (
+        _MAX_STATUS_KEY,
+        _MIN_STATUS_KEY,
+        _status_key_space,
+    )
+    expected = (_MIN_STATUS_KEY, _MAX_STATUS_KEY)
+
+    # 1. snapshot present but the wrong width -> fall back AND warn
+    monkeypatch.setattr(stat_names, "STAT_NAMES_CD113", {1: "x", 2: "y"})
+    with caplog.at_level(logging.WARNING):
+        assert _status_key_space() == expected
+    assert any("reverse-index tables" in r.message for r in caplog.records), (
+        [r.message for r in caplog.records])
+    monkeypatch.undo()
+
+    # 2. module unimportable -> fall back, no crash
+    real_import = builtins.__import__
+
+    def _boom(name, *a, **k):
+        if name == "cdumm.engine.stat_names":
+            raise ImportError("simulated trimmed build")
+        return real_import(name, *a, **k)
+
+    monkeypatch.setattr(builtins, "__import__", _boom)
+    assert _status_key_space() == expected
+
+
+def test_out_of_range_is_still_refused_under_the_fallback(monkeypatch):
+    """The fallback must actually be wired into the refusal, not just
+    return a tuple nobody consults."""
+    import builtins
+
+    real_import = builtins.__import__
+
+    def _boom(name, *a, **k):
+        if name == "cdumm.engine.stat_names":
+            raise ImportError("simulated trimmed build")
+        return real_import(name, *a, **k)
+
+    monkeypatch.setattr(builtins, "__import__", _boom)
+    body, header = _tables()
+    changes, dropped = build_statusgroupinfo_changes(
+        body, header, [_intent(STAT_ON_ITEM, 3, 99999)])
+    assert changes == []
+    assert "outside the statusinfo key space" in dropped[0][1]
+
+
 def test_every_key_the_mod_writes_is_inside_the_bound():
     """The guard must not refuse the thing it exists to allow."""
     body, header = _tables()
