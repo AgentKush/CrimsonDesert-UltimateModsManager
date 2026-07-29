@@ -699,7 +699,8 @@ def expand_format3_into_aggregated(
     _WHOLE_TABLE_TARGETS = {
         "iteminfo.pabgb", "skill.pabgb", "multichangeinfo.pabgb",
         "storeinfo.pabgb", "equipslotinfo.pabgb", "stringinfo.pabgb",
-        "inventory.pabgb", "statusinfo.pabgb", "knowledgeinfo.pabgb"}
+        "inventory.pabgb", "statusinfo.pabgb", "knowledgeinfo.pabgb",
+        "interactioninfo.pabgb"}
     whole_table_intents: dict[str, list] = {}
     whole_table_mod_names: dict[str, list[str]] = {}
     # Per-INTENT mod attribution, index-aligned with
@@ -1140,6 +1141,112 @@ def expand_format3_into_aggregated(
                     len(batched), len(contributing_mods), len(pabgb_changes),
                     ", + pabgh offset rebuild"
                     if pabgh_change is not None else "")
+                continue
+
+            # interactioninfo.pabgb (Fast Pickup - Increase Range):
+            # interaction_pivot_list[0].raw_a/.raw_b are the pivot's
+            # distance + lower-height f32 pair. Length-preserving.
+            #
+            # Only those two fields divert to the writer; every other
+            # interactioninfo intent falls through to the standard path,
+            # same partition as storeinfo/equipslotinfo below. Routing the
+            # whole table here regressed is_blocked, interaction_type and
+            # auto_moving_stop_distance from 1 change each to 0 refused
+            # (GitHub #317 review) -- those reach the generic walker today
+            # and produce real bytes. The accept-set is the writer's own
+            # SUPPORTED_FIELDS so the two cannot drift apart.
+            if target == "interactioninfo.pabgb":
+                from cdumm.engine import interactioninfo_writer as _iw
+                writer_batch, passthrough = [], []
+                for _i in batched:
+                    field_name = (getattr(_i, "field", "") or "").strip()
+                    (writer_batch if field_name in _iw.SUPPORTED_FIELDS
+                     else passthrough).append(_i)
+                pt_changes = 0
+                if passthrough:
+                    extra = _intents_to_v2_changes(
+                        target, vanilla_body, vanilla_header, passthrough)
+                    if extra:
+                        pt_changes = len(extra)
+                        contrib_ids_pt = list(
+                            whole_table_mod_ids.get(target, []))
+                        for c in extra:
+                            c["_target_file"] = target
+                            if contrib_ids_pt:
+                                c["_source_mod_ids"] = list(contrib_ids_pt)
+                        aggregated.setdefault(target, []).extend(extra)
+                        for c in extra:
+                            n_bytes_changed += len(c.get("patched", "")) // 2
+                        if participating_mod_ids is not None:
+                            for mid in contrib_ids_pt:
+                                participating_mod_ids.add(mid)
+                    logger.info(
+                        "Format 3 interactioninfo: %d non-pivot intent(s) "
+                        "handled by the standard path (%d change(s))",
+                        len(passthrough), pt_changes)
+                if not writer_batch:
+                    continue
+                batched = writer_batch
+                try:
+                    pabgb_changes, dropped = (
+                        _iw.build_interactioninfo_changes(
+                            vanilla_body, vanilla_header, batched))
+                except Exception as e:
+                    logger.error(
+                        "Format 3 interactioninfo writer crashed on %d "
+                        "intent(s): %s", len(batched), e, exc_info=True)
+                    pabgb_changes, dropped = [], []
+                if dropped:
+                    drop_lines = []
+                    for _it, _reason in dropped[:5]:
+                        _label = (getattr(_it, "entry", "")
+                                  or f"key={getattr(_it, 'key', '?')}")
+                        drop_lines.append(
+                            f"{_label}.{getattr(_it, 'field', '?')}: "
+                            f"{_reason}")
+                    more_n = len(dropped) - len(drop_lines)
+                    logger.warning(
+                        "Format 3 interactioninfo writer refused %d of %d "
+                        "intent(s)", len(dropped), len(batched))
+                    if warnings_out is not None:
+                        warnings_out.append(
+                            f"Format 3: {len(dropped)} interactioninfo "
+                            f"intent(s) skipped: " + "; ".join(drop_lines)
+                            + (f"; and {more_n} more (see log)"
+                               if more_n > 0 else ""))
+                if not pabgb_changes:
+                    logger.warning(
+                        "Format 3 interactioninfo: %d intent(s) from %d "
+                        "mod(s) produced 0 record changes",
+                        len(batched), len(contributing_mods))
+                    # Silent when the standard path already contributed:
+                    # the mod is not "0 byte changes", only its pivot
+                    # intents were.
+                    if warnings_out is not None and pt_changes == 0:
+                        warnings_out.append(
+                            f"Format 3 mod(s) "
+                            f"{', '.join(repr(n) for n in contributing_mods)} "
+                            f"produced 0 byte changes for "
+                            f"'interactioninfo.pabgb'. The targeted keys may "
+                            f"not exist in this game version, or every pivot "
+                            f"already held the requested range.")
+                    continue
+                contrib_ids = list(whole_table_mod_ids.get(target, []))
+                for c in pabgb_changes:
+                    c["_target_file"] = target
+                    if contrib_ids:
+                        c["_source_mod_ids"] = list(contrib_ids)
+                aggregated.setdefault(target, []).extend(pabgb_changes)
+                if participating_mod_ids is not None:
+                    for mid in contrib_ids:
+                        participating_mod_ids.add(mid)
+                for c in pabgb_changes:
+                    n_bytes_changed += len(c.get("patched", "")) // 2
+                logger.info(
+                    "Format 3 interactioninfo writer: applied %d intent(s) "
+                    "across %d mod(s), %d record change(s)",
+                    len(batched) - len(dropped), len(contributing_mods),
+                    len(pabgb_changes))
                 continue
 
             # inventory.pabgb (DMM Mod Builder "max inventory" mods):

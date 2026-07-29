@@ -67,6 +67,16 @@ logger = logging.getLogger(__name__)
 
 _SUPPORTED_OPS = frozenset({"set"})
 
+# interactioninfo pivot range path (Fast Pickup mods). Element 0 only:
+# the locator frames ONE pivot pair per record, so there is nothing for a
+# higher index to resolve to. Accepting ``[1]`` here would either write
+# it to element 0 or (once apply routes only the writer's own
+# SUPPORTED_FIELDS) drop it silently; rejecting it at validation instead
+# surfaces it as an unsupported field before Apply runs (GitHub #317
+# review). The writer still refuses records it cannot frame.
+_INTERACTION_PIVOT_RE = re.compile(
+    r"^interaction_pivot_list\[0\]\.raw_[ab]$")
+
 _raw_schema_cache: dict[str, dict] | None = None
 
 
@@ -1246,6 +1256,15 @@ def _diagnose_unsupported_intent(
         if tn == "characterinfo" and field in (
                 "upper_chart.group_lookup", "lower_chart.group_lookup"):
             return None
+
+        # Fast Pickup: interactioninfo interaction_pivot_list[0].raw_a /
+        # .raw_b are resolved by the clean-room interactioninfo writer,
+        # which frames the pivot range pair and refuses when it cannot
+        # locate it unambiguously. Higher indexes fall through to the
+        # message below -- they are genuinely not implemented.
+        if tn == "interactioninfo" and _INTERACTION_PIVOT_RE.match(
+                field or ""):
+            return None
         return (
             f"field '{field}' targets a nested struct sub-field "
             f"(dotted path). Format 3 nested-field writes are not "
@@ -1392,6 +1411,18 @@ def _classify_intent(
     tn_norm = (table_name or "").lower().replace(".pabgb", "")
     if tn_norm == "buffinfo" and intent.field.startswith(
             "buff_data_list["):
+        return None
+
+    # interactioninfo (Fast Pickup - Increase Range): the pivot list is
+    # field #26 of InteractionInfo with type None, so the generic walker
+    # has no descriptor for it and parse_records returns no records at
+    # all for this table. interactioninfo_writer frames the pivot f32
+    # range pair instead, and refuses any record where it cannot locate
+    # that frame unambiguously -- dropped cleanly at apply time with a
+    # logged warning, the same contract as the other clean-room writers.
+    if tn_norm == "interactioninfo" and _INTERACTION_PIVOT_RE.match(
+            intent.field or "") and isinstance(
+                getattr(intent, "new", None), int):
         return None
 
     # iteminfo nested-item paths (``prefab_data_list[N].xxx``,
