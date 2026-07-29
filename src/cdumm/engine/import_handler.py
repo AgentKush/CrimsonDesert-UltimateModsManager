@@ -537,6 +537,33 @@ from cdumm.engine.texture_mod_handler import detect_texture_mod, convert_texture
 _GAME_FILE_RE = re.compile(r'^(\d{4}/\d+\.(?:paz|pamt)|meta/\d+\.(?:papgt|pathc))$')
 
 
+def _nnnn_holds_game_content(nnnn: "Path") -> bool:
+    """True when a 4-digit game directory carries content in either form.
+
+    Mods ship a ``NNNN`` directory's payload two ways:
+
+    * **packed** -- ``NNNN/0.paz`` or ``NNNN/0.pamt``, the archive form
+      matched by :data:`_GAME_FILE_RE`.
+    * **loose** -- ``NNNN/<root>/...`` an unpacked tree, e.g. Character
+      Creator 7.7's ``0009/character/...`` and ``0012/ui/...``.
+
+    The loose arm deliberately requires a **subdirectory** rather than
+    just a non-empty directory. A loose game tree is always
+    ``NNNN/<root>/<file>``, so insisting on one directory level keeps
+    this from firing on a stray ``NNNN`` folder that happens to hold a
+    couple of loose files, and it cannot overlap the packed arm because
+    ``0.paz``/``0.pamt`` are files rather than directories.
+
+    Callers already establish that ``nnnn.name`` is four digits.
+    """
+    try:
+        if (nnnn / "0.paz").exists() or (nnnn / "0.pamt").exists():
+            return True
+        return any(child.is_dir() for child in nnnn.iterdir())
+    except OSError:
+        return False
+
+
 def _verify_and_fix_pamt_crc(pamt_bytes: bytes, rel_path: str) -> bytes:
     """Verify PAMT CRC and fix it if wrong.
 
@@ -1604,16 +1631,29 @@ def _find_loose_file_candidates(path: Path, max_depth: int = 5) -> list[dict]:
         if base_key in seen_bases:
             return None
         # Pattern 5: mod.json at this folder + 2+ sibling subfolders
-        # each carrying a NNNN/0.paz OR NNNN/0.pamt layout. Surface
-        # one candidate per sibling so the GUI's variant picker fires.
+        # each carrying a NNNN/ game-file directory. Surface one
+        # candidate per sibling so the GUI's variant picker fires.
         # Used by Character Creator (mod 837): CharacterCreator/mod.json
         # alongside HumanFemale/0036/..., GoblinMale/0036/..., etc.
+        #
+        # A NNNN dir counts when it holds game content in EITHER form,
+        # per _nnnn_holds_game_content:
+        #
+        #   packed  NNNN/0.paz  or  NNNN/0.pamt
+        #   loose   NNNN/<root>/...        (e.g. 0009/character/...)
+        #
         # v6.3+ ships each body type as 0036/0.pamt (no 0.paz), so the
-        # marker check accepts either archive form — both are valid game
-        # files per _GAME_FILE_RE (GitHub #189). Must run BEFORE Pattern
-        # 2 because Pattern 2 would otherwise match the top-level
-        # mod.json + sibling json/asi files at root and stop the walk
-        # before the body-type subfolders get a chance.
+        # packed form accepts either archive — both are valid game files
+        # per _GAME_FILE_RE (GitHub #189). Character Creator 7.7 then
+        # stopped packing altogether and ships loose trees instead
+        # (0009/character/..., 0012/ui/...) with ZERO .paz/.pamt in the
+        # whole archive, so a packed-only marker matched none of the
+        # race folders, variant_subdirs came back empty and the picker
+        # silently never fired (GitHub #329).
+        #
+        # Must run BEFORE Pattern 2 because Pattern 2 would otherwise
+        # match the top-level mod.json + sibling json/asi files at root
+        # and stop the walk before the body-type subfolders get a chance.
         mod_json = candidate / "mod.json"
         if mod_json.exists():
             try:
@@ -1638,11 +1678,11 @@ def _find_loose_file_candidates(path: Path, max_depth: int = 5) -> list[dict]:
                         continue
                     try:
                         for d in sub.iterdir():
-                            if (d.is_dir()
+                            if not (d.is_dir()
                                     and d.name.isdigit()
-                                    and len(d.name) == 4
-                                    and ((d / "0.paz").exists()
-                                         or (d / "0.pamt").exists())):
+                                    and len(d.name) == 4):
+                                continue
+                            if _nnnn_holds_game_content(d):
                                 variant_subdirs.append(sub)
                                 break
                     except OSError:
