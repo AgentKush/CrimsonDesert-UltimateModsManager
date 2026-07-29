@@ -21,6 +21,18 @@ _UNRELEASED_NOTES: list[str] = [
 
 CHANGELOG = [
     {
+        "version": "3.8.0",
+        "date": "2026-07-29",
+        "notes": [
+            "<b>Four more kinds of mod now apply instead of doing nothing.</b> Unlock All Recipes was applying 0 of its 166 changes, Fast Pickup 0 of 10, and the DIRECT SPEED stat mods and Ultra Hard Mode were writing nothing at all. Each needed a different part of the game's data decoded, and in each case CDUMM reported success while changing no bytes. All four apply now.",
+            "<b>A wrong value can no longer be written when the game's layout shifts.</b> The buff table stores entries whose lengths vary. If a future game patch changes one of those lengths, CDUMM used to keep walking and hand back a position that was slightly off, which is how a mod silently writes to the wrong place. It now only uses positions it can actually account for, and refuses the rest rather than guessing.",
+            "<b>A failed mod update can no longer delete the mod you already had.</b> Re-importing an updated pack used to remove the installed copy before writing the new one, so anything going wrong in between (a locked file, a full disk) left you with neither. The new copy is now staged first and only swapped in once it is complete, and the previous one is kept if anything fails.",
+            "<b>CDUMM reads game files it previously mistook for corrupt.</b> A number of the game's own file types are encrypted, and CDUMM only recognised that by file extension, so anything else came back as unreadable noise. It now detects the encryption itself, which makes roughly 90,000 more files in a normal install readable.",
+            "<b>When Apply is locked, it now tells you the real reason.</b> If CDUMM could not read your game's version during the last scan, usually because antivirus or Steam was holding the file, it used to say the game had been updated. That was simply wrong. It now says the version could not be read, that this is normally temporary, and what to do about it. The Activity log records what actually happened too, rather than always logging success.",
+            "Thanks to AgentKush, who wrote effectively all of this release.",
+        ],
+    },
+    {
         "version": "3.7.0",
         "date": "2026-07-27",
         "notes": [
