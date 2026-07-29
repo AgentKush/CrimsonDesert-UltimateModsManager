@@ -19,6 +19,14 @@
 
 CDUMM ships frequent updates. The complete version history — every release back to the first commit — is in **[CHANGELOG.md](CHANGELOG.md)**; the [Releases](https://github.com/faisalkindi/CrimsonDesert-UltimateModsManager/releases) page has full notes and downloads (the in-app updater shows them too). Recent highlights, newest first:
 
+### v3.7 — Character Creator, Ultra Hard Mode & apply safety
+
+- **v3.7.0** — _July 27, 2026_ — **Character Creator mods apply properly again**, after three separate faults: the shield module wrote nothing because CDUMM used a record size from an older game build instead of reading it from your files, the appearance and model fields Character Creator 7.6 sets weren't being written at all, and packs whose race / gender folders sit inside another folder never showed the picker. **Ultra Hard Mode goes from 0 of 5 values applied to 5 of 5** — the buff table stores entries of varying length, eleven of those lengths were unknown, so the walk lost its place partway through a record and everything after it was unreachable; the sizes are now derived from the game's own files. **Apply is now blocked if the game updates while CDUMM is open** — it used to warn and let you continue, and applying mods built against the old files could crash the game on launch; Rescan Game Files unlocks it again. Also: same-named nested folders import on Windows (long-path limit), variant packs keep the option you picked when you update them, macOS gets its window back after closing the game and Find Culprit Mod works there, and skipped-file notices are readable in dark theme, selectable and copyable. (#302, #190, #307, #191, #299, #300)
+
+### v3.6 — .cdmod support & the mods that needed DMM
+
+- **v3.6.0** — _July 18, 2026_ — **Popular item mods that previously needed DMM now work in CDUMM.** `prefab_data_list`, which the 1.13 patch relocated inside the item table, is decoded again — that's what Equip Everything and the AXIOM Mask Mega Collection need, and both were 100% blocked before. **New mod format: `.cdmod`**, including localization patches that tweak specific strings rather than replacing a whole language file. **Mods that edit different items in the same table no longer show as conflicting** — a helmet socket mod and a glove socket mod both touch `iteminfo.pabgb`, and CDUMM now compares the actual record and field each one comes for rather than just the filename. A rare crash-on-launch is fixed where a byte-offset mod and a whole-table rebuild could disagree about where things are: the offset change is moved onto the rebuilt table when that's provably safe, and refused with a reason when it isn't. Also: a **gear stat editor** in the Game Data tab, new Format 3 operations (`clone_record`, `new_record`, `delete_record`, `array_append`, and the `match` selector), broader DMM Mod Builder support (match-all, `$in`, inventory slot counts, character cooldowns, stat mods), and bug reports no longer open with a false "previous session crashed". (#285, #288, #290, #292, #293, #191)
+
 ### v3.5 — the Game Data tab & in-app mod maker
 
 - **v3.5.0** — _July 8, 2026_ — **A built-in Game Data browser, and mod-making without a hex editor.** The new **Game Data** tab indexes the game's own files (~1.6M assets) and lets you search them, open any keyed data table as a decoded grid (only fields verified byte-for-byte show as values — a guessed byte never masquerades as fact), and preview DDS textures (with a rotatable 3D view) and Wwise audio. The headline: **make a mod straight from the grid** — edit a verified value (an item's price, a stack size…), hit _Make mod from edits_, and CDUMM writes a ready-to-share `.field.json`; no offsets or hex required. Also in 3.5: **item mods work again on game 1.13** — a version-adaptive `iteminfo` decoder re-aligns to the reshuffled 1.13 record layout, so stackable-item, price, stat and socket mods apply byte-exact again (Fat Stacks: 2,254 / 2,254 edits) and large iteminfo applies no longer stall the watchdog. Compound armor mods (Format 3 icons + model remaps in one package) install fully. (#242, #252, #248, #241)
@@ -71,6 +79,7 @@ Your original game files are **never modified**. Mods are applied through an ove
 | Folders | Loose directories with PAZ/PAMT files or Crimson Browser mods |
 | `.json` (byte-patch) | Offset-based JSON mods (`offset`, `original`, `patched`) |
 | `.field.json` (field-name) | Field-name JSON mods — items, mounts, terrain, stages, regions, mount character, buffs, drop sets, and skills. Supports both singular `target` and multi-target `targets: [...]` shapes. |
+| `.cdmod` (v3.6) | Crimson Desert Mod Package — imports directly, including localization patches that tweak individual strings instead of replacing a whole language file |
 | `.dds` | DDS texture mods with full PATHC index registration (BC1/BC3/BC4/BC5/BC7) |
 | `OG_*.xml` | XML full replacement mods |
 | `.asi` | ASI plugins — auto-detected, installed to `bin64/` with clean uninstall tracking |
@@ -84,11 +93,12 @@ Your original game files are **never modified**. Mods are applied through an ove
 
 ## Key Features
 
-### Game Data & Mod Making (v3.5)
+### Game Data & Mod Making (v3.5 – v3.6)
 - **Browse the game's own data** — the **Game Data** tab indexes ~1.6M assets; search any of them and open a keyed data table as a decoded record grid.
 - **Make mods without a hex editor** — edit a verified value in the grid (an item's price, a stack size…) and _Make mod from edits_ writes a shareable `.field.json`. Only fields verified byte-for-byte are editable, so you can't corrupt a file by hand.
+- **Gear stat editor** (v3.6) — read and edit weapon / armour stats straight from the grid.
 - **Preview assets inline** — DDS textures (with a rotatable 3D view), Wwise audio (play / export to WAV), and text / structured formats, without leaving the app.
-- **Game 1.13 item modding** — a version-adaptive `iteminfo` decoder keeps stackable-item, price, stat and socket mods applying byte-exact after the 1.13 record-layout change.
+- **Keeps up with game patches** — a version-adaptive `iteminfo` decoder re-aligns to each record-layout change, so stackable-item, price, stat and socket mods keep applying byte-exact. Verified against game 1.15.
 
 ### NexusMods Integration (v3.2)
 - **One-click sign-in** — Login with Nexus opens your browser, you confirm, done. No API keys to copy and paste. CDUMM never sees your password.
@@ -99,6 +109,7 @@ Your original game files are **never modified**. Mods are applied through an ove
 ### Game Update Recovery (v3.2)
 - **One-click recovery after Steam patches.** Yellow banner appears on launch, click Start Recovery, watch a 4-step progress bar repair everything: verify your game files, regenerate every mod against the new game version, reapply.
 - **Two triggers, one banner.** Catches normal Steam patches AND any other change to your game files (antivirus rewrites, manual edits, half-finished Steam Verify).
+- **Apply is blocked, not just flagged, if the game updates while CDUMM is open** (v3.7) — applying mods built against the old files could crash the game on launch, so it stops and points you at Rescan Game Files, which unlocks it again straight away.
 - **Mods that can't be auto-recovered get safely disabled** instead of corrupting your save. CDUMM tells you which ones so you can drop their original archive back in.
 
 ### Performance
@@ -115,7 +126,7 @@ Your original game files are **never modified**. Mods are applied through an ove
 ### Mod Management
 - **Entry-level composition** — multiple mods safely modify the same PAZ file
 - **Semantic merging** — field-level diffing for PABGB data tables
-- **Conflict detection** — see exactly what overlaps and why
+- **Conflict detection** — see exactly what overlaps and why. Compared at record and field level (v3.6), so two mods editing different items in the same table aren't flagged against each other
 - **Override mode** — mod authors can declare conflict winners in `modinfo.json`
 - **Partial apply opt-in** (v3.2.3) — authors can mark a mod as "apply what fits" for cost-only / scalar tweaks
 - **Load order** — drag-and-drop reordering with folder groups
