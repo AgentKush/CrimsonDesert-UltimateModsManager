@@ -5,6 +5,18 @@ Summaries are condensed; each version links to its full release notes. See the
 [Releases](https://github.com/faisalkindi/CrimsonDesert-UltimateModsManager/releases) page for complete notes and downloads (the in-app updater also shows them).
 
 
+## v3.7
+
+- **[v3.7.0](https://github.com/faisalkindi/CrimsonDesert-UltimateModsManager/releases/tag/v3.7.0)** -- _2026-07-27_ -- Character Creator mods apply again: equipslotinfo's record block size is read from your files instead of an older build's constant (#190), Character Creator 7.6's appearance / model fields are written (#302), and wrapper-nested race / gender packs show the picker. Ultra Hard Mode goes 0 of 5 to 5 of 5 -- nine of the eleven unknown buff-variant lengths derived, so the item walk no longer loses its place. Apply is blocked, not just flagged, after a mid-session game update (#307). Same-named nested folders import on Windows (#191). Variant packs keep the selected option across an update. macOS: window restores after closing the game (#300), Find Culprit Mod works (#299). Skipped-file notices are dark-theme readable and copyable.
+
+## v3.6
+
+- **[v3.6.0](https://github.com/faisalkindi/CrimsonDesert-UltimateModsManager/releases/tag/v3.6.0)** -- _2026-07-18_ -- `prefab_data_list` decoded again after the 1.13 relocation, unblocking Equip Everything and AXIOM Mask Mega Collection (#285). New `.cdmod` package format, including partial localization patches (#288, #290). Conflict detection compares record and field, not just filename (#292). Offset mods are re-anchored onto a rebuilt table, or refused with a reason, instead of corrupting it (#293). Long-path zip import fix (#191). Gear stat editor in the Game Data tab. New Format 3 operations: `clone_record`, `new_record`, `delete_record`, `array_append`, `match`. DMM Mod Builder parity: match-all, `$in`, inventory slots, character cooldowns, stat mods. Bug reports no longer report a phantom previous-session crash.
+
+## v3.5
+
+- **[v3.5.0](https://github.com/faisalkindi/CrimsonDesert-UltimateModsManager/releases/tag/v3.5.0)** -- _2026-07-08_ -- The Game Data tab: ~1.6M assets indexed and searchable, keyed data tables shown as decoded grids (only byte-verified fields render as values), DDS and Wwise previews. Make a mod from grid edits -- writes a shareable `.field.json` with no hex editor (#242). Item mods work again on game 1.13 via a version-adaptive `iteminfo` decoder; large iteminfo applies no longer stall the watchdog (#252, #248). Compound armor mods install fully (#241).
+
 ## v3.4
 
 - **[v3.4.2](https://github.com/faisalkindi/CrimsonDesert-UltimateModsManager/releases/tag/v3.4.2)** -- _2026-06-30_ -- Text / string mods apply -- variable-length string entries are rewritten by key and the table index rebuilt (#224). The "Missing directory" error when disabling a folder-adding mod is fixed and names the mod (#225).
