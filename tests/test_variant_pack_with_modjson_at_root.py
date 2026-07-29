@@ -177,3 +177,113 @@ def test_pamt_only_variants_surface(tmp_path):
         f"each variant's _base_dir must be its body-type subfolder; "
         f"got: {sorted(bases)}"
     )
+
+
+_RACES_77 = ("Human Female", "Human Male", "Goblin Female", "Goblin Male",
+             "Orc Female", "Orc Male", "Dwarf Female", "Dwarf Male")
+
+
+def _make_loose_tree_variant_pack(tmp_path: Path) -> Path:
+    """Character Creator 837 as shipped in 7.7 (GitHub #329).
+
+    The third packaging change to this mod. 6.3 swapped ``0.paz`` for
+    ``0.pamt`` (#189); 7.7 stops packing altogether and ships each body
+    type as an UNPACKED tree -- ``0009/character/...`` and
+    ``0012/ui/...``. Verified against the real Nexus file 13119: it
+    contains **zero** ``0.paz`` or ``0.pamt`` entries anywhere.
+
+    The NNNN dirs are still there and still correctly named, so the
+    packed-only marker check found no variant subdirs, Pattern 5 was
+    skipped, and the body-type picker silently never fired.
+    """
+    root = tmp_path / "Character Creator"
+    root.mkdir()
+    (root / "mod.json").write_text(
+        '{"modinfo": {"title": "Character Creator", "version": "7.7"}}',
+        encoding="utf-8")
+    (root / "Female Animations.field.json").write_bytes(b"{}")
+    (root / "CharacterCreatorHead.asi").write_bytes(b"\x00")
+    for variant in _RACES_77:
+        # 0009 -> character/, 0012 -> ui/ : loose trees, no archive.
+        for nnnn, game_root in (("0009", "character"), ("0012", "ui")):
+            leaf = root / variant / nnnn / game_root / "descriptors"
+            leaf.mkdir(parents=True)
+            (leaf / "player_001.xml").write_text("<x/>", encoding="utf-8")
+    return tmp_path
+
+
+def test_loose_tree_variants_surface(tmp_path):
+    """7.7 ships unpacked NNNN/<root>/ trees with no .paz/.pamt at all.
+    Every body type must still surface (GitHub #329)."""
+    from cdumm.engine.import_handler import find_loose_file_variants
+
+    _make_loose_tree_variant_pack(tmp_path)
+    variants = find_loose_file_variants(tmp_path)
+
+    ids = sorted(v["id"] for v in variants)
+    assert len(variants) == len(_RACES_77), (
+        f"expected {len(_RACES_77)} loose-tree body-type variants, "
+        f"got {len(variants)}: {ids}"
+    )
+    bases = {Path(v["_base_dir"]).name for v in variants}
+    assert bases == set(_RACES_77), (
+        f"each variant's _base_dir must be its body-type subfolder; "
+        f"got: {sorted(bases)}"
+    )
+
+
+def test_loose_marker_needs_a_directory_not_just_files(tmp_path):
+    """The loose arm requires a SUBDIRECTORY inside NNNN, not merely a
+    non-empty NNNN. A body-type folder whose NNNN holds only loose files
+    is not a game tree, and widening the marker to "non-empty" would
+    start classifying such shapes as variant packs."""
+    from cdumm.engine.import_handler import find_loose_file_variants
+
+    root = tmp_path / "Character Creator"
+    root.mkdir()
+    (root / "mod.json").write_text(
+        '{"modinfo": {"title": "Character Creator"}}', encoding="utf-8")
+    for variant in ("Human Female", "Human Male", "Orc Female"):
+        d = root / variant / "0009"
+        d.mkdir(parents=True)
+        # files only -- no subdirectory, no archive
+        (d / "readme.txt").write_text("notes", encoding="utf-8")
+        (d / "preview.png").write_bytes(b"\x89PNG")
+
+    variants = find_loose_file_variants(tmp_path)
+    assert len(variants) < 2, (
+        f"NNNN dirs holding only loose files must not be treated as "
+        f"game trees; got {len(variants)}: {[v['id'] for v in variants]}"
+    )
+
+
+def test_nnnn_holds_game_content_arms(tmp_path):
+    """The predicate itself: packed archive, loose subdirectory, and the
+    two negatives."""
+    from cdumm.engine.import_handler import _nnnn_holds_game_content
+
+    packed_paz = tmp_path / "a" / "0009"
+    packed_paz.mkdir(parents=True)
+    (packed_paz / "0.paz").write_bytes(b"\x00")
+    assert _nnnn_holds_game_content(packed_paz) is True
+
+    packed_pamt = tmp_path / "b" / "0009"
+    packed_pamt.mkdir(parents=True)
+    (packed_pamt / "0.pamt").write_bytes(b"\x00")
+    assert _nnnn_holds_game_content(packed_pamt) is True
+
+    loose = tmp_path / "c" / "0009"
+    (loose / "character").mkdir(parents=True)
+    assert _nnnn_holds_game_content(loose) is True
+
+    files_only = tmp_path / "d" / "0009"
+    files_only.mkdir(parents=True)
+    (files_only / "readme.txt").write_text("x", encoding="utf-8")
+    assert _nnnn_holds_game_content(files_only) is False
+
+    empty = tmp_path / "e" / "0009"
+    empty.mkdir(parents=True)
+    assert _nnnn_holds_game_content(empty) is False
+
+    missing = tmp_path / "f" / "0009"
+    assert _nnnn_holds_game_content(missing) is False
