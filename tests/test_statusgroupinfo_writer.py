@@ -442,7 +442,230 @@ def test_the_stale_slot_is_semantic_not_structural():
     _reverse_index_conflicts(patched, header)
 
 
+# --------------------------------------------------- the writer's guards
+
+@pytest.mark.parametrize("mutate,why", [
+    (lambda b, o: None, "record shorter than the envelope"),
+    (lambda b, o: struct.pack_into("<I", b, o + 4, 10 ** 6),
+     "name runs past the record end"),
+    (lambda b, o: struct.pack_into("<I", b, o + 4, 2 ** 31),
+     "name_len overflows the body"),
+])
+def test_parse_record_refuses_malformed_records(mutate, why):
+    """A record whose envelope is corrupt must return None, not index
+    into whatever follows it in the body."""
+    body, header = _tables()
+    o, end = _bounds(body, header, STAT_ON_ITEM)
+    if why == "record shorter than the envelope":
+        assert parse_record(body, o, o + 4) is None, why
+        return
+    corrupt = bytearray(body)
+    mutate(corrupt, o)
+    assert parse_record(bytes(corrupt), o, end) is None, why
+
+
+@pytest.mark.parametrize("count,why", [
+    (10 ** 9, "list count past the sanity bound"),
+    (74, "index table is not 75 entries"),
+])
+def test_parse_record_refuses_bad_list_and_table_widths(count, why):
+    """_read_list's bound and the _TABLE_LEN check. Both exist so a
+    drifted layout is refused rather than written into on old offsets."""
+    body, header = _tables()
+    o, end = _bounds(body, header, STAT_ON_ITEM)
+    lists = parse_record(body, o, end)
+    assert lists is not None
+    corrupt = bytearray(body)
+    if why == "list count past the sanity bound":
+        target = lists[0][0] - 4                 # list 0's count field
+    else:
+        # the first index table's count sits after the last list
+        target = lists[-1][0] + 4 * lists[-1][1]
+    struct.pack_into("<I", corrupt, target, count)
+    assert parse_record(bytes(corrupt), o, end) is None, why
+
+
+def test_parse_record_refuses_a_record_that_over_runs():
+    """Shrinking the end by four bytes leaves the last index table
+    unable to fit -- refused before the tiling check."""
+    body, header = _tables()
+    o, end = _bounds(body, header, STAT_ON_ITEM)
+    assert parse_record(body, o, end) is not None
+    assert parse_record(body, o, end - 4) is None
+
+
+def test_parse_record_refuses_a_record_that_under_runs():
+    """The 'did not tile exactly' arm specifically: the grammar reads
+    cleanly but stops SHORT of the record end, so bytes are left over
+    that the writer has no account of. Extending the end is the only way
+    to reach this -- shrinking it trips the width check first.
+    """
+    body, header = _tables()
+    o, end = _bounds(body, header, STAT_ON_ITEM)
+    assert parse_record(body, o, end) is not None
+    assert parse_record(body, o, end + 4) is None
+
+
+def test_read_list_refuses_when_the_count_field_itself_does_not_fit():
+    """_read_list's first guard: fewer than 4 bytes remain, so even the
+    length prefix would read past the record."""
+    from cdumm.engine.statusgroupinfo_writer import _read_list
+
+    body, header = _tables()
+    _o, end = _bounds(body, header, STAT_ON_ITEM)
+    assert _read_list(body, end - 3, end) is None       # one byte short
+    assert _read_list(body, end, end) is None           # nothing left
+
+
+def test_unreadable_header_drops_every_intent_rather_than_crashing(
+        monkeypatch):
+    """parse_pabgh_index raising must not take the whole Apply down --
+    every intent comes back as dropped with a reason.
+
+    Monkeypatched rather than fed a short header: a short header does NOT
+    raise, it warns and returns no offsets, so the intents fall through
+    to "no record with key" instead. This guard is for the raising case.
+    """
+    from cdumm.engine import statusgroupinfo_writer as sw
+
+    def _boom(*_a, **_k):
+        raise ValueError("simulated corrupt pabgh")
+
+    monkeypatch.setattr(sw, "parse_pabgh_index", _boom)
+    body, header = _tables()
+    intents = [_intent(STAT_ON_ITEM, 3, CRITICAL_DAMAGE),
+               _intent(STAT_ON_ITEM_NO_ASR, 3, CRITICAL_DAMAGE)]
+    changes, dropped = build_statusgroupinfo_changes(body, header, intents)
+    assert changes == []
+    assert len(dropped) == len(intents)
+    assert all("header unreadable" in r for _i, r in dropped), dropped
+
+
+def test_a_short_header_is_refused_too_just_by_a_different_route():
+    """The non-raising path the test above documents: no offsets, so
+    every key misses. Either way nothing is written."""
+    body, _header = _tables()
+    changes, dropped = build_statusgroupinfo_changes(
+        body, b"", [_intent(STAT_ON_ITEM, 3, CRITICAL_DAMAGE)])
+    assert changes == []
+    assert "no record with key" in dropped[0][1]
+
+
+def test_refuses_a_field_that_is_not_status_info_list():
+    body, header = _tables()
+    bad = Format3Intent(entry="StatOnActivateByItem", key=STAT_ON_ITEM,
+                        field="is_blocked", op="set", new=CRITICAL_DAMAGE)
+    changes, dropped = build_statusgroupinfo_changes(body, header, [bad])
+    assert changes == []
+    assert "is not status_info_list[N]" in dropped[0][1]
+
+
+@pytest.mark.parametrize("bad_key", [None, "not-an-int", 1.5])
+def test_refuses_a_record_key_that_is_not_an_integer(bad_key):
+    body, header = _tables()
+    i = Format3Intent(entry="StatOnActivateByItem", key=bad_key,
+                      field="status_info_list[3]", op="set",
+                      new=CRITICAL_DAMAGE)
+    changes, dropped = build_statusgroupinfo_changes(body, header, [i])
+    assert changes == []
+    assert ("not an integer" in dropped[0][1]
+            or "no record with key" in dropped[0][1]), dropped
+
+
 # ------------------------------------------------------------- the wiring
+#
+# The writer above is well covered in isolation. The dispatch that
+# connects it to Apply was not covered at all (33 of 34 added lines in
+# format3_apply.py never executed), so these drive the real pipeline.
+
+def _run_apply(intents, tmp_path, participating=None):
+    """Drive expand_format3_into_aggregated over a real mod file."""
+    import json
+
+    from cdumm.engine.format3_apply import expand_format3_into_aggregated
+    from cdumm.storage.database import Database
+
+    body, header = _tables()
+    mod = {"modinfo": {"title": "SG", "version": "1.0", "author": "t",
+                       "description": "t"},
+           "format": 3,
+           "targets": [{"file": "statusgroupinfo.pabgb",
+                        "intents": intents}]}
+    src = tmp_path / "sg.json"
+    src.write_text(json.dumps(mod), encoding="utf-8")
+    db = Database(tmp_path / "t.db")
+    db.initialize()
+    db.connection.execute(
+        "INSERT INTO mods (id, name, mod_type, enabled, priority, "
+        "json_source) VALUES (1, 'SG', 'paz', 1, 1, ?)", (str(src),))
+    db.connection.commit()
+    aggregated: dict = {}
+    warnings: list[str] = []
+    expand_format3_into_aggregated(
+        aggregated, {}, db, lambda _t: (body, header),
+        warnings_out=warnings, participating_mod_ids=participating)
+    db.close()
+    return aggregated.get("statusgroupinfo.pabgb", []), warnings
+
+
+def _mod_intent(key, idx, new):
+    return {"entry": "StatOnActivateByItem", "key": key,
+            "field": f"status_info_list[{idx}]", "op": "set", "new": new}
+
+
+def test_apply_dispatch_routes_the_real_mod_intent_end_to_end(tmp_path):
+    """Mod 2634's Global Critical Rate through the real pipeline, not
+    the writer directly: 2 records, 2 one-byte changes, attributed."""
+    participating: set = set()
+    changes, warnings = _run_apply(
+        [_mod_intent(STAT_ON_ITEM, 3, CRITICAL_DAMAGE),
+         _mod_intent(STAT_ON_ITEM_NO_ASR, 3, CRITICAL_DAMAGE)],
+        tmp_path, participating=participating)
+    assert len(changes) == 2, (changes, warnings)
+    assert all(c["_target_file"] == "statusgroupinfo.pabgb" for c in changes)
+    assert participating == {1}, participating
+    # length-preserving: 4 bytes in, 4 bytes out, per change
+    for c in changes:
+        assert len(c["original"]) == len(c["patched"]) == 8
+
+
+def test_apply_surfaces_writer_refusals_to_the_user(tmp_path):
+    """A refused intent must reach warnings_out with its reason, not
+    only the log."""
+    changes, warnings = _run_apply(
+        [_mod_intent(STAT_ON_ITEM, 3, 99999)], tmp_path)
+    assert changes == []
+    skipped = [w for w in warnings if "skipped" in w]
+    assert skipped, warnings
+    assert "outside the statusinfo key space" in skipped[0], skipped
+
+
+def test_apply_warns_when_the_mod_produced_nothing(tmp_path):
+    """Setting the key already there is a no-op; the user is told the
+    mod changed no bytes rather than left to guess."""
+    body, header = _tables()
+    lists = _lists(body, header, STAT_ON_ITEM)
+    already = _elem(body, lists[1][0] + 4 * 3)
+    changes, warnings = _run_apply(
+        [_mod_intent(STAT_ON_ITEM, 3, already)], tmp_path)
+    assert changes == []
+    assert [w for w in warnings if "0 byte changes" in w], warnings
+
+
+def test_a_crashing_writer_does_not_abort_the_apply(tmp_path, monkeypatch):
+    """The except-Exception guard in the dispatch. A bug in this writer
+    must not take down the rest of the Apply."""
+    from cdumm.engine import statusgroupinfo_writer as sw
+
+    def _boom(*_a, **_k):
+        raise RuntimeError("simulated writer bug")
+
+    monkeypatch.setattr(sw, "build_statusgroupinfo_changes", _boom)
+    changes, warnings = _run_apply(
+        [_mod_intent(STAT_ON_ITEM, 3, CRITICAL_DAMAGE)], tmp_path)
+    assert changes == []          # degraded, but the call returned
+    assert warnings               # and the user was told
+
 
 def test_validate_intents_accepts_status_info_list():
     intents = [_intent(STAT_ON_ITEM, 3, CRITICAL_DAMAGE)]
