@@ -174,6 +174,32 @@ def test_writer_refuses_rather_than_guesses(intent, fragment):
     assert len(dropped) == 1 and fragment in dropped[0][1]
 
 
+@pytest.mark.parametrize("field,supported", [
+    ("interaction_pivot_list[0].raw_a", True),
+    ("interaction_pivot_list[0].raw_b", True),
+    ("interaction_pivot_list[1].raw_a", False),
+    ("interaction_pivot_list[7].raw_b", False),
+])
+def test_only_element_zero_is_accepted(field, supported):
+    """The locator frames ONE pair per record, so there is nothing for a
+    higher index to resolve to. #317 review: the regex used to match any
+    index. Accepting [1] would either write it to element 0, or -- once
+    apply routes only the writer's own SUPPORTED_FIELDS -- drop it into a
+    generic walker that has no descriptor for _interactionPivotList and
+    applies zero bytes silently. Rejecting at validation is the loudest
+    of the three, so pin which spellings are accepted."""
+    from cdumm.engine.format3_handler import Format3Intent, validate_intents
+    from cdumm.engine.interactioninfo_writer import SUPPORTED_FIELDS
+
+    i = Format3Intent(entry="Gimmick_PickUp", key=1000004, field=field,
+                      op="set", new=RAW_3_0)
+    v = validate_intents("interactioninfo.pabgb", [i])
+    assert bool(v.supported) is supported, (field, v.skipped)
+    assert bool(v.skipped) is not supported, (field, v.skipped)
+    # and the apply dispatch's accept-set must agree with validation
+    assert (field in SUPPORTED_FIELDS) is supported, field
+
+
 @_needs
 def test_ambiguous_records_are_refused_not_guessed():
     """The frame only holds when upper height and goto offset are zero.

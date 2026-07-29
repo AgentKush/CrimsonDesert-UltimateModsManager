@@ -179,3 +179,38 @@ def test_mixed_interactioninfo_mod_gets_writer_and_walker_changes(tmp_path):
     for scalar in ("is_blocked", "interaction_type",
                    "auto_moving_stop_distance"):
         assert f"Gimmick_PickUp.{scalar}" in labels, (scalar, labels)
+
+
+#: f32 2.5 -- what Gimmick_PickUp's raw_a already holds, so writing it
+#: back is a genuine no-op and the writer emits no change.
+_RAW_2_5 = 1075838976
+
+
+@_needs_v115
+def test_zero_bytes_warning_is_silent_when_the_walker_contributed(tmp_path):
+    """The partition made "0 byte changes" reachable while the mod DID
+    apply something: the writer can legitimately emit nothing (the pivot
+    already holds the value) while a scalar on the standard path lands.
+    Warning the user their mod did nothing would then be wrong."""
+    changes, warnings = _run_interactioninfo([
+        {"entry": "Gimmick_PickUp", "key": 1000004, "field": "is_blocked",
+         "op": "set", "new": 1},
+        {"entry": "Gimmick_PickUp", "key": 1000004,
+         "field": "interaction_pivot_list[0].raw_a", "op": "set",
+         "new": _RAW_2_5},
+    ], tmp_path)
+    assert len(changes) == 1, (changes, warnings)
+    assert not [w for w in warnings if "0 byte changes" in w], warnings
+
+
+@_needs_v115
+def test_zero_bytes_warning_still_fires_when_nothing_applied(tmp_path):
+    """The other half of the guard: suppressing the warning must not
+    suppress it when the mod really did apply nothing."""
+    changes, warnings = _run_interactioninfo([
+        {"entry": "Gimmick_PickUp", "key": 1000004,
+         "field": "interaction_pivot_list[0].raw_a", "op": "set",
+         "new": _RAW_2_5},
+    ], tmp_path)
+    assert changes == []
+    assert [w for w in warnings if "0 byte changes" in w], warnings
