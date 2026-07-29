@@ -8107,22 +8107,62 @@ class CdummWindow(FluentWindow):
         # and swallowed the error, leaving a stale fingerprint that
         # re-triggered recovery on every launch. Do not reintroduce it.
 
+        # #315: the worker records whether it managed to stamp the game
+        # version alongside the snapshot. If it couldn't — the exe was
+        # briefly locked by antivirus or Steam — the OLD fingerprint is
+        # still stored, so the next Apply compares live against stale and
+        # blocks again, immediately after the user did the thing the
+        # banner told them to do. Clearing the flag here regardless made
+        # that loop silent: the rescan looked like it worked.
+        stamped = self._snapshot_stamped_version()
+
         # D1: rescan succeeded, clear the stale-snapshot flag so
         # Apply unlocks without requiring a restart.
-        if self._startup_context.get("game_updated"):
+        if stamped and self._startup_context.get("game_updated"):
             self._startup_context["game_updated"] = False
             logger.info(
                 "Cleared game_updated flag after rescan; Apply unlocked")
+        elif not stamped:
+            logger.warning(
+                "Snapshot finished but the game version could not be read; "
+                "leaving game_updated set so the state stays honest")
 
         # Refresh vanilla backups, ensure they match clean game state
         self._refresh_vanilla_backups()
 
         self._refresh_all()
-        InfoBar.success(
-            title=tr("infobar.snapshot_complete"),
-            content=tr("infobar.snapshot_complete_msg", count=count),
-            duration=6000, position=InfoBarPosition.TOP, parent=self)
+        if stamped:
+            InfoBar.success(
+                title=tr("infobar.snapshot_complete"),
+                content=tr("infobar.snapshot_complete_msg", count=count),
+                duration=6000, position=InfoBarPosition.TOP, parent=self)
+        else:
+            InfoBar.warning(
+                title=tr("infobar.snapshot_no_version"),
+                content=tr("infobar.snapshot_no_version_msg", count=count),
+                duration=12000, position=InfoBarPosition.TOP, parent=self)
         self._log_activity("snapshot", tr("activity.msg_snapshot_created", count=count))
+
+    def _snapshot_stamped_version(self) -> bool:
+        """Did the last snapshot manage to stamp the game version?
+
+        Recorded by the snapshot worker inside the snapshot's own
+        transaction (#315). Missing means an older database that predates
+        the flag, which is treated as success so an upgrade doesn't start
+        warning about snapshots that were in fact fine.
+        """
+        if not self._db:
+            return True
+        try:
+            row = self._db.connection.execute(
+                "SELECT value FROM config WHERE key = ?",
+                ("last_snapshot_version_stamped",)).fetchone()
+        except Exception as e:  # noqa: BLE001 -- never break the callback
+            logger.debug("Could not read snapshot stamp flag: %s", e)
+            return True
+        if row is None or row[0] is None:
+            return True
+        return str(row[0]) != "0"
 
     def _refresh_vanilla_backups(self) -> None:
         """Ensure critical vanilla backup files exist (PAMT, PAPGT, PATHC).

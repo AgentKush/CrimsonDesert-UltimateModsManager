@@ -77,7 +77,6 @@ _SUPPORTED_OPS = frozenset({"set"})
 _INTERACTION_PIVOT_RE = re.compile(
     r"^interaction_pivot_list\[0\]\.raw_[ab]$")
 
-
 _raw_schema_cache: dict[str, dict] | None = None
 
 
@@ -156,6 +155,10 @@ class Format3Intent:
     old: str | None = None
     match: dict | None = None
     clone: dict | None = None
+    # DMM Mod Builder's op:"scale" carries a numeric ``factor`` instead of a
+    # ``new`` value. Parsed leniently so a scale intent doesn't fail the whole
+    # mod; validate_intents decides whether the op is actually supported.
+    factor: Any = None
 
 
 @dataclass
@@ -354,14 +357,17 @@ def _parse_intents_block(
         # the apply path resolves records by decoding the table. ``field``
         # and ``new`` are always required.
         raw_match = raw.get("match")
-        if raw_match is not None and (
-            not isinstance(raw_match, dict) or not raw_match
-        ):
+        if raw_match is not None and not isinstance(raw_match, dict):
             raise ValueError(
                 f"{label} intent #{i} has an invalid 'match' selector; "
-                f"'match' must be a non-empty object of field:value "
-                f"conditions"
+                f"'match' must be an object of field:value conditions "
+                f"(an empty object {{}} matches every record in the table)"
             )
+        # An empty ``match: {}`` is DMM Mod Builder's "apply to every record"
+        # selector (e.g. infinite durability on all items). It is valid --
+        # the apply path's _match_record_keys treats a no-condition match as
+        # "all records" (all([]) is True) -- so accept it here rather than
+        # rejecting the whole mod.
         required_keys = (
             ("field",) if raw_match is not None else ("entry", "field")
         )
@@ -371,7 +377,18 @@ def _parse_intents_block(
                     f"{label} intent #{i} is missing required key "
                     f"'{required}'"
                 )
-        if "new" not in raw:
+        # ``op: scale`` (DMM Mod Builder) carries a ``factor`` instead of a
+        # ``new``. Require that instead so the intent parses and reaches
+        # validate_intents, which skips it per-intent if scale isn't supported
+        # for the target -- rather than the missing-``new`` check taking the
+        # whole mod down (the parser's lenient-on-op contract, #66).
+        _op = str(raw.get("op", "set"))
+        if _op == "scale":
+            if "factor" not in raw:
+                raise ValueError(
+                    f"{label} intent #{i} with op 'scale' is missing "
+                    f"'factor' (the multiplier)")
+        elif "new" not in raw:
             raise ValueError(
                 f"{label} intent #{i} is missing 'new' "
                 f"(the value to set)"
@@ -412,10 +429,11 @@ def _parse_intents_block(
             entry=str(raw.get("entry", "")),
             key=raw_key,
             field=str(raw["field"]),
-            op=str(raw.get("op", "set")),
-            new=raw["new"],
+            op=_op,
+            new=raw.get("new"),
             old=raw_old,
             match=raw_match,
+            factor=raw.get("factor"),
         ))
     return intents
 
@@ -639,6 +657,11 @@ _V32_RESERVED_OPS = frozenset({
 })
 
 
+# statusinfo stat_level_data[N] path (DIRECT SPEED .cdmod stat mods). The
+# statusinfo_writer bounds N to 0..15 and refuses non-rate records; this
+# only needs to recognise the shape so the intent reaches that writer.
+_STATUSINFO_SLD_RE = re.compile(r"^stat_level_data\[\d+\]$")
+
 def _partition_unsupported_op(
     intent: Format3Intent,
 ) -> str | None:
@@ -704,8 +727,12 @@ def _classify_match_selector(
     """
     match = intent.match or {}
     vf = getattr(schema, "verified_fields", None)
+    # DMM Mod Builder names the identity match fields ``key``/``string_key``;
+    # they resolve to CDUMM's ``_key``/``_name`` metadata (see
+    # format3_apply._DMM_MATCH_FIELD_ALIASES), which are always safe to match.
+    _dmm_aliases = {"key": "_key", "string_key": "_name"}
     for mf in match:
-        if mf in _MATCH_META_FIELDS:
+        if _dmm_aliases.get(mf, mf) in _MATCH_META_FIELDS:
             continue
         resolved = _resolve_schema_field_name(mf, field_specs)
         if resolved is None:
@@ -1114,14 +1141,46 @@ LIST_WRITERS: dict[tuple[str, str], str] = {
         "skill_writer.build_skill_intent_change",
     ("skill", "_buffLevelList"):
         "skill_writer.build_skill_intent_change",
-    # interactioninfo pivot range (Fast Pickup mods). _interactionPivotList
-    # is field #26 of InteractionInfo with type None -- no descriptor -- so
-    # the generic walker cannot reach it (parse_records returns 0 records
-    # for this table). interactioninfo_writer frames the pair instead.
-    ("interactioninfo", "interaction_pivot_list[].raw_a"):
-        "interactioninfo_writer.build_interactioninfo_changes",
-    ("interactioninfo", "interaction_pivot_list[].raw_b"):
-        "interactioninfo_writer.build_interactioninfo_changes",
+    # inventory slot-count writer (DMM Mod Builder "max inventory" mods).
+    # inventory.pabgb has no PABGB schema and its .pabgh carries no record
+    # offsets, so these scalar fields route through the content-framed
+    # inventory_writer, which locates records by name.
+    ("inventory", "default_slot_count"):
+        "inventory_writer.build_inventory_changes",
+    ("inventory", "max_slot_count"):
+        "inventory_writer.build_inventory_changes",
+    ("inventory", "need_save_slot_count"):
+        "inventory_writer.build_inventory_changes",
+    # Current DMM Mod Builder naming (the ``_count`` suffix was dropped).
+    # AXIOM's "Inventory Space 240/700" uses these and applied 0 bytes
+    # because only the legacy names were registered. Same slots -- see
+    # inventory_writer._SLOT_FIELD_OFFSET.
+    ("inventory", "default_slots"):
+        "inventory_writer.build_inventory_changes",
+    ("inventory", "max_slots"):
+        "inventory_writer.build_inventory_changes",
+    ("inventory", "need_save_slots"):
+        "inventory_writer.build_inventory_changes",
+    # skill: current DMM addresses ONE element of the resource-stat list
+    # and one field inside it, by letter -- ``use_resource_stat_list[0]
+    # .d``. ``_routable`` normalizes ``[0]`` to ``[]``, the same wildcard
+    # mechanism #190 added for equipslotinfo, so one entry per leaf
+    # covers every index. skill_writer.parse_indexed_element_field is the
+    # authority for which leaves resolve; test_skill_indexed_element.py
+    # pins these two in sync.
+    **{("skill", f"use_resource_stat_list[].{leaf}"):
+       "skill_writer.build_skill_intent_change"
+       for leaf in ("a", "b", "c", "d", "e", "f",
+                    "stat_type", "stat_hash", "flag",
+                    "value", "hash2", "hash3")},
+    # knowledgeinfo is_default (recipe / elemental unlock mods). The
+    # schema declares _isDefault as a direct_15B tagged primitive, which
+    # validate_intents refuses because the schema doesn't say where in
+    # those bytes the value sits. knowledgeinfo_writer locates it.
+    ("knowledgeinfo", "is_default"):
+        "knowledgeinfo_writer.build_knowledgeinfo_changes",
+    ("knowledgeinfo", "isDefault"):
+        "knowledgeinfo_writer.build_knowledgeinfo_changes",
 }
 
 
@@ -1197,6 +1256,7 @@ def _diagnose_unsupported_intent(
         if tn == "characterinfo" and field in (
                 "upper_chart.group_lookup", "lower_chart.group_lookup"):
             return None
+
         # Fast Pickup: interactioninfo interaction_pivot_list[0].raw_a /
         # .raw_b are resolved by the clean-room interactioninfo writer,
         # which frames the pivot range pair and refuses when it cannot
@@ -1445,6 +1505,20 @@ def _classify_intent(
     # GitHub #224 (Female Armor Module): stringinfo's _buffer is a
     # length-prefixed variable-length string the PABGB schema drops
     # (stream=None), so the generic walker can't write it. The clean-room
+    # statusinfo (DIRECT SPEED .cdmod stat mods): stat_level_data[N] is a
+    # per-level uint64 element on the four rate records, stored as 24-bit
+    # fixed point. statusinfo's PABGB schema is positional and has no such
+    # array, so the generic walker can't resolve it; the clean-room
+    # statusinfo writer (statusinfo_writer.build_statusinfo_changes)
+    # locates the record by key and writes the element in place. The value
+    # must be a whole number, and the writer refuses any record that isn't
+    # a 212-byte rate record, any index outside 0..15, and any value that
+    # doesn't fit once shifted -- each dropped cleanly at apply time with a
+    # logged warning, mirroring the multichangeinfo/stringinfo early-accept.
+    if tn_norm == "statusinfo" and _STATUSINFO_SLD_RE.match(intent.field) \
+            and type(getattr(intent, "new", None)) is int:
+        return None
+
     # stringinfo writer (stringinfo_writer.build_stringinfo_changes)
     # locates the record by key, rewrites the buffer, and rebuilds the
     # companion .pabgh offsets. Accept the DMM name 'buffer' and the
@@ -1455,6 +1529,20 @@ def _classify_intent(
     if tn_norm == "stringinfo" and intent.field.lstrip("_").lower() == (
             "buffer") and isinstance(getattr(intent, "new", None), str):
         return None
+
+    # skill: current DMM addresses one element of a list and one field
+    # inside it by letter -- ``use_resource_stat_list[0].d``. The legacy
+    # whole-list names (``_useResourceStatList``) are in LIST_WRITERS and
+    # match above; these indexed paths never did, so Timuela's "Focus
+    # Aerial Roll doesn't cost Spirit" was refused outright. skill_writer
+    # resolves the letter against the vendored parser's own wire order
+    # and refuses any element or field the record doesn't actually have.
+    if tn_norm == "skill" and isinstance(
+            getattr(intent, "new", None), int) \
+            and not isinstance(getattr(intent, "new", None), bool):
+        from cdumm.engine.skill_writer import parse_indexed_element_field
+        if parse_indexed_element_field(intent.field) is not None:
+            return None
 
     # GitHub #150 (Female Animations) + #192 (mesh swap): characterinfo's
     # PABGB schema is a positional name-less decompiled structure, so the
