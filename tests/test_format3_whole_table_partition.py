@@ -116,7 +116,7 @@ _INTERACTIONINFO_CASES = {
 }
 
 
-def _run_interactioninfo(intents, tmp_path):
+def _run_interactioninfo(intents, tmp_path, participating=None):
     from cdumm.engine.format3_apply import expand_format3_into_aggregated
 
     def _load(name):
@@ -142,7 +142,7 @@ def _run_interactioninfo(intents, tmp_path):
     warnings: list[str] = []
     expand_format3_into_aggregated(
         aggregated, {}, db, lambda _t: (body, header),
-        warnings_out=warnings)
+        warnings_out=warnings, participating_mod_ids=participating)
     db.close()
     return aggregated.get("interactioninfo.pabgb", []), warnings
 
@@ -214,3 +214,66 @@ def test_zero_bytes_warning_still_fires_when_nothing_applied(tmp_path):
     ], tmp_path)
     assert changes == []
     assert [w for w in warnings if "0 byte changes" in w], warnings
+
+
+#: One of the 98 records the locator refuses to frame -- used to drive
+#: the writer's refusal all the way out to warnings_out.
+_UNFRAMEABLE_KEY = 1000021       # Gimmick_PickUp_Climb
+
+
+@_needs_v115
+@pytest.mark.parametrize("field,new,label", [
+    ("interaction_pivot_list[0].raw_a", _RAW_3_0, "writer path"),
+    ("is_blocked", 1, "standard path"),
+])
+def test_both_paths_attribute_the_mod_as_participating(field, new, label,
+                                                       tmp_path):
+    """Each branch of the partition records which mods contributed.
+    Missing that on either side means a mod silently isn't credited for
+    the bytes it applied."""
+    participating: set = set()
+    changes, warnings = _run_interactioninfo(
+        [{"entry": "Gimmick_PickUp", "key": 1000004, "field": field,
+          "op": "set", "new": new}], tmp_path, participating=participating)
+    assert len(changes) == 1, (label, changes, warnings)
+    assert participating == {1}, (label, participating)
+
+
+@_needs_v115
+def test_writer_refusals_reach_the_user_not_just_the_log(tmp_path):
+    """An intent the writer refuses must surface in warnings_out naming
+    the record and the reason. Refusing quietly is the failure mode this
+    whole writer exists to avoid."""
+    changes, warnings = _run_interactioninfo([
+        {"entry": "", "key": _UNFRAMEABLE_KEY,
+         "field": "interaction_pivot_list[0].raw_a", "op": "set",
+         "new": _RAW_3_0},
+    ], tmp_path)
+    assert changes == []
+    skipped = [w for w in warnings if "skipped" in w]
+    assert skipped, warnings
+    assert "could not be located unambiguously" in skipped[0], skipped
+
+
+@_needs_v115
+def test_a_crashing_writer_does_not_take_the_whole_apply_down(
+        tmp_path, monkeypatch):
+    """The except-Exception guard around the writer. A bug in one table's
+    writer must not abort every other mod in the same Apply."""
+    from cdumm.engine import interactioninfo_writer
+
+    def _boom(*_a, **_k):
+        raise RuntimeError("simulated writer bug")
+
+    monkeypatch.setattr(
+        interactioninfo_writer, "build_interactioninfo_changes", _boom)
+    changes, warnings = _run_interactioninfo([
+        {"entry": "Gimmick_PickUp", "key": 1000004, "field": "is_blocked",
+         "op": "set", "new": 1},
+        {"entry": "Gimmick_PickUp", "key": 1000004,
+         "field": "interaction_pivot_list[0].raw_a", "op": "set",
+         "new": _RAW_3_0},
+    ], tmp_path)
+    # the standard-path intent still applied despite the writer blowing up
+    assert len(changes) == 1, (changes, warnings)
+    assert changes[0].get("label") == "Gimmick_PickUp.is_blocked"

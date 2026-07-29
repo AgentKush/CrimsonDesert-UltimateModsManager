@@ -214,6 +214,41 @@ def test_ambiguous_records_are_refused_not_guessed():
     assert (located, len(bounds)) == (295, 393)
 
 
+#: A record the locator refuses (98 of 393 do). Used to exercise the
+#: builder's refusal branch, not just locate_pivot_pair in isolation.
+REFUSED_KEY = 1000021           # Gimmick_PickUp_Climb
+
+
+@pytest.mark.parametrize("lo,hi,why", [
+    (0, 8, "record shorter than the envelope"),
+    (0, 400, "name_len nonsense"),
+    (0, 20, "name runs past the record end"),
+])
+def test_locator_guards_return_none_rather_than_reading_past(lo, hi, why):
+    """The three early-outs in locate_pivot_pair. A malformed or
+    truncated record must refuse, not index into whatever follows."""
+    body = bytearray(4096)
+    if why == "name_len nonsense":
+        struct.pack_into("<I", body, 4, 9999)        # > 250
+    elif why == "name runs past the record end":
+        struct.pack_into("<I", body, 4, 200)         # 8 + 200 > hi
+    assert locate_pivot_pair(bytes(body), lo, hi) is None, why
+
+
+@_needs
+def test_builder_refuses_records_the_locator_cannot_frame():
+    """test_ambiguous_records_are_refused_not_guessed covers the locator;
+    this covers the builder acting on that refusal -- an intent aimed at
+    one of the 98 unframeable records must be dropped with a reason, not
+    written at a guessed offset."""
+    body, header = _table()
+    changes, dropped = build_interactioninfo_changes(
+        body, header, [_Intent(REFUSED_KEY, entry="")])
+    assert changes == []
+    assert len(dropped) == 1
+    assert "could not be located unambiguously" in dropped[0][1]
+
+
 def _is_multiple_of(value: float, step: float = 0.05) -> bool:
     return abs(round(value / step) - value / step) < 1e-4
 
