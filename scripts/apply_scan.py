@@ -39,10 +39,18 @@ so CI can gate on it the same way.
 IMPORTANT: a target whose vanilla bytes cannot be sourced is reported as
 NOT SCANNED, never as clean. A scanner that silently skips what it can't
 read is exactly the failure mode it exists to catch.
+
+SCOPE: Format 3 only. v2 byte-patch mods apply through
+``aggregate_json_mods_into_synthetic_patches``, an entirely different
+path this does not touch -- and they are the larger share of the real
+population: on a Nexus corpus, 226 of 498 JSON files (45%) were v2
+against 52 Format-3. The summary prints the v2 count so a clean result
+here is not read as "CDUMM has no gaps".
 """
 from __future__ import annotations
 
 import collections
+import json
 import logging
 import re
 import sys
@@ -185,6 +193,31 @@ def make_game_extractor(game_dir: Path):
     return _extract
 
 
+def count_v2_mods(paths: list[str]) -> int:
+    """How many v2 byte-patch mods are in these paths?
+
+    This scanner only covers Format 3. On a real Nexus corpus 226 of 498
+    JSON files (45%) were v2 byte-patch mods against 52 Format-3 ones, so
+    a clean result here is silent about the larger share of the mod
+    population -- they apply through aggregate_json_mods_into_synthetic_
+    patches, an entirely different path. Reporting the count keeps "no
+    intents dropped" from being read as "CDUMM has no gaps".
+    """
+    n = 0
+    for f in iter_mod_files(paths):
+        try:
+            d = json.loads(f.read_text(encoding="utf-8-sig"))
+        except Exception:  # noqa: BLE001, S112 -- see find_format3_mods
+            # Same blind-by-design rationale: this walks directories of
+            # mixed content, so unreadable/non-JSON is the common case.
+            continue
+        if not isinstance(d, dict):
+            continue
+        if d.get("format") == 2 or ("patches" in d and "intents" not in d):
+            n += 1
+    return n
+
+
 def iter_mod_files(paths: list[str]):
     for raw in paths:
         p = Path(raw)
@@ -280,6 +313,11 @@ def main(argv: list[str]) -> int:
 
     drops, who, unscanned, n_mods = scan(args, extractor)
     print(f"Scanned {n_mods} Format-3 mod(s) against {source}.")
+
+    n_v2 = count_v2_mods(args)
+    if n_v2:
+        print(f"Skipped {n_v2} v2 byte-patch mod(s): this scanner covers "
+              f"Format 3 only, and v2 applies through a different path.")
 
     if unscanned:
         print()

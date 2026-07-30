@@ -201,6 +201,55 @@ def test_a_crashing_mod_is_a_reported_gap_not_a_lost_scan(monkeypatch,
     assert who
 
 
+# ── scope: v2 mods are counted, not silently ignored ─────────────────
+
+def test_v2_byte_patch_mods_are_counted(tmp_path):
+    """v2 is the larger share of the real population (226 of 498 JSONs on
+    a Nexus corpus, vs 52 Format-3), and this scanner doesn't cover it.
+    Counting them keeps a clean result from being read as "no gaps"."""
+    (tmp_path / "v2_explicit.json").write_text(json.dumps({
+        "name": "m", "format": 2, "patches": [{"file": "iteminfo.pabgb"}],
+    }), encoding="utf-8")
+    # Some v2 mods omit the format key entirely and are identified by
+    # carrying patches without intents -- both shapes appear on Nexus.
+    (tmp_path / "v2_implicit.json").write_text(json.dumps({
+        "name": "m2", "patches": [{"file": "skill.pabgb"}],
+    }), encoding="utf-8")
+    _write_mod(tmp_path, "f3.json", "iteminfo.pabgb",
+               [{"entry": "E", "key": 1, "field": "max_stack_count",
+                 "op": "set", "new": 9}])
+
+    assert apply_scan.count_v2_mods([str(tmp_path)]) == 2
+    # ...and the Format-3 detector must not claim the v2 files.
+    assert len(apply_scan.find_format3_mods([str(tmp_path)])) == 1
+
+
+def test_format3_mod_is_not_counted_as_v2(tmp_path):
+    """A Format-3 mod has intents, so the 'patches without intents' arm
+    must not swallow it."""
+    _write_mod(tmp_path, "f3.json", "iteminfo.pabgb",
+               [{"entry": "E", "key": 1, "field": "max_stack_count",
+                 "op": "set", "new": 9}])
+    assert apply_scan.count_v2_mods([str(tmp_path)]) == 0
+
+
+def test_main_reports_the_v2_count(tmp_path, monkeypatch, capsys):
+    (tmp_path / "v2.json").write_text(json.dumps({
+        "name": "m", "format": 2, "patches": [{"file": "iteminfo.pabgb"}],
+    }), encoding="utf-8")
+    _write_mod(tmp_path, "f3.json", "iteminfo.pabgb",
+               [{"entry": "E", "key": 1, "field": "max_stack_count",
+                 "op": "set", "new": 9}])
+    monkeypatch.setattr(apply_scan, "expand_format3_into_aggregated",
+                        lambda *_a, **_k: None)
+    monkeypatch.setattr(apply_scan, "make_fixture_extractor",
+                        lambda: (lambda _t: (b"\x00" * 64, b"")))
+    apply_scan.main(["apply_scan.py", str(tmp_path)])
+    out = capsys.readouterr().out
+    assert "Skipped 1 v2 byte-patch mod(s)" in out
+    assert "Format 3 only" in out
+
+
 # ── mod detection matches coverage_scan.py ───────────────────────────
 
 def test_non_format3_json_is_ignored(tmp_path):
