@@ -98,8 +98,10 @@ def test_expand_format3_reports_contributing_mod_ids(tmp_path):
     def _stub_validate(target, intents):
         return _ValRes(intents)
 
-    def _stub_intents_to(target, body, header, intents):
+    def _stub_intents_to(target, body, header, intents, **kwargs):
         # Fabricate one v2 change so the per-mod branch runs.
+        # ``**kwargs`` absorbs the real function's keyword-only extras
+        # (e.g. warnings_out) so adding one doesn't break this double.
         return [{"label": f"x{intents[0]['tid']}",
                  "offset": 0, "original": "00", "patched": "01"}]
 
