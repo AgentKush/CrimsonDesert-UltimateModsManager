@@ -246,6 +246,46 @@ def is_nested_path(field: str) -> bool:
     return "." in field or "[" in field
 
 
+# DMM's schema models sharpness stats as a nested
+# ``sharpness_data.stat_data.stat_list_static``; CDUMM's native parser
+# decodes the same bytes as a flat ``sharpness_data.stat_list``. Same
+# field, two names -- the characterinfo ``character_weight`` /
+# ``default_action_action_index`` situation again (GitHub #302).
+#
+# Measured on live 1.15 rather than inferred from the name:
+#   * sharpness_data decodes as a dict on 6508/6508 records, with keys
+#     {craft_tool_info, max_sharpness, p_prefix, shape, stat_list, tail,
+#      w_trailing, w_unk_a} -- there is no stat_data, and _read_ItemInfo
+#     SharpnessData reads a single flat ``u32 stat_count + N*12 stats``,
+#     so stat_list is the ONLY stat list the DMM path could mean.
+#   * its elements are ``('change_mb', 'stat')`` -- exactly the shape
+#     ExtensiveItemBuffs writes.
+#   * the same record proves it: key 14510 Marni_Devotee_PlateArmor_Helm
+#     decodes [{stat: 1000003, change_mb: 1000}] and the mod sets that
+#     same stat to 8000. All 1269 records it targets have a non-empty
+#     stat_list (945 with one entry, 324 with two), all shape W.
+#
+# Without this, 1452 real intents were dropped as "unresolved".
+_NESTED_PATH_ALIASES = (
+    ("sharpness_data.stat_data.stat_list_static", "sharpness_data.stat_list"),
+)
+
+
+def _canonical_nested_path(path: str) -> str:
+    """Rewrite a DMM-dialect nested path to CDUMM's decoded shape.
+
+    Prefix-scoped so an indexed or deeper suffix survives:
+    ``sharpness_data.stat_data.stat_list_static[0].change_mb`` becomes
+    ``sharpness_data.stat_list[0].change_mb``.
+    """
+    for dmm, ours in _NESTED_PATH_ALIASES:
+        if path == dmm:
+            return ours
+        if path.startswith((dmm + ".", dmm + "[")):
+            return ours + path[len(dmm):]
+    return path
+
+
 def _resolve_path_target(
     item: dict, path: str,
 ) -> Optional[tuple]:
@@ -272,6 +312,7 @@ def _resolve_path_target(
     dialect, both sides.
     """
     import re
+    path = _canonical_nested_path(path)
     # Tokenize: identifier | [N] | bare integer segment (a.0.b).
     # Identifiers are tried first, so a name like `x2` stays a name.
     tokens: list[tuple[str, object]] = []
