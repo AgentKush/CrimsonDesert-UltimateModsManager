@@ -26,7 +26,7 @@ from cdumm.engine.characterinfo_writer import build_characterinfo_changes
 def _make_record(key: int, name: str, *, upper: int, lower: int,
                  gameplay: int, appearance: int, prefab: int,
                  skeleton: int, skelvar: int, flag_c: int,
-                 cooldown: int = 0) -> bytes:
+                 cooldown: int = 0, spawn_duration: int = 0) -> bytes:
     """Build one characterinfo record matching the parser walk in
     characterinfo_full_parser.parse_entry."""
     nb = name.encode("latin-1")
@@ -42,7 +42,7 @@ def _make_record(key: int, name: str, *, upper: int, lower: int,
     r += b"\x00" * 4 + b"\x00" * 4            # two u32
     r += struct.pack("<H", 0)                 # _vehicleInfo u16
     r += struct.pack("<Q", cooldown)          # _callMercenaryCoolTime
-    r += struct.pack("<Q", 0)                 # _callMercenarySpawnDuration
+    r += struct.pack("<Q", spawn_duration)    # _callMercenarySpawnDuration
     r += b"\x00"                              # _mercenaryCoolTimeType u8
     r += b"\x00" * 6                          # u32 + u16
     r += b"\x00" * 6                          # u32 + u16
@@ -243,3 +243,66 @@ def test_call_mercenary_cool_time_in_supported_fields():
     _CHARACTERINFO_FIELDS), so validation and the write can't drift apart."""
     from cdumm.engine.characterinfo_writer import SUPPORTED_FIELDS
     assert "call_mercenary_cool_time" in SUPPORTED_FIELDS
+
+
+def test_writer_patches_call_mercenary_spawn_duration():
+    """The sibling slot the same 'No CD Mount' QoL mods set.
+
+    Before this was mapped, those mods half-applied: cool_time went
+    through and spawn_duration was refused as an unsupported field name,
+    so the summon delay stayed. Found by sweeping 52 real Format 3 mods
+    through the apply path -- 14 intents were being dropped this way.
+    """
+    rec = _make_record(1, "Riding_Dragon_1", cooldown=3600,
+                       spawn_duration=600, **_vanilla_kwargs())
+    pabgb, pabgh = _make_table([rec])
+    changes = build_characterinfo_changes(
+        pabgb, pabgh,
+        [("Riding_Dragon_1", 0, "call_mercenary_spawn_duration", 0)])
+    assert len(changes) == 1
+    patched = _apply(pabgb, changes)
+    assert len(patched) == len(pabgb), "writes must not resize the record"
+    from cdumm.archive.format_parsers.characterinfo_full_parser import (
+        parse_entry,
+        parse_pabgh_index,
+    )
+    r = parse_entry(patched, parse_pabgh_index(pabgh)[1], len(patched))
+    assert r["_callMercenarySpawnDuration"] == 0
+    # The mirror of the cool_time test: the neighbouring u64 must be
+    # untouched, which pins the offset and width from the other side. One
+    # slot too early would have clobbered cool_time's 3600.
+    assert r["_callMercenaryCoolTime"] == 3600
+
+
+def test_both_mercenary_fields_apply_together():
+    """The real mod sets both on the same record; neither may eat the
+    other's bytes."""
+    rec = _make_record(1, "Riding_ATAG_1", cooldown=3600,
+                       spawn_duration=600, **_vanilla_kwargs())
+    pabgb, pabgh = _make_table([rec])
+    changes = build_characterinfo_changes(pabgb, pabgh, [
+        ("Riding_ATAG_1", 0, "call_mercenary_cool_time", 1),
+        ("Riding_ATAG_1", 0, "call_mercenary_spawn_duration", 0),
+    ])
+    assert len(changes) == 2
+    assert len({c["offset"] for c in changes}) == 2, (
+        "the two fields must resolve to different offsets")
+    patched = _apply(pabgb, changes)
+    assert len(patched) == len(pabgb)
+    from cdumm.archive.format_parsers.characterinfo_full_parser import (
+        parse_entry,
+        parse_pabgh_index,
+    )
+    r = parse_entry(patched, parse_pabgh_index(pabgh)[1], len(patched))
+    assert r["_callMercenaryCoolTime"] == 1
+    assert r["_callMercenarySpawnDuration"] == 0
+    # ...and nothing downstream moved.
+    assert r["_upperActionChartPackageGroupName_key"] == 11
+
+
+def test_call_mercenary_spawn_duration_in_supported_fields():
+    """Same accept-set pin as its sibling: the validator has to let it
+    through or the writer never sees it, which is exactly how it was
+    being dropped."""
+    from cdumm.engine.characterinfo_writer import SUPPORTED_FIELDS
+    assert "call_mercenary_spawn_duration" in SUPPORTED_FIELDS
