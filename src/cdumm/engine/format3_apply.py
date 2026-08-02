@@ -2103,7 +2103,15 @@ def _intents_to_v2_changes(
             "PABGH key_size=%d", target, key_size)
         return []
 
-    schema = get_schema(table_name)
+    # Pick the field order that fits THIS table, not the one that fitted
+    # the build we last reverse-engineered. A patch that removes a field
+    # desyncs the walker from that field onward -- CD 1.16 dropped two
+    # ItemInfo fields and the walk fell from 110 of 113 fields to 10,
+    # which is the iteminfo grid going blank. Falls back to get_schema
+    # for every table with no variants declared. Imported here because
+    # schema_verify imports this module.
+    from cdumm.engine.schema_verify import schema_for_table
+    schema = schema_for_table(table_name, vanilla_body, vanilla_header)
     field_specs = {f.name: f for f in schema.fields}
     fs_entries = load_field_schema(table_name)
 

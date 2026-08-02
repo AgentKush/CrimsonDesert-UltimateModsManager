@@ -45,6 +45,7 @@ until its values are cross-checked against real records.
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 from statistics import median
@@ -52,6 +53,8 @@ from statistics import median
 from cdumm.engine.format3_apply import _consume_field_bytes, _payload_offset
 from cdumm.semantic import parser as parser_mod
 from cdumm.semantic.parser import TableSchema, get_schema, parse_pabgh_index
+
+logger = logging.getLogger(__name__)
 
 _SCHEMA_DIR = Path(__file__).resolve().parents[3] / "schemas"
 
@@ -238,6 +241,94 @@ class VerificationReport:
                            f" vs baseline {r.baseline.median_fields:g}")
             lines.append(f"  {r.table:<16} {tag}  ({detail})")
         return "\n".join(lines)
+
+
+#: Alternative field orders a game build may use, keyed by table.
+#:
+#: A game patch can REMOVE a field, and a removed field is the worst kind
+#: of drift: the walker keeps reading, consumes the next field's bytes as
+#: the missing one, and desyncs everything after it. CD 1.16 dropped two
+#: ItemInfo fields and the walker fell from 110 of 113 fields to 10 --
+#: the "11-field iteminfo grid" wall returning one version later.
+#:
+#: So the order is CHOSEN against the table in front of us, the same way
+#: iteminfo's record layout and storeinfo's are. Each variant lists the
+#: fields that build does not have; the base order is always a candidate
+#: and only loses to a variant that decodes strictly better.
+#:
+#: Adding a build is one line here. Getting it wrong costs nothing: a
+#: variant that does not decode better is never selected.
+ORDER_VARIANTS: dict[str, tuple[tuple[str, tuple[str, ...]], ...]] = {
+    "ItemInfo": (
+        # CD 1.16 removed _inventoryInfo (a u16) and stopped storing
+        # _repairDataList as a counted array. Confirmed independently by
+        # the native parser, which needed exactly the same two removals
+        # to go from 0 to 6,581 byte-exact records.
+        ("cd116", ("_inventoryInfo", "_repairDataList")),
+    ),
+}
+
+
+#: Scoring walks every record, so remember the answer per table body.
+#: Keyed on length + a cheap digest rather than the bytes themselves.
+_ORDER_CACHE: dict[tuple[str, int, int], tuple[str, list[str]]] = {}
+
+
+def select_order(table: str, body: bytes, header: bytes) -> tuple[str, list[str]]:
+    """``(label, order)`` -- the declared order, or a variant that beats it.
+
+    Returns ``("base", ...)`` when the table declares no variants or none
+    of them decodes better, so this can be called unconditionally.
+    """
+    if table not in ORDER_VARIANTS:
+        return "base", verified_order(table)
+
+    ck = (table, len(body), hash(body[:4096]) ^ hash(body[-4096:]))
+    hit = _ORDER_CACHE.get(ck)
+    if hit is not None:
+        return hit
+    got = _select_order_uncached(table, body, header)
+    _ORDER_CACHE[ck] = got
+    return got
+
+
+def _select_order_uncached(table: str, body: bytes,
+                           header: bytes) -> tuple[str, list[str]]:
+    base = verified_order(table)
+    variants = ORDER_VARIANTS.get(table)
+    if not base or not variants:
+        return "base", base
+
+    best_label, best_order = "base", base
+    base_score = best = decode_score(table, base, body, header)
+    for label, dropped in variants:
+        order = [f for f in base if f not in dropped]
+        score = decode_score(table, order, body, header)
+        # Strictly better on both axes, so a variant never wins by a tie.
+        if score.median_fields > best.median_fields or (
+                score.median_fields == best.median_fields
+                and score.frac_reached_last > best.frac_reached_last):
+            best_label, best_order, best = label, order, score
+
+    if best_label != "base":
+        logger.info(
+            "%s: field order %r decodes better than the declared one "
+            "(median %.0f vs %.0f fields per record); using it",
+            table, best_label, best.median_fields, base_score.median_fields)
+    return best_label, best_order
+
+
+def schema_for_table(table: str, body: bytes, header: bytes) -> TableSchema:
+    """``get_schema(table)``, but with the field order that actually fits.
+
+    Drop-in for ``get_schema`` at any call site that has the table bytes.
+    Identical to ``get_schema`` for every table with no variants declared,
+    and for any build the declared order already fits.
+    """
+    label, order = select_order(table, body, header)
+    if label == "base":
+        return get_schema(table)
+    return _schema_in_order(table, order)
 
 
 def verify_order_source(
