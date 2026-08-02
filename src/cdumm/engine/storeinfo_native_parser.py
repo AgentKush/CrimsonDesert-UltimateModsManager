@@ -6,8 +6,24 @@ for StoreInfo's ``_exchangeItemInfoListForSell``) and CDUMM needs to
 read and rewrite that list natively.
 
 Entry body: u16 entry_id + u32 name_len + name + NUL, then fixed
-scalar fields. The stock-list u32 ``count`` sits at a layout-dependent
-offset into the payload, and the records follow it.
+scalar fields, then the stock list -- a u32 ``count`` followed by that
+many records.
+
+THE LIST IS FOUND, NOT COMPUTED
+-------------------------------
+The count does NOT sit at a fixed offset into the payload. Some entries
+carry an extra ~48-byte block before it, so the same build holds counts
+at payload+44 AND payload+92 (also +96 and +112). Assuming one constant
+made CDUMM read 71 stocked stores as EMPTY on CD 1.13 -- a *successful*
+parse of the wrong u32, so no error, no warning, 1,613 stock records
+simply invisible.
+
+So the list is located by an anchor instead: ``StockData._storeInfo``
+is a u16 reference to the owning store, it is the first field of the
+first record, and it therefore equals the entry's own key. Scanning for
+that -- plus a plausible count and a byte-exact round-trip of the whole
+span -- pins the list with no offset constant at all. Measured on the
+real tables, exactly one offset per entry satisfies it; never two.
 
 A stock record is::
 
@@ -30,9 +46,12 @@ Head fields, in every layout so far::
 
 ``sub_data`` uses the engine's optional encoding: u8 flag right after
 the head; when 1, 13 more bytes follow (u8 flag + 3x u32 lookup).
-``effect_list`` is a u32-count carray at the record end; its element
-layout is NOT decoded, so a non-empty list is REFUSED rather than
-guessed at.
+``effect_list`` is a u32-count carray at the record end -- the engine's
+``StockData._orderCountDataList``, whose element is
+``StockOrderCountData``. Its 12-byte size was derived by exact tiling
+(see ``ORDER_ELEM_SIZE``); the interior is carried verbatim rather than
+decoded, which is enough to round-trip and keeps us from guessing at
+two fields we have no ground truth for.
 
 THE LAYOUT MOVES, SO IT IS DETECTED, NOT ASSUMED
 ------------------------------------------------
@@ -78,6 +97,21 @@ class StoreinfoParseError(ValueError):
 #: every layout so far: the inserted fields all landed BEFORE it.
 VGAP_SIZE = 71
 
+#: Size of one ``StockOrderCountData`` element (``_orderCountDataList``).
+#:
+#: Derived by exact tiling rather than assumed: for every entry whose
+#: first record carries a non-empty list, walk the whole list assuming a
+#: fixed element size and require every subsequent record to land on a
+#: valid boundary. Exactly one size in 1..128 satisfies that -- 12 --
+#: and it satisfies it for all of them. A size that "nearly" works fails
+#: outright, so this is unique-or-nothing rather than best-fit.
+ORDER_ELEM_SIZE = 12
+
+#: Smallest payload offset at which a stock list has ever been seen. Used
+#: only to bound the search; the list is LOCATED, not computed (see the
+#: module docstring), so this is a floor and not an answer.
+MIN_LIST_OFFSET = 0
+
 
 @dataclass(frozen=True)
 class StoreLayout:
@@ -86,14 +120,26 @@ class StoreLayout:
     ``order_index_off`` is the record offset of the u32 added in CD 1.13,
     or ``None`` on builds that predate it. Everything else is derived, so
     a new build is one line here plus a fixture.
+
+    Note the offsets are descriptive, not operative: the reader consumes
+    fields sequentially, so what actually selects a shape is which
+    of ``order_index_off`` / ``is_restore_off`` / ``low_price_threshold``
+    are set, not the numbers.
     """
 
     label: str
-    count_payload_offset: int      # u32 stock count, relative to payload
+    #: The payload offset the stock count sits at for entries with no
+    #: optional block -- the commonest case, not the rule. Nothing reads
+    #: it to find a list any more (``locate_stock_list`` does that); it
+    #: survives as documentation and for building synthetic entries.
+    count_payload_offset: int
     order_index_off: int | None    # u32 order_index_113, or None
     flags_off: int                 # u8 flag_a; flag_b/flag_c follow
     is_restore_off: int | None     # u8 is_restore_item (CD 1.11+), or None
     const_off: int                 # u8 const == 1 (the tripwire)
+    #: CD 1.16 inserted a u32 after ``raw_c`` -- ``_lowPriceThresholdCount``
+    #: in the binary's own field names.
+    low_price_threshold: bool = False
 
     @property
     def body_off(self) -> int:
@@ -111,6 +157,11 @@ class StoreLayout:
 #: Newest first -- detection prefers the current game, and an older build
 #: only wins if it actually decodes better.
 LAYOUTS: tuple[StoreLayout, ...] = (
+    # CD 1.16: a u32 (_lowPriceThresholdCount) inserted after raw_c pushed
+    # everything below it down another four bytes. Under the CD 1.13 shape
+    # the live 1.16 table decodes ZERO entries; under this one, 397 of 432
+    # (the other 35 are provably empty -- see locate_stock_list).
+    StoreLayout("CD 1.16", 44, 34, 38, 41, 42, low_price_threshold=True),
     # CD 1.13: u32 order_index_113 at @30 pushed the flags + const down 4.
     # The mod that exposed this ("Shop Smart. Shop H-Mart", donr484) names
     # the field itself and sets it to 0xFFFFFFFF -- which is its value in
@@ -122,9 +173,10 @@ LAYOUTS: tuple[StoreLayout, ...] = (
     StoreLayout("CD 1.10", 43, None, 30, None, 33),
 )
 
-#: The layout used when no detection has been run. CD 1.13 is what the
-#: game currently ships; detection overrides it whenever a table is to
-#: hand, and every write path detects.
+#: The layout used when no detection has been run -- the newest one,
+#: i.e. what the game currently ships. Detection overrides it whenever a
+#: table is to hand, and every write path detects, so this only matters
+#: to callers that build records from nothing.
 DEFAULT_LAYOUT = LAYOUTS[0]
 
 # Back-compat for callers that imported the old module constant.
@@ -140,6 +192,8 @@ class StockRecord:
     raw_a: int = 0
     raw_b: int = 0
     raw_c: int = 0
+    #: u32 after raw_c, new in CD 1.16 (``_lowPriceThresholdCount``).
+    low_price_threshold_count: int = 0
     raw_d: int = 0
     raw_e: int = 0
     #: u32 @30, new in CD 1.13. 0xFFFFFFFF in every vanilla record, and
@@ -153,7 +207,10 @@ class StockRecord:
     body: int = 0                        # value.payload.body
     vgap: bytes = b"\x00" * VGAP_SIZE    # opaque value interior
     sub_data: dict | None = None         # {flag, lookup_a, lookup_b, lookup_c}
-    effect_list: list = field(default_factory=list)  # must stay empty
+    #: ``_orderCountDataList``: ORDER_ELEM_SIZE-byte blobs, carried
+    #: verbatim. Named ``effect_list`` because that is the key Format 3
+    #: store mods already use.
+    effect_list: list[bytes] = field(default_factory=list)
 
 
 class _Reader:
@@ -219,8 +276,10 @@ def read_stock_record(r: _Reader,
     rec.raw_a = r.u64()
     rec.raw_b = r.u64()
     rec.raw_c = r.u32()
+    if layout.low_price_threshold:
+        rec.low_price_threshold_count = r.u32()
     rec.raw_d = r.u32()
-    rec.raw_e = r.u32()          # r.pos is now base + 30
+    rec.raw_e = r.u32()          # r.pos is now base + 30 (+4 on CD 1.16)
 
     if layout.order_index_off is not None:
         rec.order_index = r.u32()
@@ -264,22 +323,23 @@ def read_stock_record(r: _Reader,
             f"(disc-variant value payload)")
 
     effect_count = r.u32()
-    if effect_count != 0:
+    if effect_count > 4096:
+        # Not a length -- we are misaligned. Bail rather than allocate.
         raise StoreinfoParseError(
-            f"effect_list has {effect_count} element(s); the element "
-            f"layout is not decoded yet, refusing to parse rather "
-            f"than guess")
-    rec.effect_list = []
+            f"effect_list count {effect_count} at byte {r.pos - 4} is "
+            f"implausible; record is misaligned")
+    rec.effect_list = [r.raw(ORDER_ELEM_SIZE) for _ in range(effect_count)]
     return rec
 
 
 def write_stock_record(w: _Writer, rec: StockRecord,
                        layout: StoreLayout = DEFAULT_LAYOUT) -> None:
     """Serialize one disc-0 stock record in ``layout``'s shape."""
-    if rec.effect_list:
-        raise StoreinfoParseError(
-            "cannot serialize a non-empty effect_list (layout not "
-            "decoded)")
+    for i, el in enumerate(rec.effect_list):
+        if not isinstance(el, (bytes, bytearray)) or len(el) != ORDER_ELEM_SIZE:
+            raise StoreinfoParseError(
+                f"effect_list[{i}] must be exactly {ORDER_ELEM_SIZE} "
+                f"opaque bytes, got {el!r}")
     if len(rec.vgap) != VGAP_SIZE:
         raise StoreinfoParseError(
             f"vgap must be exactly {VGAP_SIZE} bytes, got {len(rec.vgap)}")
@@ -287,6 +347,8 @@ def write_stock_record(w: _Writer, rec: StockRecord,
     w.u64(rec.raw_a)
     w.u64(rec.raw_b)
     w.u32(rec.raw_c)
+    if layout.low_price_threshold:
+        w.u32(rec.low_price_threshold_count)
     w.u32(rec.raw_d)
     w.u32(rec.raw_e)
     if layout.order_index_off is not None:
@@ -307,7 +369,9 @@ def write_stock_record(w: _Writer, rec: StockRecord,
         w.u32(rec.sub_data["lookup_a"])
         w.u32(rec.sub_data["lookup_b"])
         w.u32(rec.sub_data["lookup_c"])
-    w.u32(0)  # effect_list count (always empty, enforced above)
+    w.u32(len(rec.effect_list))
+    for el in rec.effect_list:
+        w.raw(bytes(el))
 
 
 def parse_stock_list(data: bytes, count_offset: int,
@@ -348,6 +412,112 @@ def _entry_payload(body: bytes, off: int) -> int:
     return off + 6 + name_len + 1
 
 
+class StoreListNotFound(StoreinfoParseError):
+    """No stock list could be located in an entry.
+
+    ``provably_empty`` is True when the entry is too short to hold even
+    one record at any offset -- i.e. the store really has no stock, and
+    the failure to locate a list is the correct answer rather than a
+    gap in our understanding.
+    """
+
+    def __init__(self, msg: str, *, provably_empty: bool = False) -> None:
+        super().__init__(msg)
+        self.provably_empty = provably_empty
+
+
+def _min_list_bytes(layout: StoreLayout) -> int:
+    """Smallest span a one-record list can occupy: count + record."""
+    return 4 + (2 + 8 + 8 + 4 + (4 if layout.low_price_threshold else 0)
+                + 4 + 4 + (4 if layout.order_index_off is not None else 0)
+                + 3 + (1 if layout.is_restore_off is not None else 0)
+                + 1 + 4 + VGAP_SIZE + 1 + 4)
+
+
+def locate_stock_list(body: bytes, payload: int, entry_end: int, key: int,
+                      layout: StoreLayout
+                      ) -> tuple[list[StockRecord], int, int]:
+    """Find and parse an entry's stock list. No offset constant.
+
+    Scans the entry for a span that is simultaneously
+
+      * a plausible non-empty u32 count,
+      * whose first record's ``lookup_a`` is the entry's own key
+        (``StockData._storeInfo``, a u16 back-reference to the owning
+        store -- the anchor),
+      * whose records all parse in ``layout``'s shape, and
+      * which re-serializes to the identical bytes.
+
+    Returns ``(records, list_start, list_end)``.
+
+    Raises :class:`StoreListNotFound`. When the entry is too short to
+    hold one record at any offset the store is *provably* empty and the
+    exception says so, which lets callers tell "this store has no stock"
+    apart from "we could not read this store".
+
+    Why a scan and not a constant: some entries carry an extra block
+    before the list, so one build holds counts at four different
+    offsets. Measured over the real CD 1.13 and CD 1.16 tables, exactly
+    one offset per entry passes all four conditions -- never two -- so
+    the scan is deterministic, not a best-guess.
+    """
+    room = entry_end - payload
+    if room < _min_list_bytes(layout):
+        raise StoreListNotFound(
+            f"store {key}: entry holds {room} bytes after its header, too "
+            f"few for even one {layout.label} record; the store has no "
+            f"stock list", provably_empty=True)
+
+    found: list[tuple[list[StockRecord], int, int]] = []
+    limit = entry_end - _min_list_bytes(layout)
+    for off in range(payload + MIN_LIST_OFFSET, limit + 1):
+        # Cheap rejections first: a count and the anchor are 6 bytes.
+        count = struct.unpack_from("<I", body, off)[0]
+        if not (0 < count < 10000):
+            continue
+        if struct.unpack_from("<H", body, off + 4)[0] != key:
+            continue
+        try:
+            recs, start, end = parse_stock_list(body, off, layout)
+        except (StoreinfoParseError, struct.error, IndexError):
+            continue
+        if end > entry_end:
+            continue
+        try:
+            if serialize_stock_list(recs, layout) != body[start:end]:
+                continue
+        except (StoreinfoParseError, struct.error):
+            continue
+        found.append((recs, start, end))
+
+    if not found:
+        raise StoreListNotFound(
+            f"store {key}: no span in this entry is a byte-exact "
+            f"{layout.label} stock list anchored on the store key; "
+            f"refusing rather than writing to a guessed offset")
+    if len(found) > 1:
+        # Never observed on a real table. If a build ever makes it
+        # possible, refusing is the only safe answer.
+        raise StoreListNotFound(
+            f"store {key}: {len(found)} distinct spans each parse as a "
+            f"byte-exact stock list ({[f[1] - payload for f in found]}); "
+            f"ambiguous, refusing")
+    return found[0]
+
+
+def _is_provably_empty(body: bytes, entry_offsets: list[int],
+                       off: int) -> bool:
+    """True when this entry cannot hold one record under ANY layout."""
+    ordered = sorted(entry_offsets)
+    i = ordered.index(off)
+    end = ordered[i + 1] if i + 1 < len(ordered) else len(body)
+    try:
+        room = end - _entry_payload(body, off)
+    except (struct.error, IndexError):
+        return False
+    return room < min(_min_list_bytes(c) for c in LAYOUTS)
+
+
 def _score_layout(body: bytes, entry_offsets: list[int],
                   layout: StoreLayout) -> tuple[int, int]:
     """``(entries_decoded, records_decoded)`` for one candidate layout.
@@ -357,16 +527,19 @@ def _score_layout(body: bytes, entry_offsets: list[int],
     can consume a plausible-looking span and still be misreading it, and
     a misread record written back is a corrupt table. Byte-exactness is
     the only acceptance test that can't be fooled.
+
+    Provably-empty entries are not counted either way -- they decode
+    identically under every layout, so they carry no signal.
     """
     entries = 0
     records = 0
-    for off in entry_offsets:
+    ordered = sorted(entry_offsets)
+    for i, off in enumerate(ordered):
+        end = ordered[i + 1] if i + 1 < len(ordered) else len(body)
         try:
-            payload = _entry_payload(body, off)
-            recs, start, end = parse_stock_list(
-                body, payload + layout.count_payload_offset, layout)
-            if serialize_stock_list(recs, layout) != body[start:end]:
-                continue
+            key = struct.unpack_from("<H", body, off)[0]
+            recs, _s, _e = locate_stock_list(
+                body, _entry_payload(body, off), end, key, layout)
         except (StoreinfoParseError, struct.error, IndexError):
             continue
         entries += 1
@@ -394,13 +567,23 @@ def detect_storeinfo_layout(body: bytes,
         if score > best_score:
             best, best_score = cand, score
 
-    # Nothing decoded at all -> the shape is one we don't model. Refuse.
+    # Nothing decoded at all -> either every store is empty (fine, and
+    # unknowable by construction) or the shape is one we don't model.
     #
-    # Note the test is on ENTRIES, not records: a table whose stock lists
-    # are all empty decodes correctly under every layout and yields zero
-    # records, and that is a valid table, not an unknown one. Scoring it as
-    # "unknown" would turn an empty store into a hard error.
+    # Telling those apart is what `provably empty` buys: an entry with
+    # too few bytes to hold one record cannot be hiding a stock list from
+    # us under any layout, so a table made only of those is a valid
+    # degenerate table rather than an unreadable one. Without that
+    # distinction an all-empty table would be a hard error.
     if best is None or best_score[0] == 0:
+        if entry_offsets and all(
+                _is_provably_empty(body, entry_offsets, off)
+                for off in entry_offsets):
+            logger.info(
+                "storeinfo: every entry is too small to hold a stock "
+                "record; treating the table as empty (layout %s)",
+                DEFAULT_LAYOUT.label)
+            return DEFAULT_LAYOUT
         raise StoreinfoParseError(
             "no known storeinfo layout decodes this table (tried: "
             + ", ".join(c.label for c in LAYOUTS)

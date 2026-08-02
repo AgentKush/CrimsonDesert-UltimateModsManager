@@ -17,6 +17,7 @@ import pytest
 from cdumm.engine.storeinfo_native_parser import (
     LAYOUTS,
     LIST_COUNT_PAYLOAD_OFFSET,
+    ORDER_ELEM_SIZE,
     StockRecord,
     StoreinfoParseError,
     parse_stock_list,
@@ -79,19 +80,38 @@ def test_refuses_unknown_sub_data_flag(layout):
         parse_stock_list(bytes(blob), 0, layout)
 
 
-def test_refuses_non_empty_effect_list_on_parse():
-    blob = bytearray(serialize_stock_list([_sample_records()[1]]))
-    # effect_list count is the trailing u32 of the record.
-    struct.pack_into("<I", blob, len(blob) - 4, 3)
-    with pytest.raises(StoreinfoParseError, match="effect_list has 3"):
-        parse_stock_list(bytes(blob), 0)
-
-
-def test_refuses_non_empty_effect_list_on_serialize():
+@pytest.mark.parametrize("layout", LAYOUTS, ids=lambda ly: ly.label)
+def test_non_empty_effect_list_round_trips(layout):
+    """``_orderCountDataList`` used to be refused outright, which cost 15
+    entries of the 1.13 table. Its element is ORDER_ELEM_SIZE bytes
+    (derived by exact tiling) and is carried verbatim."""
     rec = _sample_records()[1]
-    rec.effect_list = [object()]
-    with pytest.raises(StoreinfoParseError, match="non-empty effect_list"):
+    rec.effect_list = [bytes(range(ORDER_ELEM_SIZE)),
+                       b"\xff" * ORDER_ELEM_SIZE]
+    blob = serialize_stock_list([rec], layout)
+    assert len(blob) == 4 + layout.head_size + 1 + 4 + 2 * ORDER_ELEM_SIZE
+    parsed, _s, _e = parse_stock_list(blob, 0, layout)
+    assert parsed[0].effect_list == rec.effect_list
+    assert serialize_stock_list(parsed, layout) == blob
+
+
+def test_refuses_a_wrongly_sized_effect_element_on_serialize():
+    """The elements are opaque, so the ONE thing we can still check is
+    that they are the right width — a short one would silently shift
+    every following record."""
+    rec = _sample_records()[1]
+    rec.effect_list = [b"\x00" * (ORDER_ELEM_SIZE - 1)]
+    with pytest.raises(StoreinfoParseError, match="opaque bytes"):
         serialize_stock_list([rec])
+
+
+def test_refuses_an_implausible_effect_count_on_parse():
+    """A huge count means we are misaligned, not that the record has
+    four billion order entries."""
+    blob = bytearray(serialize_stock_list([_sample_records()[1]]))
+    struct.pack_into("<I", blob, len(blob) - 4, 0xFFFFFF)
+    with pytest.raises(StoreinfoParseError, match="implausible"):
+        parse_stock_list(bytes(blob), 0)
 
 
 # ── Live-fixture round-trip (the trust anchor) ───────────────────────

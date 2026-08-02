@@ -32,8 +32,9 @@ from cdumm.engine.storeinfo_native_parser import (
     StockRecord,
     StoreinfoParseError,
     StoreLayout,
+    StoreListNotFound,
     detect_storeinfo_layout,
-    parse_stock_list,
+    locate_stock_list,
     serialize_stock_list,
 )
 from cdumm.semantic.parser import parse_pabgh_index, _parse_entry_header
@@ -248,10 +249,20 @@ def build_storeinfo_changes(
         off = offsets[key]
         entry_end = sorted_offs[sorted_offs.index(off) + 1]
         _, _, payload = _parse_entry_header(vanilla_body, off, key_size)
-        count_off = payload + layout.count_payload_offset
+        # Locate the list rather than computing its offset. A single
+        # constant was wrong for 71 of the 1.13 table's stocked stores:
+        # it read a different u32, found 0, and reported "empty" -- so a
+        # mod targeting one of them would have spliced a new list into
+        # the middle of live fields.
         try:
-            van_records, list_start, list_end = parse_stock_list(
-                vanilla_body, count_off, layout)
+            van_records, list_start, list_end = locate_stock_list(
+                vanilla_body, payload, entry_end, key, layout)
+        except StoreListNotFound as e:
+            raise StoreinfoWriteRefused(
+                f"store entry {key}: {e}" + (
+                    "; adding stock to a store that has none is not "
+                    "supported (the empty list's position cannot be "
+                    "pinned)" if e.provably_empty else ""))
         except (StoreinfoParseError, struct.error, IndexError) as e:
             raise StoreinfoWriteRefused(
                 f"store entry {key}: vanilla stock list does not match "
