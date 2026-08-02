@@ -2064,9 +2064,15 @@ def _intents_to_v2_changes(
     key_size, offsets = parse_pabgh_index(vanilla_header, table_name)
     if not offsets:
         return []
-    # H2 guard: we don't know how to walk entry headers for widths
-    # other than u16/u32. Refusing is safer than misaligning.
-    if key_size not in (2, 4):
+    # H2 guard: refuse widths whose entry headers we cannot walk.
+    # Widened to include 1: five live tables (mercenaryinfo,
+    # mercenarygroupinfo, socketinfo, autospawnfilterinfo,
+    # gamestartinfo) have 1-byte keys and a perfectly ordinary
+    # [id][u32 name_len][name][NUL] entry header -- every entry names
+    # cleanly once the id is read at the right width. 8-byte and
+    # 12-byte keys stay refused: those tables carry no entry-name
+    # header at all, which is a different shape, not a width.
+    if key_size not in (1, 2, 4):
         logger.warning(
             "Format 3 expansion on '%s' refused: unsupported "
             "PABGH key_size=%d", target, key_size)

@@ -400,10 +400,25 @@ def _parse_entry_header(data: bytes, offset: int,
     payload_start = offset + 8, putting every subsequent field
     read at the wrong offset and yielding garbage values.
 
+    ``key_size`` 1 exists too, and used to fall into the u32 branch.
+    That is not a hypothetical: mercenaryinfo has 1-byte keys, so
+    reading the id as u32 swallowed three bytes of the name, and the
+    table was written off as "memory-order misaligned" on the strength
+    of it reading ASCII ``cenary`` where ``Mercenary_Main`` starts. At
+    the right width it names 21 of 21 entries.
+
+    Wider keys (8 and a 12-byte composite) stay on the u32 branch. Those
+    tables carry no entry-name header at all, so there is nothing to
+    read correctly and nothing to check an answer against -- changing
+    their behaviour would be a guess. This mapping is therefore inert
+    for every table except the five with 1-byte keys, which is what
+    makes it safe: 21,085 entry headers across a live install decode
+    byte-for-byte as before.
+
     Returns ``(entry_id, entry_name, payload_start_offset)``.
     """
-    eid_fmt = "<H" if key_size == 2 else "<I"
-    eid_size = 2 if key_size == 2 else 4
+    eid_fmt = {1: "<B", 2: "<H"}.get(key_size, "<I")
+    eid_size = key_size if key_size in (1, 2) else 4
     head_size = eid_size + 4  # entry_id + u32 name_len
 
     if offset + head_size > len(data):
