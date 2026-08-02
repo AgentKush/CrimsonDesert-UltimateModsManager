@@ -2207,6 +2207,65 @@ def _with_cd113_enchant(fields):
 _ITEM_FIELDS_CD113_ENCHANT = _with_cd113_prefab_tail(
     _with_cd113_enchant(_ITEM_FIELDS_CD113))
 
+
+def _read_ItemInfoSharpnessData_CD116(r: _Reader) -> dict:
+    """CD 1.16 removed the CD 1.09 dsi-conditional pre byte.
+
+    Derived on the live 1.16 table: with the pre byte consumed the
+    W-header reads max_sharpness = 16640 (nonsense); without it, key
+    14510 (Marni_Devotee_PlateArmor_Helm) reads max_sharpness = 40,
+    stat_count = 1, stat = 1000003, change_mb = 1000 -- matching the
+    ground truth established independently on CD 1.13.
+
+    Skipping the byte is what takes the 1.16 table from 6,190/6,581 to
+    6,581/6,581 byte-exact. Passing dsi_type = 15 is how "never take
+    the pre byte" is expressed without duplicating the reader.
+    """
+    return _read_ItemInfoSharpnessData(r, 15)
+
+
+def _write_ItemInfoSharpnessData_CD116(w: _Writer, v: dict) -> None:
+    if "pre_unk_109" in v:
+        v = {k: x for k, x in v.items() if k != "pre_unk_109"}
+    _write_ItemInfoSharpnessData(w, v)
+
+
+def _with_cd116(fields):
+    """CD 1.16: drop inventory_info and repair_data_list, and use the
+    sharpness reader that never takes the 1.09 pre byte.
+
+    * ``inventory_info`` (u16) is GONE -- absent from ItemInfo's field
+      list in the 1.16 binary and from every other type in it. Dropping
+      it alone moves the table from 0 to 5,579/6,581.
+    * ``repair_data_list`` is no longer a carray. The u32 the old codec
+      read as its element count is 0 on every passing record and
+      0xFFFFFFFF / 604800 (= 7 days in seconds) on the rest -- field
+      values, not a length. Dropping it reaches 6,190/6,581. Its bytes
+      are carried as _tail_slack, so the round trip stays byte-exact.
+    * sharpness: see _read_ItemInfoSharpnessData_CD116. Reaches 6,581.
+
+    All three are the same failure mode: a field whose bytes are
+    normally zero, which lets a stale codec look correct until it meets
+    real data. Check for that first on the next version break.
+    """
+    out = []
+    for spec in fields:
+        if spec[0] in ("inventory_info", "repair_data_list"):
+            continue
+        if spec[0] == "sharpness_data":
+            out.append((spec[0], "struct",
+                        _read_ItemInfoSharpnessData_CD116,
+                        _write_ItemInfoSharpnessData_CD116))
+        else:
+            out.append(spec)
+    return out
+
+
+#: CD 1.16. Built from the enchant variant WITHOUT the 1.13 prefab tail:
+#: 1.16 also moved the prefab region, and carrying it opaque scores
+#: better (6,581 vs 6,567). Deriving it is future work.
+_ITEM_FIELDS_CD116 = _with_cd116(_with_cd113_enchant(_ITEM_FIELDS_CD113))
+
 # (label, fields) candidates, tried in order by detect_iteminfo_layout.
 # Most specific first: the enchant variant decodes 6508/6508 on live 1.13,
 # where the plain relocated variant only manages the 3167 non-equipment
@@ -2215,6 +2274,11 @@ _ITEM_LAYOUTS = (
     ("default", None),                       # None -> _ITEM_FIELDS
     ("cd113_prefab_relocated", _ITEM_FIELDS_CD113),
     ("cd113_enchant", _ITEM_FIELDS_CD113_ENCHANT),
+    # CD 1.16. Last = most specific: detect_iteminfo_layout keeps the
+    # later layout on a tie. cd116 scores 6,581/6,581 on live 1.16 where
+    # every earlier layout scores 0, and 0 on the 1.13 fixture where
+    # cd113_enchant scores 6,508/6,508 -- so the two never compete.
+    ("cd116", _ITEM_FIELDS_CD116),
 )
 
 
@@ -2483,9 +2547,15 @@ def _read_item(r: _Reader, fields=None) -> dict:
             else:
                 out[name] = r.carray(spec[2])
         elif kind == "struct":
-            if name == "sharpness_data":
+            if spec[2] is _read_ItemInfoSharpnessData:
                 # Sharpness shape (W vs PW) depends on default_sub_item.type_id
                 # per SHARPNESS_findings.md: dsi=0 -> PW, else W.
+                #
+                # Keyed on the READER, not the field name: CD 1.16 dropped the
+                # dsi-conditional pre byte, and its layout supplies
+                # _read_ItemInfoSharpnessData_CD116 under the SAME field name
+                # so mods keep targeting "sharpness_data". Matching on the name
+                # would force a rename and break every gear mod.
                 dsi = out.get("default_sub_item") or {}
                 dsi_type = int(dsi.get("type_id", 15))
                 out[name] = _read_ItemInfoSharpnessData(r, dsi_type)
@@ -2625,7 +2695,7 @@ def _trial_continue(data: bytes, start: int, rec_end: int,
             elif kind == "carray":
                 r.carray(spec[2])
             elif kind == "struct":
-                if name == "sharpness_data":
+                if spec[2] is _read_ItemInfoSharpnessData:
                     _read_ItemInfoSharpnessData(r, dsi_type)
                 else:
                     spec[2](r)
