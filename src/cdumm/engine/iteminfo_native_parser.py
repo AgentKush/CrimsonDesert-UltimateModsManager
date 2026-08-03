@@ -2250,7 +2250,8 @@ def _with_cd116(fields):
     """
     out = []
     for spec in fields:
-        if spec[0] in ("inventory_info", "repair_data_list"):
+        if spec[0] in ("inventory_info", "repair_data_list",
+                       "prefab_data_list", "record_end_a", "record_end_b"):
             continue
         if spec[0] == "sharpness_data":
             out.append((spec[0], "struct",
@@ -2261,10 +2262,82 @@ def _with_cd116(fields):
     return out
 
 
-#: CD 1.16. Built from the enchant variant WITHOUT the 1.13 prefab tail:
-#: 1.16 also moved the prefab region, and carrying it opaque scores
-#: better (6,581 vs 6,567). Deriving it is future work.
-_ITEM_FIELDS_CD116 = _with_cd116(_with_cd113_enchant(_ITEM_FIELDS_CD113))
+def _opaque_run(name: str, size: int):
+    """A field spec for ``size`` bytes carried verbatim.
+
+    Used for the two CD 1.16 tail regions whose contents are not decoded.
+    Carrying them as a NAMED fixed-width field, rather than letting them
+    fall into ``_tail_slack``, is what lets the fields AFTER them be
+    parsed -- which is the whole point: ``prefab_data_list`` lives
+    between them.
+    """
+    def read(r: _Reader, _n: int = size) -> bytes:
+        return bytes(r.u8() for _ in range(_n))
+
+    def write(w: _Writer, v: bytes) -> None:
+        if len(v) != size:
+            raise ValueError(
+                f"{name} must be exactly {size} bytes, got {len(v)}")
+        for byte in v:
+            w.u8(byte)
+
+    return (name, "struct", read, write)
+
+
+def _with_cd116_tail(fields, source):
+    """Re-attach the record tail for CD 1.16.
+
+    ``source`` is the list the tail specs were removed FROM, so the
+    re-attached codecs are the same objects rather than lookalikes from
+    another variant. That matters: ``_ITEM_FIELDS_CD113`` carries
+    ``repair_data_list`` but NOT ``prefab_data_list`` -- only the enchant
+    variant has both -- so sourcing from the wrong list silently drops
+    the prefab codec and the tail misparses.
+
+    CD 1.16 did NOT change the repair/prefab region -- it wrapped it.
+    Diffing the same item key between the 1.13 fixture and the 1.16
+    table shows the 1.13 region appearing VERBATIM inside 1.16's
+    undecoded remainder, at offset 10, on 236 of 236 items whose
+    ``equip_slot_list`` is non-empty (the ones where a field reorder
+    would show, since three empty carrays are identical bytes in any
+    order). So:
+
+        1.16 tail = [10 bytes] + [the 1.13 repair + prefab region]
+                  + [18 bytes]
+
+    replacing 1.13's 2-byte record_end_a/record_end_b.
+
+    The two runs are unique-or-nothing: 10/18 decodes 6,567 of 6,581
+    records with 12,262 prefab elements, and every neighbouring value
+    (9, 11, 12 / 16, 17, 19, 20) decodes ZERO. The element count is
+    itself corroboration -- 1.13 has 12,155 across 6,508 records, so
+    +107 over 73 new items is the right magnitude, which a merely
+    self-consistent misread would not produce.
+
+    What the 28 wrapper bytes hold is still unknown, which is why they
+    are opaque rather than named fields.
+    """
+    by_name = {spec[0]: spec for spec in source}
+    missing = [n for n in ("repair_data_list", "prefab_data_list")
+               if n not in by_name]
+    if missing:
+        raise ValueError(
+            f"CD 1.16 tail needs {missing} from the source layout")
+    tail = list(fields)
+    tail.append(_opaque_run("pre_repair_116", 10))
+    tail.append(by_name["repair_data_list"])
+    tail.append(by_name["prefab_data_list"])
+    tail.append(_opaque_run("post_prefab_116", 18))
+    return tail
+
+
+#: CD 1.16. The enchant variant, minus the fields 1.16 removed, plus the
+#: re-derived tail. Before the tail was derived this layout stopped at
+#: max_endurance and carried 713,449 bytes (11.6% of the table) as
+#: _tail_slack -- which cost prefab_data_list, a field CDUMM has a
+#: shipped writer for.
+_ITEM_FIELDS_CD116 = _with_cd116_tail(
+    _with_cd116(_ITEM_FIELDS_CD113_ENCHANT), _ITEM_FIELDS_CD113_ENCHANT)
 
 # (label, fields) candidates, tried in order by detect_iteminfo_layout.
 # Most specific first: the enchant variant decodes 6508/6508 on live 1.13,
