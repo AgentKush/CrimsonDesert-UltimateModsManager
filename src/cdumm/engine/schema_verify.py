@@ -260,11 +260,25 @@ class VerificationReport:
 #: variant that does not decode better is never selected.
 ORDER_VARIANTS: dict[str, tuple[tuple[str, tuple[str, ...]], ...]] = {
     "ItemInfo": (
-        # CD 1.16 removed _inventoryInfo (a u16) and stopped storing
-        # _repairDataList as a counted array. Confirmed independently by
-        # the native parser, which needed exactly the same two removals
-        # to go from 0 to 6,581 byte-exact records.
-        ("cd116", ("_inventoryInfo", "_repairDataList")),
+        # CD 1.16. What each removal is actually for:
+        #
+        # * _inventoryInfo (u16) is GONE -- absent from ItemInfo's field
+        #   list in the 1.16 binary.
+        # * _gimmickVisualPrefabDataList is GONE too -- likewise absent
+        #   from the 1.16 binary, which merged it into PrefabData.
+        # * _repairDataList and _prefabDataList still EXIST (they are
+        #   fields 110 and 111 of 115 in the 1.16 binary). They are
+        #   dropped here because 1.16 wrapped that whole region in 10
+        #   leading and 18 trailing bytes, and a field-NAME list cannot
+        #   express an opaque run -- the native parser handles it with
+        #   two named opaque fields, which this mechanism has no way to
+        #   name. Dropping them is what lets the walk continue past the
+        #   wrapper instead of desyncing on it.
+        #
+        # Do NOT read this list as "1.16 removed four fields". Two were
+        # removed; two are unreachable to a name-only order.
+        ("cd116", ("_inventoryInfo", "_repairDataList",
+                   "_prefabDataList", "_gimmickVisualPrefabDataList")),
     ),
 }
 

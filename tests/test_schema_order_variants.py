@@ -73,6 +73,24 @@ def test_the_cd116_variant_would_decode_worse_on_1_13():
     assert v.median_fields < b.median_fields
 
 
+def test_the_variant_drops_the_two_removed_and_the_two_unreachable():
+    """Guards the reason, not just the result.
+
+    Two of these fields are GONE from the 1.16 binary; two still exist
+    but sit inside a region 1.16 wrapped in opaque bytes, which a
+    field-NAME order cannot express. Someone trimming this list back to
+    "the fields 1.16 removed" would halve the walk depth, so the intent
+    is pinned here.
+    """
+    dropped = set(dict(sv.ORDER_VARIANTS["ItemInfo"])["cd116"])
+    assert dropped == {
+        "_inventoryInfo",              # removed in 1.16
+        "_gimmickVisualPrefabDataList",  # removed in 1.16
+        "_repairDataList",             # exists; inside the wrapped region
+        "_prefabDataList",             # exists; inside the wrapped region
+    }
+
+
 # ── tables with no variants are untouched ───────────────────────────────
 
 @pytest.mark.parametrize("table", ["CharacterInfo", "StageInfo", "WantedInfo",
