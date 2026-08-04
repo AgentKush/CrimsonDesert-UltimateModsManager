@@ -116,6 +116,16 @@ def _build_new_record(j: dict, idx: int) -> StockRecord:
         order_index=int(
             j.get("order_index_113",
                   j.get("order_index", 0xFFFFFFFF)) or 0) & 0xFFFFFFFF,
+        # CD 1.16's u32, same reasoning as order_index above. 0xFFFFFFFF
+        # is the unset value, holding on 5,654 of the 6,376 vanilla 1.16
+        # records; the other 22 distinct values are real thresholds (150,
+        # 20, 50, 30, ...). Zero occurs EXACTLY ZERO times, so taking the
+        # dataclass default of 0 would write every new record out of
+        # distribution -- a value the game never ships for this field.
+        # Ignored on layouts that have no such field.
+        low_price_threshold_count=int(
+            j.get("low_price_threshold_count", 0xFFFFFFFF) or 0
+        ) & 0xFFFFFFFF,
         flag_a=int(j.get("flag_a") or 0),
         flag_b=int(j.get("flag_b") or 0),
         flag_c=int(j.get("flag_c") or 0),
