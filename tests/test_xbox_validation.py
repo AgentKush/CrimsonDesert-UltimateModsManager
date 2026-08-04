@@ -89,23 +89,51 @@ def test_xbox_install_without_paz_or_exe_is_invalid(tmp_path):
     assert validate_game_directory(game) is False
 
 
-@pytest.mark.skipif(
-    sys.platform == "darwin",
-    reason="On macOS, validate_game_directory accepts any path with the "
-           "PAZ structural layout (0008/0.paz + meta/0.papgt) so users "
-           "can point CDUMM at the inner Contents/Resources/packages of "
-           "an opaque .app bundle. The Windows-only 'must be xboxgames-"
-           "marked' constraint doesn't apply.")
-def test_non_xbox_path_without_exe_is_invalid_even_with_paz(tmp_path):
-    # Generic path (no XboxGames / WindowsApps marker) without the exe
-    # must NOT be accepted — could be a partial manual copy.
+def test_a_real_game_root_is_valid_whatever_the_path_is_called(tmp_path):
+    """GitHub #343 — this test used to assert the opposite.
+
+    It required a generic path to be REJECTED even with the full PAZ
+    layout present, on the reasoning that it "could be a partial manual
+    copy". That made acceptance depend on what the folder is called
+    rather than what is in it: ``validate_game_directory`` ANDed the
+    content test with ``is_xbox_install``, which only searches the path
+    STRING for ``xboxgames`` / ``windowsapps`` / the publisher hash.
+
+    The cost showed up in #342 — an Xbox App user whose install is
+    genuinely a game root could not get CDUMM to accept it, because his
+    path carried none of the tokens anyone had thought to list. The
+    hypothetical partial copy never did; and a folder holding both
+    ``0008/0.paz`` and ``meta/0.papgt`` is a game data root, which is
+    exactly what CDUMM needs to mod.
+    """
     game = tmp_path / "SomeOtherFolder"
     (game / "0008").mkdir(parents=True)
     (game / "0008" / "0.paz").write_bytes(b"x")
     (game / "meta").mkdir()
     (game / "meta" / "0.papgt").write_bytes(b"x")
-    assert not is_xbox_install(game)
-    assert validate_game_directory(game) is False
+    assert not is_xbox_install(game), "no path token — that is the point"
+    assert validate_game_directory(game) is True
+
+
+@pytest.mark.skipif(
+    sys.platform == "darwin",
+    reason="macOS validation walks into .app bundles, so a bare folder "
+           "takes a different path through _resolve_macos_game_dir.")
+def test_a_folder_without_the_markers_is_still_rejected(tmp_path):
+    """Loosening the path check must not loosen the content check: the
+    two markers together are what acceptance now rests on entirely."""
+    for layout in ("nothing", "paz_only", "papgt_only"):
+        game = tmp_path / layout
+        game.mkdir()
+        if layout in ("nothing", "papgt_only"):
+            pass
+        if layout == "paz_only":
+            (game / "0008").mkdir()
+            (game / "0008" / "0.paz").write_bytes(b"x")
+        if layout == "papgt_only":
+            (game / "meta").mkdir()
+            (game / "meta" / "0.papgt").write_bytes(b"x")
+        assert validate_game_directory(game) is False, layout
 
 
 def test_custom_xbox_path_with_publisher_hash_detected(tmp_path):
