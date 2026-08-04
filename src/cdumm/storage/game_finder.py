@@ -616,14 +616,24 @@ def validate_game_directory(path: Path) -> bool:
     archives live under ``Contents/Resources/packages/``. Accept any
     path that resolves (directly or by walking into a .app) to a
     directory containing the PAZ structural markers.
+
+    The PAZ test stands on its own (GitHub #343). It used to be ANDed
+    with ``is_xbox_install``, which is a **path-string** test — it looks
+    for ``xboxgames``, ``windowsapps``, ``modifiablewindowsapps`` or the
+    publisher hash somewhere in the path. That made acceptance depend on
+    what the folder is *called* rather than what is *in* it, so a real
+    game root was rejected whenever the exe wasn't at ``bin64/`` and the
+    path happened not to carry one of those tokens — an Xbox install
+    moved to a custom library, or any layout nobody had tokenised yet.
+    ``_looks_like_game_root`` requires ``0008/0.paz`` **and**
+    ``meta/0.papgt`` together, which is the thing CDUMM actually needs
+    and is not a shape an unrelated folder falls into by accident.
     """
     if IS_MACOS:
         return _resolve_macos_game_dir(path) is not None
     if (path / GAME_EXE).exists():
         return True
-    if is_xbox_install(path) and _looks_like_game_root(path):
-        return True
-    return False
+    return _looks_like_game_root(path)
 
 
 def resolve_game_directory(path: Path) -> Path | None:
