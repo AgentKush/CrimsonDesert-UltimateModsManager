@@ -2085,6 +2085,18 @@ def _intents_to_v2_changes(
         return []
     # H2 guard: we don't know how to walk entry headers for widths
     # other than u16/u32. Refusing is safer than misaligning.
+    #
+    # Deliberately still excludes key_size == 1, even though the PARSER
+    # now reads 1-byte ids correctly. The rest of the write path does
+    # not: _payload_offset (~:2806), _entry_name (~:2825), the batch
+    # path (~:2232) and semantic/engine.py:255 all still compute
+    # ``eid_size = 2 if key_size == 2 else 4``, so a 1-byte-key table
+    # admitted here gets a 4-byte id read and _payload_offset returns
+    # None for every entry -- measured 106 of 106 across the six live
+    # ks=1 tables. The intents are then dropped with no warning at all,
+    # which is strictly worse than this refusal: it trades a clear
+    # diagnostic for silence. Widen this only together with those four
+    # sites.
     if key_size not in (2, 4):
         logger.warning(
             "Format 3 expansion on '%s' refused: unsupported "
