@@ -165,6 +165,21 @@ def _lookup_record_field(rec: dict, field: str):
     if "." not in field:
         return None
 
+    # Accept the same DMM-dialect nested spellings the WRITER accepts.
+    # Without this a mod can name sharpness_data.stat_data.stat_list_static
+    # in `field` and have it resolve, while the identical spelling in
+    # `match` resolves to None -- so the intent selects nothing, writes
+    # nothing, and reports no error. That is precisely the half-working
+    # asymmetry this module's _match_field_name docstring exists to
+    # prevent, arriving through the nested path instead of the flat name.
+    # Same function the writer uses, so the two cannot drift apart.
+    from cdumm.engine.iteminfo_writer import _canonical_nested_path
+    canonical = _canonical_nested_path(field)
+    if canonical != field:
+        got = _lookup_record_field(rec, canonical)
+        if got is not None:
+            return got
+
     cur: object = rec
     for seg in field.split("."):
         if isinstance(cur, dict):
