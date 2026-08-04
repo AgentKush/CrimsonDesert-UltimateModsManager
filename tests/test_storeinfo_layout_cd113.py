@@ -36,7 +36,7 @@ import pytest
 
 from cdumm.engine.storeinfo_native_parser import (
     LAYOUTS, VGAP_SIZE, StoreinfoParseError, _score_layout,
-    detect_storeinfo_layout, parse_stock_list, serialize_stock_list)
+    detect_storeinfo_layout, locate_stock_list, serialize_stock_list)
 from cdumm.semantic.parser import parse_pabgh_index
 
 _FIXTURES = Path(__file__).resolve().parent / "fixtures" / "vanilla113"
@@ -50,9 +50,19 @@ def _vanilla(name: str) -> bytes:
     return zlib.decompress((_FIXTURES / f"{name}.zlib").read_bytes())
 
 # Measured on the real CD 1.13 table (tests/fixtures/vanilla113/storeinfo).
+#
+# These numbers moved once already, for a reason worth recording: they
+# used to read 268 / 3,661, because the parser located the stock list at
+# one fixed payload offset. 82 entries keep it somewhere else, so their
+# lists were being missed -- as a *successful* parse of a different u32
+# that happened to be 0, i.e. "this store is empty", with no error. The
+# entry count went DOWN because provably-empty stores are no longer
+# counted as decoded, and the record count went UP by 1,782 because
+# those 82 stores are not empty at all.
 TOTAL_ENTRIES = 293
-DECODED_ENTRIES = 268          # the rest carry a non-empty effect_list
-DECODED_RECORDS = 3_661
+DECODED_ENTRIES = 263          # entries with a real, located stock list
+DECODED_RECORDS = 5_443
+PROVABLY_EMPTY_ENTRIES = 30    # too small to hold one record, at any offset
 
 HERNAND_GENERAL = 3101         # the store that failed first in the report
 
@@ -112,37 +122,67 @@ def test_detection_beats_every_other_candidate(table, layout):
 
 # ── detection is decided by byte-exactness, not by "it parsed" ──────────
 
-def test_every_decoded_entry_round_trips_byte_exact(table, layout):
+def _locate_all(body, offsets, layout):
+    """Every entry's located list, plus the ones with no list at all."""
+    spans = sorted(offsets.values()) + [len(body)]
+    found, empty = {}, []
+    for key, off in offsets.items():
+        end = spans[spans.index(off) + 1]
+        try:
+            found[key] = locate_stock_list(
+                body, _payload(body, off), end, key, layout)
+        except StoreinfoParseError:
+            empty.append(key)
+    return found, empty
+
+
+def test_every_located_entry_round_trips_byte_exact(table, layout):
     """A wrong layout can consume a plausible-looking span and still be
     misreading it. Byte-exactness is the only test that can't be fooled —
-    and it is what detection scores on."""
+    and it is what both location and detection score on."""
     body, _header, offsets = table
-    checked = 0
-    for off in sorted(offsets.values()):
-        try:
-            recs, start, end = parse_stock_list(
-                body, _payload(body, off) + layout.count_payload_offset,
-                layout)
-        except StoreinfoParseError:
-            continue
+    found, empty = _locate_all(body, offsets, layout)
+    for recs, start, end in found.values():
         assert serialize_stock_list(recs, layout) == body[start:end]
-        checked += 1
-    assert checked == DECODED_ENTRIES
+    assert len(found) == DECODED_ENTRIES
+    assert len(empty) == PROVABLY_EMPTY_ENTRIES
+
+
+def test_the_stores_with_no_located_list_are_provably_empty(table, layout):
+    """The distinction that makes the scan safe. "We could not find a
+    list" is only acceptable when the entry is too short to hold one
+    record at ANY offset — otherwise we would be silently skipping stock
+    the way the old fixed offset did."""
+    body, _header, offsets = table
+    _found, empty = _locate_all(body, offsets, layout)
+    spans = sorted(offsets.values()) + [len(body)]
+    for key in empty:
+        off = offsets[key]
+        end = spans[spans.index(off) + 1]
+        with pytest.raises(StoreinfoParseError) as ei:
+            locate_stock_list(body, _payload(body, off), end, key, layout)
+        assert getattr(ei.value, "provably_empty", False), (
+            f"store {key} has room for a record but no list was located")
+
+
+def test_the_anchor_holds_for_every_located_list(table, layout):
+    """Why the scan can trust itself: StockData._storeInfo is a u16 back-
+    reference to the owning store, so the first record of an entry's list
+    carries that entry's own key. True on all 263, not just a sample."""
+    body, _header, offsets = table
+    found, _empty = _locate_all(body, offsets, layout)
+    for key, (recs, _s, _e) in found.items():
+        assert recs[0].lookup_a == key
 
 
 def test_order_index_is_ffffffff_in_every_vanilla_record(table, layout):
-    """0xFFFFFFFF on all 3,661 — which is exactly what the mod supplies as
-    `order_index_113`. Two independent sources agreeing is the evidence
+    """0xFFFFFFFF on all of them — which is exactly what the mod supplies
+    as `order_index_113`. Two independent sources agreeing is the evidence
     that this field is real and correctly placed."""
     body, _header, offsets = table
+    found, _empty = _locate_all(body, offsets, layout)
     seen = 0
-    for off in sorted(offsets.values()):
-        try:
-            recs, _s, _e = parse_stock_list(
-                body, _payload(body, off) + layout.count_payload_offset,
-                layout)
-        except StoreinfoParseError:
-            continue
+    for recs, _s, _e in found.values():
         for rec in recs:
             assert rec.order_index == 0xFFFFFFFF
             assert rec.const33 == 1
@@ -155,8 +195,10 @@ def test_the_store_that_broke_now_decodes(table, layout):
     very first record."""
     body, _header, offsets = table
     off = offsets[HERNAND_GENERAL]
-    recs, start, end = parse_stock_list(
-        body, _payload(body, off) + layout.count_payload_offset, layout)
+    spans = sorted(offsets.values()) + [len(body)]
+    recs, start, end = locate_stock_list(
+        body, _payload(body, off), spans[spans.index(off) + 1],
+        HERNAND_GENERAL, layout)
     assert len(recs) == 40
     assert serialize_stock_list(recs, layout) == body[start:end]
     # the flags are clean booleans in the shifted positions
@@ -175,8 +217,10 @@ def test_an_older_table_still_detects_as_that_older_shape(table, layout):
     body, _header, offsets = table
     old = next(c for c in LAYOUTS if c.label == "CD 1.11")
     off = offsets[HERNAND_GENERAL]
-    recs, _s, _e = parse_stock_list(
-        body, _payload(body, off) + layout.count_payload_offset, layout)
+    spans = sorted(offsets.values()) + [len(body)]
+    recs, _s, _e = locate_stock_list(
+        body, _payload(body, off), spans[spans.index(off) + 1],
+        HERNAND_GENERAL, layout)
 
     # A synthetic entry body in the 1.11 shape: header + payload + list.
     name = b"Store_Her_General"
@@ -207,9 +251,10 @@ def test_a_shape_we_do_not_know_refuses_rather_than_guesses():
 
 
 def test_an_all_empty_table_is_valid_not_unknown():
-    """A store with no stock decodes under every layout and yields zero
-    records. Treating "zero records" as "unknown shape" would turn an
-    empty store into a hard error — so detection scores on entries."""
+    """A store with no stock is unknowable by construction — nothing in
+    it identifies the layout. Treating that as "unknown shape" would turn
+    an empty store into a hard error, so detection separates "too small
+    to hold a record" from "big enough, but nothing decodes"."""
     name = b"Shop"
     head = struct.pack("<H", 2) + struct.pack("<I", len(name)) + name + b"\x00"
     empty = head + bytes(44) + struct.pack("<I", 0)

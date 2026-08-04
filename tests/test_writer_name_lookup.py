@@ -51,6 +51,13 @@ def build_store_table(entries):
         body += struct.pack("<H", key)
         body += struct.pack("<I", len(nb)) + nb + b"\x00"
         body += b"\x07" * 44
+        # StockData._storeInfo is a u16 back-reference to the owning
+        # store, so in a real table every record of an entry's list
+        # carries that entry's key. The parser relies on it to LOCATE
+        # the list (the count is not at a fixed offset), so a synthetic
+        # table has to be faithful about it too.
+        for rec in records:
+            rec.lookup_a = key
         body += serialize_stock_list(records)
     header = struct.pack("<H", len(entries))
     for key, _name, _records in entries:
