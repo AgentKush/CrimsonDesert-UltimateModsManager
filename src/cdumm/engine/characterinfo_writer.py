@@ -214,11 +214,6 @@ def build_characterinfo_changes(
                 "characterinfo: field %r is not supported, skipping",
                 field)
             continue
-        if isinstance(new_value, bool) or not isinstance(new_value, int):
-            logger.warning(
-                "characterinfo: intent %s on %r has non-integer value "
-                "%r, skipping", field, entry_name, new_value)
-            continue
         key = name_to_key.get(entry_name)
         if key is None and raw_key:
             key = raw_key
@@ -234,6 +229,18 @@ def build_characterinfo_changes(
         # unbalances the record.
         off_key, delta, fmt, width = spec
         modelled.setdefault(entry_name, {})[field] = off_key
+        # The type check sits BELOW the registration above deliberately. A
+        # bad value is still a field the mod asked this record to carry, so
+        # dropping it must abandon the record like any other unwritable
+        # field. Checking before registration let a non-integer escape the
+        # all-or-nothing guard entirely: the other fields were written and
+        # the record ended up half-modded, which is exactly the crash this
+        # writer exists to prevent.
+        if isinstance(new_value, bool) or not isinstance(new_value, int):
+            logger.warning(
+                "characterinfo: intent %s on %r has non-integer value "
+                "%r, skipping", field, entry_name, new_value)
+            continue
         base: int | None = rec.get(off_key)
         if base is None:
             logger.warning(

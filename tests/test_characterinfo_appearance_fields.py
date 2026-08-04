@@ -590,3 +590,55 @@ def test_apply_dispatch_tolerates_no_warnings_channel(table):
     ]
     assert len(_intents_to_v2_changes(
         "characterinfo.pabgb", body, header, intents)) == 19
+
+
+@pytest.mark.parametrize("bad_value", ["not-an-int", None, 3.5, True])
+def test_a_bad_value_abandons_the_record_rather_than_half_writing(
+        table, bad_value):
+    """A value CDUMM cannot encode must abandon the record too.
+
+    The all-or-nothing guard keys on fields the mod asked this record to
+    carry, so the type check has to run AFTER the record registers as
+    expecting the write. Checking it earlier let a non-integer skip
+    straight past the guard: the sibling fields were written and the
+    record came out half-modded -- the exact state
+    test_abandoned_record_keeps_every_vanilla_byte exists to prevent,
+    reached by a different route.
+
+    Out-of-range integers were already handled correctly (that check sits
+    after registration); these values took the earlier exit.
+    """
+    body, header = table
+    intents = [
+        ("Kliff", 1, "appearance_name", 111),
+        ("Kliff", 1, "character_prefab_path", 222),
+        ("Kliff", 1, "default_action_action_index", bad_value),
+        ("Kliff", 1, "lookup_25", 444),
+    ]
+    refusals: list[str] = []
+    changes = build_characterinfo_changes(
+        body, header, intents, refusals_out=refusals)
+
+    assert changes == [], (
+        f"value {bad_value!r} was rejected but the record's other fields "
+        f"were still written -- that is a half-written character record")
+    assert len(refusals) == 1, refusals
+    assert "Kliff" in refusals[0]
+
+
+def test_a_bad_value_does_not_abandon_an_unrelated_record(table):
+    """Abandonment stays per-record: a bad value on one record must not
+    stop a different record the same mod also targets."""
+    body, header = table
+    intents = [
+        ("Kliff", 1, "appearance_name", 111),
+        ("Kliff", 1, "default_action_action_index", "not-an-int"),
+        ("Kliff_AI", 1, "appearance_name", 333),
+    ]
+    refusals: list[str] = []
+    changes = build_characterinfo_changes(
+        body, header, intents, refusals_out=refusals)
+
+    labels = [c["label"] for c in changes]
+    assert labels == ["Kliff_AI.appearance_name"], labels
+    assert len(refusals) == 1 and "Kliff" in refusals[0]
