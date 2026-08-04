@@ -2324,7 +2324,33 @@ def _with_cd116_tail(fields, source):
         raise ValueError(
             f"CD 1.16 tail needs {missing} from the source layout")
     tail = list(fields)
-    tail.append(_opaque_run("pre_repair_116", 10))
+    # The 10-byte run goes BEFORE respawn_time_seconds, not after
+    # max_endurance. Both placements consume the same 12 bytes, so the
+    # whole-table round trip scores identically either way and cannot
+    # tell them apart -- what separates them is the decoded VALUES.
+    #
+    # Appended after max_endurance, the reader takes the 1.16 block's
+    # bytes as respawn_time_seconds + max_endurance and the real pair
+    # lands 10 bytes later:
+    #
+    #   after max_endurance   max_endurance == 1.13 on    0 / 6494 keys
+    #                         values {0: 6463, 256: 31}
+    #   before respawn        max_endurance == 1.13 on 6494 / 6494 keys
+    #                         values {65535: 6372, 20: 77, 100: 25, ...}
+    #
+    # 65535 is the unbreakable sentinel documented at the top of this
+    # module, so the correct placement reproduces 1.13's exact value
+    # domain per key. Getting this wrong made the repo's own canonical
+    # example -- set max_endurance to 65535 on item 1002862 -- write two
+    # bytes 10 early into the undecoded block while reporting success.
+    try:
+        respawn_at = next(i for i, spec in enumerate(tail)
+                          if spec[0] == "respawn_time_seconds")
+    except StopIteration:
+        raise ValueError(
+            "CD 1.16 tail needs respawn_time_seconds in the source layout"
+        ) from None
+    tail.insert(respawn_at, _opaque_run("pre_respawn_116", 10))
     tail.append(by_name["repair_data_list"])
     tail.append(by_name["prefab_data_list"])
     tail.append(_opaque_run("post_prefab_116", 18))

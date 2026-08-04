@@ -99,6 +99,36 @@ def load_vanilla115(name: str) -> bytes:
         f"vanilla115 fixture {name!r} absent from tests/fixtures")
 
 
+def load_vanilla116(name: str) -> bytes:
+    """Load a CD 1.16.00 vanilla extract (e.g. "iteminfo.pabgb").
+
+    Same contract as :func:`load_vanilla113` / :func:`load_vanilla115`.
+    Added for iteminfo, whose record layout changed again in 1.16: every
+    pre-1.16 layout round-trips 0 of 6,581 records, so field-level item
+    mods were refused outright until the cd116 layout landed.
+
+    Committing the bytes is what makes the cd116 layout testable at all.
+    The bug that shipped in review -- a 10-byte block placed after
+    ``max_endurance`` instead of before ``respawn_time_seconds`` -- is
+    invisible to a round-trip, because both placements consume the same
+    12 bytes and re-serialize identically. Only comparing decoded VALUES
+    against 1.13 exposes it, and that needs both tables present.
+    """
+    packed = _TESTS_DIR / "fixtures" / "vanilla116" / (name + ".zlib")
+    if packed.exists():
+        return zlib.decompress(packed.read_bytes())
+    raise FileNotFoundError(
+        f"vanilla116 fixture {name!r} absent from tests/fixtures")
+
+
+def has_vanilla116(name: str) -> bool:
+    try:
+        load_vanilla116(name)
+        return True
+    except FileNotFoundError:
+        return False
+
+
 def has_vanilla115(name: str) -> bool:
     try:
         load_vanilla115(name)
