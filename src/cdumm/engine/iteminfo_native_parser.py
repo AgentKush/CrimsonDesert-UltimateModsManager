@@ -2207,6 +2207,164 @@ def _with_cd113_enchant(fields):
 _ITEM_FIELDS_CD113_ENCHANT = _with_cd113_prefab_tail(
     _with_cd113_enchant(_ITEM_FIELDS_CD113))
 
+
+def _read_ItemInfoSharpnessData_CD116(r: _Reader) -> dict:
+    """CD 1.16 removed the CD 1.09 dsi-conditional pre byte.
+
+    Derived on the live 1.16 table: with the pre byte consumed the
+    W-header reads max_sharpness = 16640 (nonsense); without it, key
+    14510 (Marni_Devotee_PlateArmor_Helm) reads max_sharpness = 40,
+    stat_count = 1, stat = 1000003, change_mb = 1000 -- matching the
+    ground truth established independently on CD 1.13.
+
+    Skipping the byte is what takes the 1.16 table from 6,190/6,581 to
+    6,581/6,581 byte-exact. Passing dsi_type = 15 is how "never take
+    the pre byte" is expressed without duplicating the reader.
+    """
+    return _read_ItemInfoSharpnessData(r, 15)
+
+
+def _write_ItemInfoSharpnessData_CD116(w: _Writer, v: dict) -> None:
+    if "pre_unk_109" in v:
+        v = {k: x for k, x in v.items() if k != "pre_unk_109"}
+    _write_ItemInfoSharpnessData(w, v)
+
+
+def _with_cd116(fields):
+    """CD 1.16: drop inventory_info and repair_data_list, and use the
+    sharpness reader that never takes the 1.09 pre byte.
+
+    * ``inventory_info`` (u16) is GONE -- absent from ItemInfo's field
+      list in the 1.16 binary and from every other type in it. Dropping
+      it alone moves the table from 0 to 5,579/6,581.
+    * ``repair_data_list`` is no longer a carray. The u32 the old codec
+      read as its element count is 0 on every passing record and
+      0xFFFFFFFF / 604800 (= 7 days in seconds) on the rest -- field
+      values, not a length. Dropping it reaches 6,190/6,581. Its bytes
+      are carried as _tail_slack, so the round trip stays byte-exact.
+    * sharpness: see _read_ItemInfoSharpnessData_CD116. Reaches 6,581.
+
+    All three are the same failure mode: a field whose bytes are
+    normally zero, which lets a stale codec look correct until it meets
+    real data. Check for that first on the next version break.
+    """
+    out = []
+    for spec in fields:
+        if spec[0] in ("inventory_info", "repair_data_list",
+                       "prefab_data_list", "record_end_a", "record_end_b"):
+            continue
+        if spec[0] == "sharpness_data":
+            out.append((spec[0], "struct",
+                        _read_ItemInfoSharpnessData_CD116,
+                        _write_ItemInfoSharpnessData_CD116))
+        else:
+            out.append(spec)
+    return out
+
+
+def _opaque_run(name: str, size: int):
+    """A field spec for ``size`` bytes carried verbatim.
+
+    Used for the two CD 1.16 tail regions whose contents are not decoded.
+    Carrying them as a NAMED fixed-width field, rather than letting them
+    fall into ``_tail_slack``, is what lets the fields AFTER them be
+    parsed -- which is the whole point: ``prefab_data_list`` lives
+    between them.
+    """
+    def read(r: _Reader, _n: int = size) -> bytes:
+        return bytes(r.u8() for _ in range(_n))
+
+    def write(w: _Writer, v: bytes) -> None:
+        if len(v) != size:
+            raise ValueError(
+                f"{name} must be exactly {size} bytes, got {len(v)}")
+        for byte in v:
+            w.u8(byte)
+
+    return (name, "struct", read, write)
+
+
+def _with_cd116_tail(fields, source):
+    """Re-attach the record tail for CD 1.16.
+
+    ``source`` is the list the tail specs were removed FROM, so the
+    re-attached codecs are the same objects rather than lookalikes from
+    another variant. That matters: ``_ITEM_FIELDS_CD113`` carries
+    ``repair_data_list`` but NOT ``prefab_data_list`` -- only the enchant
+    variant has both -- so sourcing from the wrong list silently drops
+    the prefab codec and the tail misparses.
+
+    CD 1.16 did NOT change the repair/prefab region -- it wrapped it.
+    Diffing the same item key between the 1.13 fixture and the 1.16
+    table shows the 1.13 region appearing VERBATIM inside 1.16's
+    undecoded remainder, at offset 10, on 236 of 236 items whose
+    ``equip_slot_list`` is non-empty (the ones where a field reorder
+    would show, since three empty carrays are identical bytes in any
+    order). So:
+
+        1.16 tail = [10 bytes] + [the 1.13 repair + prefab region]
+                  + [18 bytes]
+
+    replacing 1.13's 2-byte record_end_a/record_end_b.
+
+    The two runs are unique-or-nothing: 10/18 decodes 6,567 of 6,581
+    records with 12,262 prefab elements, and every neighbouring value
+    (9, 11, 12 / 16, 17, 19, 20) decodes ZERO. The element count is
+    itself corroboration -- 1.13 has 12,155 across 6,508 records, so
+    +107 over 73 new items is the right magnitude, which a merely
+    self-consistent misread would not produce.
+
+    What the 28 wrapper bytes hold is still unknown, which is why they
+    are opaque rather than named fields.
+    """
+    by_name = {spec[0]: spec for spec in source}
+    missing = [n for n in ("repair_data_list", "prefab_data_list")
+               if n not in by_name]
+    if missing:
+        raise ValueError(
+            f"CD 1.16 tail needs {missing} from the source layout")
+    tail = list(fields)
+    # The 10-byte run goes BEFORE respawn_time_seconds, not after
+    # max_endurance. Both placements consume the same 12 bytes, so the
+    # whole-table round trip scores identically either way and cannot
+    # tell them apart -- what separates them is the decoded VALUES.
+    #
+    # Appended after max_endurance, the reader takes the 1.16 block's
+    # bytes as respawn_time_seconds + max_endurance and the real pair
+    # lands 10 bytes later:
+    #
+    #   after max_endurance   max_endurance == 1.13 on    0 / 6494 keys
+    #                         values {0: 6463, 256: 31}
+    #   before respawn        max_endurance == 1.13 on 6494 / 6494 keys
+    #                         values {65535: 6372, 20: 77, 100: 25, ...}
+    #
+    # 65535 is the unbreakable sentinel documented at the top of this
+    # module, so the correct placement reproduces 1.13's exact value
+    # domain per key. Getting this wrong made the repo's own canonical
+    # example -- set max_endurance to 65535 on item 1002862 -- write two
+    # bytes 10 early into the undecoded block while reporting success.
+    try:
+        respawn_at = next(i for i, spec in enumerate(tail)
+                          if spec[0] == "respawn_time_seconds")
+    except StopIteration:
+        raise ValueError(
+            "CD 1.16 tail needs respawn_time_seconds in the source layout"
+        ) from None
+    tail.insert(respawn_at, _opaque_run("pre_respawn_116", 10))
+    tail.append(by_name["repair_data_list"])
+    tail.append(by_name["prefab_data_list"])
+    tail.append(_opaque_run("post_prefab_116", 18))
+    return tail
+
+
+#: CD 1.16. The enchant variant, minus the fields 1.16 removed, plus the
+#: re-derived tail. Before the tail was derived this layout stopped at
+#: max_endurance and carried 713,449 bytes (11.6% of the table) as
+#: _tail_slack -- which cost prefab_data_list, a field CDUMM has a
+#: shipped writer for.
+_ITEM_FIELDS_CD116 = _with_cd116_tail(
+    _with_cd116(_ITEM_FIELDS_CD113_ENCHANT), _ITEM_FIELDS_CD113_ENCHANT)
+
 # (label, fields) candidates, tried in order by detect_iteminfo_layout.
 # Most specific first: the enchant variant decodes 6508/6508 on live 1.13,
 # where the plain relocated variant only manages the 3167 non-equipment
@@ -2215,6 +2373,11 @@ _ITEM_LAYOUTS = (
     ("default", None),                       # None -> _ITEM_FIELDS
     ("cd113_prefab_relocated", _ITEM_FIELDS_CD113),
     ("cd113_enchant", _ITEM_FIELDS_CD113_ENCHANT),
+    # CD 1.16. Last = most specific: detect_iteminfo_layout keeps the
+    # later layout on a tie. cd116 scores 6,581/6,581 on live 1.16 where
+    # every earlier layout scores 0, and 0 on the 1.13 fixture where
+    # cd113_enchant scores 6,508/6,508 -- so the two never compete.
+    ("cd116", _ITEM_FIELDS_CD116),
 )
 
 
@@ -2483,9 +2646,15 @@ def _read_item(r: _Reader, fields=None) -> dict:
             else:
                 out[name] = r.carray(spec[2])
         elif kind == "struct":
-            if name == "sharpness_data":
+            if spec[2] is _read_ItemInfoSharpnessData:
                 # Sharpness shape (W vs PW) depends on default_sub_item.type_id
                 # per SHARPNESS_findings.md: dsi=0 -> PW, else W.
+                #
+                # Keyed on the READER, not the field name: CD 1.16 dropped the
+                # dsi-conditional pre byte, and its layout supplies
+                # _read_ItemInfoSharpnessData_CD116 under the SAME field name
+                # so mods keep targeting "sharpness_data". Matching on the name
+                # would force a rename and break every gear mod.
                 dsi = out.get("default_sub_item") or {}
                 dsi_type = int(dsi.get("type_id", 15))
                 out[name] = _read_ItemInfoSharpnessData(r, dsi_type)
@@ -2625,7 +2794,7 @@ def _trial_continue(data: bytes, start: int, rec_end: int,
             elif kind == "carray":
                 r.carray(spec[2])
             elif kind == "struct":
-                if name == "sharpness_data":
+                if spec[2] is _read_ItemInfoSharpnessData:
                     _read_ItemInfoSharpnessData(r, dsi_type)
                 else:
                     spec[2](r)
