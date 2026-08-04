@@ -96,6 +96,21 @@ _FIELD_MAP: dict[str, tuple[str, int, str, int]] = {
     # _NEW_SCHEMA_MAP so legacy-vintage mods keep it -- SUPPORTED_FIELDS
     # derives from _FIELD_MAP and picks it up automatically.
     "call_mercenary_cool_time": ("_callMercenaryCoolTime_offset", 0, "<Q", 8),
+    # The sibling slot the same mods set, and the reason "No CD Mount"
+    # QoL mods only half-worked: cool_time applied, spawn_duration was
+    # refused as an unsupported field name. The parser already decodes it
+    # (`<Q` immediately after cool_time) and publishes its offset, so this
+    # is the same length-preserving write as its sibling.
+    #
+    # Verified on live 1.15 rather than assumed from adjacency. Across all
+    # 7105 records the offset is published for every one, and the slot is
+    # nonzero on exactly 14 -- every one a summonable mount
+    # (Riding_ATAG_*, Riding_Dragon_1, Riding_WarMachine_Unique_1), values
+    # 600 and 9000, the same units and shape as cool_time's 300/600/3600/
+    # 9000. Ordinary NPCs read 0, exactly as cool_time does. All 88
+    # mercenary intents in the real QoL mod place inside their own record.
+    "call_mercenary_spawn_duration": (
+        "_callMercenarySpawnDuration_offset", 0, "<Q", 8),
 }
 
 # CURRENT DMM Mod Builder naming (Character Creator / Female Animations 7.6,
