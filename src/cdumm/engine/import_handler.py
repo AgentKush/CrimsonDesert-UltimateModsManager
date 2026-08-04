@@ -2775,6 +2775,63 @@ def import_from_rar(
         return result
 
 
+def _warn_on_stale_ui_dialect(root: Path, game_dir: Path,
+                              result: "ModImportResult") -> None:
+    """Flag UI files written for the pre-1.16 markup dialect (#344).
+
+    CD 1.16 renamed the attributes the UI engine reads, so a UI mod built
+    before it installs perfectly and does nothing: the bytes land, the
+    file is valid, and the engine never reads it. There is no error and
+    no skipped-patch message, which makes it the one failure mode this
+    project refuses to leave silent.
+
+    Each UI file the mod ships is compared against the game's own copy of
+    the same file, so this cannot fire on a pre-1.16 install where the
+    old dialect is correct. Purely advisory -- the mod still installs,
+    because it may also ship textures or sounds that work fine, and only
+    the author can republish the markup.
+    """
+    try:
+        from cdumm.engine.json_patch_handler import (
+            _extract_from_paz,
+            _find_pamt_entry,
+        )
+        from cdumm.engine.ui_dialect import compare, is_ui_file
+    except Exception:                                       # noqa: BLE001
+        return
+
+    stale: list[str] = []
+    try:
+        candidates = [f for f in Path(root).rglob("*")
+                      if f.is_file() and is_ui_file(f.name)]
+    except OSError:
+        return
+
+    for f in candidates[:200]:          # a mod shipping more is not a UI mod
+        verdict = None
+        try:
+            entry = _find_pamt_entry(f.name, game_dir)
+            if entry is not None:
+                verdict = compare(f.read_bytes(), _extract_from_paz(entry))
+        except Exception as e:                              # noqa: BLE001
+            # Advice must never break an install: a UI file we cannot
+            # read, or that has no vanilla counterpart, simply goes
+            # unchecked.
+            logger.debug("UI dialect: skipped %s (%s)", f.name, e)
+        if verdict is not None and verdict.stale:
+            logger.warning("UI dialect: %s — %s", f.name, verdict.reason)
+            stale.append(verdict.message(f.name, result.name))
+
+    if not stale:
+        return
+    note = (f"{len(stale)} UI file(s) use pre-1.16 markup. " if len(stale) > 1
+            else "")
+    text = note + " ".join(stale[:3])
+    if len(stale) > 3:
+        text += f" (and {len(stale) - 3} more — see the log)"
+    result.info = f"{result.info}\n\n{text}" if result.info else text
+
+
 _LOOSE_GAME_EXTENSIONS = {".json", ".xml", ".css", ".html", ".thtml",
                           ".dds", ".ttf", ".otf", ".wem", ".bnk", ".mp4"}
 _SKIP_LOOSE_FILES = {"mod.json", "manifest.json", "modinfo.json"}
@@ -3146,6 +3203,8 @@ def _import_from_extracted(
             and not result.error and result.mod_id is not None):
         _import_sibling_format3(
             _deferred_f3_json, game_dir, db, snapshot, deltas_dir)
+
+    _warn_on_stale_ui_dialect(tmp_path, game_dir, result)
 
     return result
 
@@ -3661,6 +3720,8 @@ def import_from_zip(
                     f"JSON intents, or other game data."
                 )
 
+        _warn_on_stale_ui_dialect(tmp_path, game_dir, result)
+
     return result
 
 
@@ -4169,6 +4230,8 @@ def import_from_folder(
             and not result.error and result.mod_id is not None):
         _import_sibling_format3(
             _deferred_f3_json, game_dir, db, snapshot, deltas_dir)
+
+    _warn_on_stale_ui_dialect(folder_path, game_dir, result)
 
     return result
 
