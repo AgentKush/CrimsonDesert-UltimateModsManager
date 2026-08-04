@@ -21,6 +21,19 @@ _UNRELEASED_NOTES: list[str] = [
 
 CHANGELOG = [
     {
+        "version": "3.9.0",
+        "date": "2026-08-04",
+        "notes": [
+            "<b>Item mods work again on the August 1 game update.</b> That patch changed the item table's layout, and CDUMM could no longer read a single one of its 6,581 records — so every mod that edits an item (stack sizes, prices, durability, sockets, gear stats) was refused outright. The new layout is decoded and those mods apply again.",
+            "<b>Fixed a crash caused by a half-applied character mod.</b> When a mod set several fields on one character and CDUMM could place some but not all of them, it wrote the ones it could — leaving that character with another character's appearance driven by its own animation data, which crashes the game on load. A character is now either fully updated or left untouched, and you are told which one was skipped and why. Found via lurkser (#329).",
+            "<b>Four more kinds of mod apply instead of doing nothing.</b> Recipe unlocks, pickup-range mods, weapon and armour stat edits, and the status-group mods each needed a different part of the game's data decoded. Each previously reported success while changing no bytes.",
+            "<b>CDUMM finds Xbox and moved game installs it used to reject.</b> It was deciding whether a folder was your game by looking at the folder's <i>name</i> rather than what was inside it, so a perfectly good install in an unusual location was refused with no way forward. It now checks for the game's actual data files. Found via Bambola01 (#342).",
+            "<b>Character Creator's race and gender picker appears again.</b> Version 7.7 stopped packing its files and ships them loose instead, which the picker did not recognise, so it silently offered nothing. Found via lurkser (#329).",
+            "<b>Several places where CDUMM could have written to the wrong bytes now refuse instead.</b> When the game's layout shifts underneath it, CDUMM would previously carry on and use a position it could not actually account for. It now stops and says so, rather than guessing. This is prevention rather than a bug anyone reported.",
+            "Thanks to AgentKush, who wrote nearly all of this release, and to lurkser, umibozuT, Bambola01 and woowoots for reports detailed enough to act on.",
+        ],
+    },
+    {
         "version": "3.8.0",
         "date": "2026-07-29",
         "notes": [
