@@ -407,24 +407,37 @@ def _parse_entry_header(data: bytes, offset: int,
     of it reading ASCII ``cenary`` where ``Mercenary_Main`` starts. At
     the right width it names 21 of 21 entries.
 
-    Wider keys (8 and a 12-byte composite) stay on the u32 branch. Those
-    tables carry no entry-name header at all, so there is nothing to
-    read correctly and nothing to check an answer against -- changing
-    their behaviour would be a guess. This mapping is therefore inert
-    for every table except the five with 1-byte keys, which is what
-    makes it safe: 21,085 entry headers across a live install decode
-    byte-for-byte as before.
+    The id width is now simply ``key_size``, with no special cases. An
+    earlier revision of this function kept the wider keys (8, and a
+    12-byte composite) on the u32 branch, on the reasoning that those
+    tables carry no entry-name header, so there was "nothing to check an
+    answer against". That reasoning was wrong twice over.
+
+    There is an oracle: the PABGH index already gives the key for each
+    offset, so the id read out of the body must equal it. Measured on a
+    live install, reading at the full width gives ``eid == key`` for
+    8344 of 8344 ``characterappearanceindexinfo`` entries and 988 of 988
+    ``aieventtableinfo`` entries; reading them as u32 matches 0 of each.
+
+    And the header is not absent, only empty -- every one of those 9,332
+    entries carries ``name_len == 0`` followed by the usual NUL, i.e.
+    the standard ``[id][u32 name_len][name][NUL]`` shape with no name.
+    Truncating the id to 4 bytes left 4 bytes of it to be read as
+    ``name_len``, which is why the header looked absent rather than
+    empty.
+
+    Widening is inert for every table that already worked: widths 1 and
+    2 already used ``key_size``, and for width 4 ``key_size`` IS 4.
 
     Returns ``(entry_id, entry_name, payload_start_offset)``.
     """
-    eid_fmt = {1: "<B", 2: "<H"}.get(key_size, "<I")
-    eid_size = key_size if key_size in (1, 2) else 4
+    eid_size = key_size if key_size > 0 else 4
     head_size = eid_size + 4  # entry_id + u32 name_len
 
     if offset + head_size > len(data):
         return 0, "", offset
 
-    eid = struct.unpack_from(eid_fmt, data, offset)[0]
+    eid = int.from_bytes(data[offset:offset + eid_size], "little")
     nlen = struct.unpack_from("<I", data, offset + eid_size)[0]
 
     if nlen > 500 or offset + head_size + nlen > len(data):
