@@ -109,9 +109,13 @@ _FIELD_MAP: dict[str, tuple[str, int, str, int]] = {
 # wrote to a constant; the current schema routes lookup_24 to its real slot
 # (+20). The three post-block fields the 7.6 mod also sets
 # (default_action_action_index, character_weight, f36) sit in the stretch
-# Pearl Abyss made variable-length in 1.13; their offset drifts per record
-# and is deliberately NOT mapped -- they report "could not locate" rather
-# than being written to a guess.
+# Pearl Abyss made variable-length in 1.13, so their offset drifts per
+# record. They ARE mapped -- inherited from _FIELD_MAP above -- but only
+# to a parser offset key the walk publishes when its f32-2.0 gate confirms
+# the position, so a record whose layout can't be verified reports "could
+# not locate" rather than being written to a guess. Measured on live 1.15:
+# the walk reaches them on Damian/Kliff/Kliff_AI/PlayerAll and does not on
+# the *_Clone records, whose partial writes GitHub #329 now abandons.
 _NEW_SCHEMA_MAP: dict[str, tuple[str, int, str, int]] = {
     **_FIELD_MAP,
     "appearance_name": (_BLK, 0, "<I", 4),
@@ -133,6 +137,7 @@ def build_characterinfo_changes(
     vanilla_body: bytes,
     vanilla_header: bytes,
     intents: list[tuple[str, int, str, object]],
+    refusals_out: list[str] | None = None,
 ) -> list[dict]:
     """Resolve Format 3 characterinfo intents into v2 change dicts.
 
@@ -146,6 +151,27 @@ def build_characterinfo_changes(
     Intents whose field is unsupported, whose record cannot be found or
     parsed, or whose value does not fit the field width are dropped
     with a logged warning, never raising.
+
+    ALL-OR-NOTHING PER RECORD (GitHub #329). A character-swap mod copies
+    one character's appearance, model, skeleton and action-chart index
+    onto another as a set. If CDUMM can locate the record and models
+    every field the mod names, but the parser cannot publish a write
+    position for some of them, writing the rest leaves that record
+    holding the source character's model driven by the target's own
+    action data -- a combination neither vanilla nor the mod produces,
+    and one the game does not survive. Such a record is abandoned whole:
+    none of its fields are written and it stays vanilla, which is always
+    self-consistent.
+
+    This is deliberately scoped to fields CDUMM *models* but cannot
+    *place on this record*. A field name CDUMM doesn't model at all is a
+    property of the mod, identical on every record, so every record gets
+    the same subset -- that is the behaviour #150/#192/#302 shipped and
+    users confirmed in-game, and it is left alone.
+
+    ``refusals_out``, when given, collects one human-readable line per
+    abandoned record so a caller can surface it to the user; the reason
+    is also logged at WARNING either way.
     """
     idx = parse_pabgh_index(vanilla_header)  # {key: record offset}
     order = sorted(idx.items(), key=lambda kv: kv[1])
@@ -171,17 +197,22 @@ def build_characterinfo_changes(
                  if _NEW_SCHEMA_MARKERS & fields_present else _FIELD_MAP)
 
     changes: list[dict] = []
+    # Entry name per emitted change, index-aligned with ``changes``. Used to
+    # drop a partially-written record's changes below. Deriving the name from
+    # the ``label`` instead would be wrong: field names contain dots
+    # ('upper_chart.group_lookup'), so splitting a label can't recover the
+    # entry name unambiguously.
+    change_owner: list[str] = []
+    # Per record: {field: parser offset key} CDUMM models, and the subset of
+    # those field names it actually placed.
+    modelled: dict[str, dict[str, str]] = {}
+    placed: dict[str, set[str]] = {}
     for entry_name, raw_key, field, new_value in intents:
         spec = field_map.get(field)
         if spec is None:
             logger.warning(
                 "characterinfo: field %r is not supported, skipping",
                 field)
-            continue
-        if isinstance(new_value, bool) or not isinstance(new_value, int):
-            logger.warning(
-                "characterinfo: intent %s on %r has non-integer value "
-                "%r, skipping", field, entry_name, new_value)
             continue
         key = name_to_key.get(entry_name)
         if key is None and raw_key:
@@ -193,8 +224,24 @@ def build_characterinfo_changes(
                 "parsable, skipping intent on %s",
                 entry_name, raw_key, field)
             continue
+        # From here the record exists and CDUMM models this field, so the
+        # record is expected to carry this write. Any drop past this point
+        # unbalances the record.
         off_key, delta, fmt, width = spec
-        base = rec.get(off_key)
+        modelled.setdefault(entry_name, {})[field] = off_key
+        # The type check sits BELOW the registration above deliberately. A
+        # bad value is still a field the mod asked this record to carry, so
+        # dropping it must abandon the record like any other unwritable
+        # field. Checking before registration let a non-integer escape the
+        # all-or-nothing guard entirely: the other fields were written and
+        # the record ended up half-modded, which is exactly the crash this
+        # writer exists to prevent.
+        if isinstance(new_value, bool) or not isinstance(new_value, int):
+            logger.warning(
+                "characterinfo: intent %s on %r has non-integer value "
+                "%r, skipping", field, entry_name, new_value)
+            continue
+        base: int | None = rec.get(off_key)
         if base is None:
             logger.warning(
                 "characterinfo: could not locate field %r for entry "
@@ -212,10 +259,61 @@ def build_characterinfo_changes(
                 "%r (%d-byte), skipping", new_value, field, width)
             continue
         original = bytes(vanilla_body[abs_off:abs_off + width])
+        placed.setdefault(entry_name, set()).add(field)
+        change_owner.append(entry_name)
         changes.append({
             "offset": abs_off,
             "original": original.hex(),
             "patched": patched.hex(),
             "label": f"{entry_name}.{field}",
         })
+
+    # All-or-nothing per record (GitHub #329).
+    #
+    # Only a field the parser CAN publish somewhere in this table counts. A
+    # field whose offset key the parser publishes for no record at all is a
+    # table-wide gap, not per-record drift: every targeted record then gets
+    # the same subset, so none is inconsistent relative to its siblings.
+    # ``flag_c`` is the live example -- the 1.13 re-port stopped resolving
+    # ``_flagC_offset`` entirely, and #150's mod has shipped and been
+    # confirmed in-game writing the remaining four fields. Treating that as
+    # a partial record would silently stop those mods working.
+    #
+    # ``character_weight`` is why this is keyed on the parser offset key
+    # rather than the field name: it is the same slot as
+    # ``default_action_action_index`` under a different DMM name, so asking
+    # for one and placing the other still counts as the same field.
+    wanted_keys = {k for f in modelled.values() for k in f.values()}
+    publishable = {
+        k for k in wanted_keys
+        if any(r.get(k) is not None for r in parsed.values())
+    }
+    partial: dict[str, list[str]] = {}
+    for name, fields in modelled.items():
+        if not placed.get(name):
+            continue
+        missing_fields = sorted(
+            f for f, off_key in fields.items()
+            if f not in placed[name] and off_key in publishable
+        )
+        if missing_fields:
+            partial[name] = missing_fields
+    for name in sorted(partial):
+        missing = ", ".join(partial[name])
+        msg = (
+            f"characterinfo: record {name!r} left unwritten -- CDUMM could "
+            f"not locate {missing} on it, and writing only the other "
+            f"{len(placed[name])} field(s) would give it another "
+            f"character's appearance driven by its own action data, which "
+            f"crashes the game. This record stays vanilla; the mod's other "
+            f"records still apply."
+        )
+        logger.warning("%s", msg)
+        if refusals_out is not None:
+            refusals_out.append(msg)
+    if partial:
+        changes = [
+            c for c, owner in zip(changes, change_owner)
+            if owner not in partial
+        ]
     return changes

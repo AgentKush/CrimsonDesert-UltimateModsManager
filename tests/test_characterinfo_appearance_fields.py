@@ -81,7 +81,8 @@ _MOD_INTENTS: list[tuple[str, int, str, int]] = [
 _NEW = {"appearance_name": 0, "character_prefab_path": 4,
         "skeleton_name": 8, "lookup_24": 20, "lookup_25": 24}
 # The three the 7.6 mod also sets that sit in the post-block variable-length
-# region (1.13 drift) and are deliberately NOT written.
+# region (1.13 drift). #302 made these writable on records whose position the
+# walk can gate-verify; they stay refused on records it cannot.
 _POST_BLOCK = {"default_action_action_index", "character_weight", "f36"}
 
 _DAMIAN_KEY = 4
@@ -124,12 +125,20 @@ def test_all_17_hash_block_intents_apply_and_match_the_source(table):
     offsets are right, not merely that a write happened."""
     body, header = table
     changes = build_characterinfo_changes(body, header, _MOD_INTENTS)
-    # 17 hash-block intents + the 6 post-block ones the walker can now
-    # locate and gate-verify (#302: default_action_action_index / f36 on
-    # Kliff, Kliff_AI, PlayerAll). Kliff_Clone fails the f32-2.0 gate and
-    # character_weight is still unmapped, so 2 remain refused.
-    assert len(changes) == 23, (
-        f"expected 23 locatable intents, got {len(changes)}")
+    # 13 hash-block intents + the 6 post-block ones the walker can locate
+    # and gate-verify (#302: default_action_action_index / f36 on Kliff,
+    # Kliff_AI, PlayerAll).
+    #
+    # Kliff_Clone contributes NOTHING (GitHub #329). It fails the f32-2.0
+    # gate, so its post-block slot can't be placed -- and since that slot IS
+    # placeable on Kliff/Kliff_AI/PlayerAll, withholding it only on this
+    # record would leave it wearing Damian's appearance while still running
+    # its own action index. That record is now abandoned whole rather than
+    # written in part, which is why this is 19 and not 23.
+    assert len(changes) == 19, (
+        f"expected 19 locatable intents, got {len(changes)}")
+    assert not [c for c in changes if c["label"].startswith("Kliff_Clone.")], (
+        "Kliff_Clone must contribute no changes at all")
 
     patched = _apply(body, changes)
     assert len(patched) == len(body), "writes must not resize the table"
@@ -144,14 +153,18 @@ def test_all_17_hash_block_intents_apply_and_match_the_source(table):
 
 
 def test_every_write_lands_its_intent_value(table):
-    """Each of the 17 writes puts its exact ``new`` value at its slot,
-    across all five target records (not just Kliff)."""
+    """Each hash-block write puts its exact ``new`` value at its slot,
+    across every target record that is written at all (not just Kliff).
+
+    Kliff_Clone is excluded because #329 abandons it whole; the test
+    immediately below pins that it keeps its vanilla bytes.
+    """
     body, header = table
     key_of = {n: k for n, k, _f, _v in _MOD_INTENTS}
     patched = _apply(body, build_characterinfo_changes(
         body, header, _MOD_INTENTS))
     for name, key, field, value in _MOD_INTENTS:
-        if field not in _NEW:
+        if field not in _NEW or name == "Kliff_Clone":
             continue
         blk = _block_offset(patched, header, key_of[name])
         got = struct.unpack_from("<I", patched, blk + _NEW[field])[0]
@@ -163,16 +176,118 @@ def test_every_write_lands_its_intent_value(table):
 def test_lookup_24_writes_its_real_slot_not_the_type_tag_constant(table):
     """The legacy map put lookup_24 at block+16, which is a table-wide
     constant type tag. The new schema must route it to +20, and +16 must be
-    left at the constant on every targeted record."""
+    left at the constant on every written record.
+
+    Kliff_Clone (1001367) is not in the list: #329 abandons it, so its +20
+    correctly still holds vanilla. ``test_abandoned_record_keeps_every_
+    vanilla_byte`` covers that record instead.
+    """
     body, header = table
     patched = _apply(body, build_characterinfo_changes(
         body, header, _MOD_INTENTS))
-    for key in (1, 1001367, 1002113, 1004085):
+    for key in (1, 1002113, 1004085):
         blk = _block_offset(patched, header, key)
         assert struct.unpack_from("<I", patched, blk + 16)[0] == \
             _TYPE_TAG_CONST, "block+16 type tag was overwritten"
         assert struct.unpack_from("<I", patched, blk + 20)[0] == \
             2831867940, "lookup_24 did not land at its real slot (+20)"
+
+
+# ── #329: a record CDUMM can only half-write stays vanilla ───────────────
+
+def test_abandoned_record_keeps_every_vanilla_byte(table):
+    """The #329 crash, pinned on the real table.
+
+    Kliff_Clone asks for six fields. The parser can place four of them
+    (the hash-block ones) and cannot place the post-block slot, because
+    the record fails the f32-2.0 position gate. Writing the four would
+    hand it Damian's appearance, model and skeleton variation while it
+    still runs its own action index -- a combination neither vanilla nor
+    the mod produces, and the state the reporter's game crashed on.
+
+    So: the whole record must come out byte-identical to vanilla.
+    """
+    body, header = table
+    changes = build_characterinfo_changes(body, header, _MOD_INTENTS)
+    patched = _apply(body, changes)
+
+    idx = parse_pabgh_index(header)
+    order = sorted(idx.items(), key=lambda kv: kv[1])
+    offs = [o for _k, o in order]
+    start = idx[1001367]
+    i = offs.index(start)
+    end = order[i + 1][1] if i + 1 < len(order) else len(body)
+
+    assert patched[start:end] == body[start:end], (
+        "Kliff_Clone was modified; a partially-written character record is "
+        "exactly what GitHub #329 crashes on")
+
+    # ...and the mod's other records still apply, so this is a per-record
+    # refusal rather than the whole mod going dead.
+    assert len(changes) == 19
+    for name in ("Kliff", "Kliff_AI", "Yann", "PlayerAll"):
+        assert [c for c in changes if c["label"].startswith(f"{name}.")], (
+            f"{name} must still be written")
+
+
+def test_refusal_reason_is_reported_not_just_logged(table):
+    """The reporter saw a crash with no message in CDUMM. The abandonment
+    has to be surfaced, so it is collected into ``refusals_out``."""
+    body, header = table
+    refusals: list[str] = []
+    build_characterinfo_changes(
+        body, header, _MOD_INTENTS, refusals_out=refusals)
+    assert len(refusals) == 1, refusals
+    assert "Kliff_Clone" in refusals[0]
+    # It must say what could not be placed, or it isn't actionable.
+    assert "f36" in refusals[0]
+
+
+def test_a_lone_half_writable_record_is_abandoned_too(table):
+    """Placeability must be read from the PARSER, not from the mod.
+
+    A character-swap mod targeting only ONE record, whose post-block slot
+    the parser can't place on that record, ends up placing that slot
+    nowhere. Judging "is this slot placeable at all" from what the mod
+    managed to write would then call it a table-wide gap and write the
+    hash-block fields anyway -- reintroducing the exact partial state
+    #329 crashes on, just for a smaller mod.
+
+    Reading it from what the parser publishes across the table (Damian
+    and thousands of others do publish this slot) gets it right.
+    """
+    body, header = table
+    intents = [
+        ("Kliff_Clone", 1001367, "appearance_name", 1767116530),
+        ("Kliff_Clone", 1001367, "character_prefab_path", 3755051597),
+        ("Kliff_Clone", 1001367, "character_weight", 1287066785),
+    ]
+    changes = build_characterinfo_changes(body, header, intents)
+    assert changes == [], (
+        "a lone half-writable record must still be abandoned, even though "
+        "the mod itself never proves the slot is placeable")
+
+
+def test_a_table_wide_gap_does_not_abandon_records(table):
+    """The guard is scoped to per-record drift, not to fields CDUMM cannot
+    place anywhere.
+
+    ``flag_c`` is modelled but the 1.13 re-port publishes ``_flagC_offset``
+    for no record at all. Every targeted record therefore gets the same
+    subset, none is inconsistent relative to its siblings, and #150's
+    shipped in-game-confirmed behaviour of writing the rest must survive.
+    """
+    body, header = table
+    intents = [
+        ("Kliff", 1, "appearance_name", 1767116530),
+        ("Kliff", 1, "lookup_24", 2831867940),
+        ("Kliff", 1, "flag_c", 2),          # unplaceable on every record
+    ]
+    changes = build_characterinfo_changes(body, header, intents)
+    assert len(changes) == 2, (
+        "a field CDUMM can place on no record must not abandon the record")
+    assert {c["label"] for c in changes} == {
+        "Kliff.appearance_name", "Kliff.lookup_24"}
 
 
 # ── the deferred fields are skipped, not guessed ────────────────────────
@@ -409,3 +524,121 @@ def test_character_weight_is_the_same_slot_as_default_action_action_index():
     from cdumm.engine.characterinfo_writer import _FIELD_MAP
     assert (_FIELD_MAP["character_weight"]
             == _FIELD_MAP["default_action_action_index"])
+
+
+# ── #329: the apply dispatch actually carries the refusal out ────────────
+
+def test_apply_dispatch_surfaces_the_refusal_to_the_user(table):
+    """The writer refusing is only half the fix.
+
+    #329's reporter saw a crash with no message, and a per-record
+    abandonment is NOT a whole-mod dropout -- the mod still produces 19
+    changes, so none of the existing "0 byte changes" warnings fire. The
+    dispatch has to carry the reason out itself or it stays invisible.
+
+    Goes through the real ``_intents_to_v2_changes`` entry point rather
+    than calling the writer again, so the wiring is what's under test.
+    """
+    from cdumm.engine.format3_apply import _intents_to_v2_changes
+    from cdumm.engine.format3_handler import Format3Intent
+
+    body, header = table
+    intents = [
+        Format3Intent(entry=n, key=k, field=f, op="set", new=v)
+        for n, k, f, v in _MOD_INTENTS
+    ]
+    warnings: list[str] = []
+    changes = _intents_to_v2_changes(
+        "characterinfo.pabgb", body, header, intents,
+        warnings_out=warnings)
+
+    assert len(changes) == 19
+    assert len(warnings) == 1, warnings
+    assert "Kliff_Clone" in warnings[0]
+
+
+def test_apply_dispatch_stays_silent_when_nothing_is_abandoned(table):
+    """No false alarms: a mod whose records all write completely must not
+    produce a warning."""
+    from cdumm.engine.format3_apply import _intents_to_v2_changes
+    from cdumm.engine.format3_handler import Format3Intent
+
+    body, header = table
+    intents = [
+        Format3Intent(entry="Kliff", key=1, field="appearance_name",
+                      op="set", new=1767116530),
+        Format3Intent(entry="Kliff", key=1, field="lookup_24",
+                      op="set", new=2831867940),
+    ]
+    warnings: list[str] = []
+    changes = _intents_to_v2_changes(
+        "characterinfo.pabgb", body, header, intents,
+        warnings_out=warnings)
+    assert len(changes) == 2
+    assert warnings == []
+
+
+def test_apply_dispatch_tolerates_no_warnings_channel(table):
+    """``warnings_out`` is optional; the default path must not raise."""
+    from cdumm.engine.format3_apply import _intents_to_v2_changes
+    from cdumm.engine.format3_handler import Format3Intent
+
+    body, header = table
+    intents = [
+        Format3Intent(entry=n, key=k, field=f, op="set", new=v)
+        for n, k, f, v in _MOD_INTENTS
+    ]
+    assert len(_intents_to_v2_changes(
+        "characterinfo.pabgb", body, header, intents)) == 19
+
+
+@pytest.mark.parametrize("bad_value", ["not-an-int", None, 3.5, True])
+def test_a_bad_value_abandons_the_record_rather_than_half_writing(
+        table, bad_value):
+    """A value CDUMM cannot encode must abandon the record too.
+
+    The all-or-nothing guard keys on fields the mod asked this record to
+    carry, so the type check has to run AFTER the record registers as
+    expecting the write. Checking it earlier let a non-integer skip
+    straight past the guard: the sibling fields were written and the
+    record came out half-modded -- the exact state
+    test_abandoned_record_keeps_every_vanilla_byte exists to prevent,
+    reached by a different route.
+
+    Out-of-range integers were already handled correctly (that check sits
+    after registration); these values took the earlier exit.
+    """
+    body, header = table
+    intents = [
+        ("Kliff", 1, "appearance_name", 111),
+        ("Kliff", 1, "character_prefab_path", 222),
+        ("Kliff", 1, "default_action_action_index", bad_value),
+        ("Kliff", 1, "lookup_25", 444),
+    ]
+    refusals: list[str] = []
+    changes = build_characterinfo_changes(
+        body, header, intents, refusals_out=refusals)
+
+    assert changes == [], (
+        f"value {bad_value!r} was rejected but the record's other fields "
+        f"were still written -- that is a half-written character record")
+    assert len(refusals) == 1, refusals
+    assert "Kliff" in refusals[0]
+
+
+def test_a_bad_value_does_not_abandon_an_unrelated_record(table):
+    """Abandonment stays per-record: a bad value on one record must not
+    stop a different record the same mod also targets."""
+    body, header = table
+    intents = [
+        ("Kliff", 1, "appearance_name", 111),
+        ("Kliff", 1, "default_action_action_index", "not-an-int"),
+        ("Kliff_AI", 1, "appearance_name", 333),
+    ]
+    refusals: list[str] = []
+    changes = build_characterinfo_changes(
+        body, header, intents, refusals_out=refusals)
+
+    labels = [c["label"] for c in changes]
+    assert labels == ["Kliff_AI.appearance_name"], labels
+    assert len(refusals) == 1 and "Kliff" in refusals[0]

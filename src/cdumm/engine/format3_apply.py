@@ -912,7 +912,8 @@ def expand_format3_into_aggregated(
 
                 # Convert each supported intent into a v2-style change dict
                 changes = _intents_to_v2_changes(
-                    target, vanilla_body, vanilla_header, supported)
+                    target, vanilla_body, vanilla_header, supported,
+                    warnings_out=warnings_out)
                 if not changes:
                     n_mods_skipped += 1
                     # Don't pollute aggregated with empty lists.
@@ -1772,6 +1773,8 @@ def _build_with_per_intent_refusals(
 def _intents_to_v2_changes(
     target: str, vanilla_body: bytes, vanilla_header: bytes,
     intents: list[Format3Intent],
+    *,
+    warnings_out: list[str] | None = None,
 ) -> list[dict]:
     """Produce v2-format change dicts from a list of supported intents.
 
@@ -1825,7 +1828,8 @@ def _intents_to_v2_changes(
     # (GitHub #150).
     if table_name == "characterinfo":
         return _characterinfo_intents_to_changes(
-            vanilla_body, vanilla_header, intents)
+            vanilla_body, vanilla_header, intents,
+            warnings_out=warnings_out)
 
     has_cdumm_schema = has_schema(table_name)
     # Tables without a CDUMM PABGB schema are still processable when
@@ -2583,6 +2587,8 @@ def _buffinfo_intents_to_changes(
 def _characterinfo_intents_to_changes(
     vanilla_body: bytes, vanilla_header: bytes,
     intents: list[Format3Intent],
+    *,
+    warnings_out: list[str] | None = None,
 ) -> list[dict]:
     """Resolve characterinfo intents through the clean-room
     characterinfo writer (GitHub #150).
@@ -2592,6 +2598,12 @@ def _characterinfo_intents_to_changes(
     unsupported fields, missing records, or out-of-range values are
     dropped inside the writer with a logged warning; the expand_format3
     caller surfaces a "0 byte changes" warning for whole-mod dropouts.
+
+    A record the writer can only partly write is abandoned whole rather
+    than left half-swapped (GitHub #329). That is not a whole-mod dropout
+    -- the mod's other records still apply and produce changes -- so it
+    would otherwise pass silently, which is exactly why the reporter saw
+    a crash with no message. Surface it through ``warnings_out``.
     """
     from cdumm.engine.characterinfo_writer import (
         build_characterinfo_changes,
@@ -2599,8 +2611,12 @@ def _characterinfo_intents_to_changes(
     tuples = [
         (i.entry, i.key, i.field, i.new) for i in intents
     ]
-    return build_characterinfo_changes(
-        vanilla_body, vanilla_header, tuples)
+    refusals: list[str] = []
+    changes = build_characterinfo_changes(
+        vanilla_body, vanilla_header, tuples, refusals_out=refusals)
+    if refusals and warnings_out is not None:
+        warnings_out.extend(refusals)
+    return changes
 
 
 def _build_list_writer_change(
