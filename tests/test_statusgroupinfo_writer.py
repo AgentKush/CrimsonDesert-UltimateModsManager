@@ -45,6 +45,14 @@ NUMERIC_GROUP = 1000004         # "103" -- all three lists populated
 CRITICAL_DAMAGE = 1000006       # a statusinfo record key
 TABLE_LEN = 75                  # one entry per statusinfo record
 
+#: A key that is NOT already in StatOnActivateByItem's list 1, and that the
+#: table's reverse index does know a slot for (slot 8). Substituting it is
+#: representable, so it is what the "the writer can still write" tests use
+#: now that the mod's own edit is refused for duplicating a key.
+SUBSTITUTABLE_KEY = 1000011
+SUBSTITUTABLE_SLOT = 8
+CRITICAL_RATE = 1000007         # sits at list-1 index 3, reverse slot 9
+
 pytestmark = pytest.mark.skipif(
     not has_vanilla115(FIXTURE),
     reason="1.15 statusgroupinfo fixture not present")
@@ -145,8 +153,17 @@ def test_the_item_activation_groups_have_only_one_populated_list():
 
 # ------------------------------------------------------------- the writes
 
-def test_applies_the_real_mod_intent():
-    """Mod 2634's Global_Critical_Rate, both records."""
+def test_refuses_the_real_mod_intent_because_it_duplicates_a_key():
+    """Mod 2634's Global_Critical_Rate, both records -- and why it can't run.
+
+    The mod sets list-1 index 3 to CriticalDamage, which already sits at
+    index 2. Table 0 is a reverse index over that list, so it can hold one
+    position per key; a list naming CriticalDamage twice has no reverse
+    index at all, and CriticalRate would drop out with a slot still
+    pointing at it. That is a record shape vanilla never ships, so the
+    writer refuses rather than writing the list and leaving the index
+    contradicting it (#320 review).
+    """
     body, header = _tables()
     intents = [
         _intent(STAT_ON_ITEM, 3, CRITICAL_DAMAGE),
@@ -154,34 +171,48 @@ def test_applies_the_real_mod_intent():
                 entry="StatOnActivateByItemWithoutAttackSpeedRate"),
     ]
     changes, dropped = build_statusgroupinfo_changes(body, header, intents)
-    assert not dropped, dropped
-    assert len(changes) == 2
+    assert changes == []
+    assert len(dropped) == 2
+    for _intent_obj, reason in dropped:
+        assert "more than once" in reason
+        assert "reverse index" in reason
 
+
+def test_applies_a_representable_substitution():
+    """The writer is not simply refusing everything: an edit that keeps
+    the list a set of distinct keys is written, index and all."""
+    body, header = _tables()
+    changes, dropped = build_statusgroupinfo_changes(
+        body, header, [_intent(STAT_ON_ITEM, 3, SUBSTITUTABLE_KEY)])
+    assert dropped == [], dropped
     modified = _apply(body, changes)
     assert len(modified) == len(body), "writes must be length-preserving"
-    for key in (STAT_ON_ITEM, STAT_ON_ITEM_NO_ASR):
-        lists = _lists(modified, header, key)
-        elem_start, count = lists[1]
-        assert count >= 4
-        assert _elem(modified, elem_start + 4 * 3) == CRITICAL_DAMAGE
+    lists = _lists(modified, header, STAT_ON_ITEM)
+    assert _elem(modified, lists[1][0] + 4 * 3) == SUBSTITUTABLE_KEY
 
 
-def test_only_the_targeted_element_moves():
+def test_only_the_targeted_element_and_its_index_slots_move():
+    """Three u32s: the list element, the slot the new key needs, and the
+    slot the displaced key vacates. Nothing else."""
     body, header = _tables()
     changes, _ = build_statusgroupinfo_changes(
-        body, header, [_intent(STAT_ON_ITEM, 3, CRITICAL_DAMAGE)])
+        body, header, [_intent(STAT_ON_ITEM, 3, SUBSTITUTABLE_KEY)])
     modified = _apply(body, changes)
     lists = _lists(body, header, STAT_ON_ITEM)
     at = lists[1][0] + 4 * 3
+    t0 = lists[-1][0] + 4 * lists[-1][1] + 4      # past list 2's count
+    allowed = set(range(at, at + 4))
+    for slot in (SUBSTITUTABLE_SLOT, 9):          # 9 == CriticalRate
+        allowed |= set(range(t0 + 4 * slot, t0 + 4 * slot + 4))
     diff = [j for j in range(len(body)) if body[j] != modified[j]]
-    assert diff, "the mod must change something"
-    assert all(at <= j < at + 4 for j in diff)
+    assert diff, "the write must change something"
+    assert set(diff) <= allowed, sorted(set(diff) - allowed)
 
 
 def test_every_other_record_is_byte_identical():
     body, header = _tables()
     changes, _ = build_statusgroupinfo_changes(
-        body, header, [_intent(STAT_ON_ITEM, 3, CRITICAL_DAMAGE)])
+        body, header, [_intent(STAT_ON_ITEM, 3, SUBSTITUTABLE_KEY)])
     modified = _apply(body, changes)
     _, offsets = parse_pabgh_index(header, "statusgroupinfo")
     for key in offsets:
@@ -352,13 +383,27 @@ def test_out_of_range_is_still_refused_under_the_fallback(monkeypatch):
     assert "outside the statusinfo key space" in dropped[0][1]
 
 
-def test_every_key_the_mod_writes_is_inside_the_bound():
-    """The guard must not refuse the thing it exists to allow."""
+def test_the_key_space_guard_does_not_refuse_a_real_key():
+    """The guard must not refuse the thing it exists to allow. Uses a
+    representable substitution so that what is being tested is the key
+    bound, not the reverse-index rule that refuses the mod's own edit."""
     body, header = _tables()
     changes, dropped = build_statusgroupinfo_changes(
-        body, header, [_intent(STAT_ON_ITEM, 3, CRITICAL_DAMAGE)])
+        body, header, [_intent(STAT_ON_ITEM, 3, SUBSTITUTABLE_KEY)])
     assert dropped == [], dropped
-    assert len(changes) == 1
+    assert changes
+
+
+def test_the_mods_key_is_inside_the_bound_it_is_refused_for_another_reason():
+    """Guards against a future change 'fixing' the refusal by widening the
+    key space: CriticalDamage is a perfectly real statusinfo key. What
+    stops the mod is duplication, nothing to do with the bound."""
+    body, header = _tables()
+    _changes, dropped = build_statusgroupinfo_changes(
+        body, header, [_intent(STAT_ON_ITEM, 3, CRITICAL_DAMAGE)])
+    assert len(dropped) == 1
+    assert "outside the statusinfo key space" not in dropped[0][1]
+    assert "more than once" in dropped[0][1]
 
 
 # ---------------------------------------------- the reverse index (#320)
@@ -400,46 +445,72 @@ def test_vanilla_reverse_index_is_a_global_bijection():
     assert len(mapping) == 53
 
 
-def test_the_mods_write_leaves_the_reverse_index_semantically_stale():
-    """#320 review, reproduced and pinned.
+def test_a_representable_write_leaves_the_index_a_bijection():
+    """#320 review, now the other way round.
 
-    The write changes list 1 without touching table 0, so slot 9 -- which
-    every other record uses for CriticalRate -- now resolves to
-    CriticalDamage on the two records the mod edits. This test asserts
-    the review's finding rather than hiding it: if a future change starts
-    maintaining the index, this test is what should be updated to say so.
+    This test used to assert the bug -- that the write changed list 1
+    without touching table 0, leaving slot 9 claiming CriticalRate while
+    pointing at CriticalDamage. The write now carries the index with it,
+    so the strong invariant the review named holds AFTER the write, not
+    just before it: slot -> key is still a global bijection, and it is
+    the same one.
     """
     body, header = _tables()
-    changes, _ = build_statusgroupinfo_changes(
-        body, header,
-        [_intent(STAT_ON_ITEM, 3, CRITICAL_DAMAGE),
-         _intent(STAT_ON_ITEM_NO_ASR, 3, CRITICAL_DAMAGE,
-                 entry="StatOnActivateByItemWithoutAttackSpeedRate")])
+    before, conflicts = _reverse_index_conflicts(body, header)
+    assert conflicts == []
+
+    changes, dropped = build_statusgroupinfo_changes(
+        body, header, [_intent(STAT_ON_ITEM, 3, SUBSTITUTABLE_KEY)])
+    assert dropped == [], dropped
     patched = _apply(body, changes)
-    _mapping, conflicts = _reverse_index_conflicts(patched, header)
-    # one per edited record, and the same slot both times
-    assert conflicts == [(9, 1000007, CRITICAL_DAMAGE)] * 2, conflicts
+
+    after, conflicts = _reverse_index_conflicts(patched, header)
+    assert conflicts == [], conflicts
+    assert after == before, "the slot -> key correspondence must not drift"
 
 
-def test_the_stale_slot_is_semantic_not_structural():
-    """What the review could not settle was harmless vs silently wrong vs
-    crash. A crash needs a pointer that dangles or leaves the list; this
-    pins that neither happens. Every record still tiles, every index
-    entry still points in range at a real element, and the write is
-    length-preserving."""
+def test_the_displaced_key_vacates_its_slot():
+    """The half that is easy to forget. Putting a key in is only correct
+    if the key it displaced stops being pointed at -- otherwise the slot
+    still claims a position that now holds something else, which is
+    exactly the stale state this whole fix exists to prevent."""
     body, header = _tables()
     changes, _ = build_statusgroupinfo_changes(
-        body, header,
-        [_intent(STAT_ON_ITEM, 3, CRITICAL_DAMAGE),
-         _intent(STAT_ON_ITEM_NO_ASR, 3, CRITICAL_DAMAGE,
-                 entry="StatOnActivateByItemWithoutAttackSpeedRate")])
+        body, header, [_intent(STAT_ON_ITEM, 3, SUBSTITUTABLE_KEY)])
     patched = _apply(body, changes)
-    assert len(patched) == len(body)
-    assert sum(a != b for a, b in zip(body, patched)) == 2
-    # _reverse_index_conflicts asserts pos < l1_count on every entry of
-    # every record, and parse_record returns None unless the record tiles
-    # exactly -- so reaching the end here is the in-range/tiling proof.
-    _reverse_index_conflicts(patched, header)
+
+    lists = _lists(patched, header, STAT_ON_ITEM)
+    t0 = lists[-1][0] + 4 * lists[-1][1] + 4
+    assert _elem(patched, t0 + 4 * SUBSTITUTABLE_SLOT) == 3
+    assert _elem(patched, t0 + 4 * 9) == 0xFFFFFFFF   # CriticalRate, gone
+    # and the record still tiles, so nothing structural moved
+    assert _lists(patched, header, STAT_ON_ITEM) is not None
+
+
+def test_the_slot_key_map_is_learned_not_assumed():
+    """The correspondence is not key - 1000000, or any offset: slot 3 is
+    key 1000074 while slot 4 is 1000002. It has to be read out of the
+    table, and a build whose index disagrees with itself must return None
+    rather than a half-built map that would misplace a write."""
+    from cdumm.engine.statusgroupinfo_writer import learn_slot_keys
+    body, header = _tables()
+    _, offsets = parse_pabgh_index(header, "statusgroupinfo")
+    starts = sorted(offsets.values())
+    mapping = learn_slot_keys(body, offsets, starts)
+    assert mapping is not None
+    assert len(mapping) == 53
+    assert len({v for v in mapping.values()}) == 53      # injective
+    # Some slots do happen to land on key - 1000000; the point is that
+    # most do not, so no arithmetic rule recovers this and it must be
+    # read from the table. slot 3 -> 1000074 and slot 4 -> 1000002 are
+    # the clearest pair.
+    assert mapping[3] == 1000074
+    assert mapping[4] == 1000002
+    off_by_rule = sum(1 for slot, key in mapping.items()
+                      if slot == key - 1000000)
+    assert off_by_rule < len(mapping) // 2, (
+        f"{off_by_rule} of {len(mapping)} slots match a plain offset; "
+        f"if that ever becomes all of them, the map could be computed")
 
 
 # --------------------------------------------------- the writer's guards
@@ -613,20 +684,33 @@ def _mod_intent(key, idx, new):
             "field": f"status_info_list[{idx}]", "op": "set", "new": new}
 
 
-def test_apply_dispatch_routes_the_real_mod_intent_end_to_end(tmp_path):
-    """Mod 2634's Global Critical Rate through the real pipeline, not
-    the writer directly: 2 records, 2 one-byte changes, attributed."""
+def test_apply_dispatch_routes_a_write_end_to_end(tmp_path):
+    """Through the real pipeline, not the writer directly: the list
+    element plus the two index slots, all attributed and all
+    length-preserving."""
     participating: set = set()
     changes, warnings = _run_apply(
-        [_mod_intent(STAT_ON_ITEM, 3, CRITICAL_DAMAGE),
-         _mod_intent(STAT_ON_ITEM_NO_ASR, 3, CRITICAL_DAMAGE)],
+        [_mod_intent(STAT_ON_ITEM, 3, SUBSTITUTABLE_KEY)],
         tmp_path, participating=participating)
-    assert len(changes) == 2, (changes, warnings)
+    assert len(changes) == 3, (changes, warnings)
     assert all(c["_target_file"] == "statusgroupinfo.pabgb" for c in changes)
     assert participating == {1}, participating
     # length-preserving: 4 bytes in, 4 bytes out, per change
     for c in changes:
         assert len(c["original"]) == len(c["patched"]) == 8
+
+
+def test_apply_surfaces_the_reverse_index_refusal_end_to_end(tmp_path):
+    """The mod that motivated this PR, through the real pipeline. It is
+    refused, and the user is told why rather than getting a silent
+    no-op or a corrupted index."""
+    changes, warnings = _run_apply(
+        [_mod_intent(STAT_ON_ITEM, 3, CRITICAL_DAMAGE),
+         _mod_intent(STAT_ON_ITEM_NO_ASR, 3, CRITICAL_DAMAGE)], tmp_path)
+    assert changes == []
+    skipped = [w for w in warnings if "skipped" in w]
+    assert skipped, warnings
+    assert "more than once" in skipped[0], skipped
 
 
 def test_apply_surfaces_writer_refusals_to_the_user(tmp_path):

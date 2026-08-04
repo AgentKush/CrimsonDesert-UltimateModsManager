@@ -75,6 +75,38 @@ every decoded value resolves to a real stat name, and record 1000007
 ``StatOnActivateByItemWithoutAttackSpeedRate`` holds exactly record
 1000006's list 1 minus ``AttackSpeedRate`` -- the record's own name
 describes list 1's contents.
+
+The reverse index travels with the write
+----------------------------------------
+
+Table 0 is a reverse index over list 1. Slot ``s`` holds the POSITION in
+this record's list 1 at which slot ``s``'s key sits, or ``0xFFFFFFFF``
+when the record does not carry it. On the committed 1.15 fixture the
+slot -> key correspondence is one global bijection: all 8 records agree
+on all 53 occupied slots, with no slot naming two keys and no key
+claiming two slots.
+
+Writing list 1 and leaving table 0 alone therefore produces a state
+vanilla never ships -- a slot still claiming a key while pointing at a
+position that now holds a different one (#320 review). Whether the game
+reads the list, the index, or rebuilds it at load is not known, so the
+writer does not gamble on which: it updates table 0 alongside list 1, and
+refuses whenever it cannot.
+
+``learn_slot_keys`` recovers the correspondence from the table itself
+rather than assuming a rule, because there is no rule -- slot 3 is key
+1000074 while slot 4 is key 1000002.
+
+Two edits have no correct index and are refused outright:
+
+* one that would list a key twice. A reverse index maps a key to one
+  position, so a repeated key is unrepresentable. This is what mod 2634
+  asks for -- CriticalDamage at positions 2 and 3, CriticalRate gone --
+  and it is why that mod no longer applies. Refusing is the answer the
+  format gives; writing the list and leaving a contradictory index is
+  not a better one.
+* one naming a key the index has no slot for, since the slot that must
+  point at it is then unknown.
 """
 from __future__ import annotations
 
@@ -103,6 +135,10 @@ _MAX_COUNT = 4096            # sanity bound while walking
 #: bound is the real one. Verified at import.
 _MIN_STATUS_KEY = 1000000
 _MAX_STATUS_KEY = 1000074
+
+#: Table-0 slot value meaning "this record does not carry that key".
+#: Record 1000007 shows it plainly: 5 occupied slots, 70 sentinels.
+_SENTINEL = 0xFFFFFFFF
 
 _FIELD_RE = re.compile(r"^status_info_list\[(\d+)\]$")
 
@@ -136,8 +172,10 @@ def _read_list(body: bytes, p: int, end: int) -> tuple[int, int] | None:
     return p + 4, count
 
 
-def parse_record(body: bytes, start: int, end: int) -> list[tuple[int, int]] | None:
-    """The record's three lists as (element_start, count), or None.
+def parse_record_full(
+    body: bytes, start: int, end: int
+) -> tuple[list[tuple[int, int]], list[tuple[int, int]]] | None:
+    """``(lists, tables)`` as (element_start, count) each, or None.
 
     Returns None unless the full grammar consumes the record EXACTLY --
     three lists then two 75-entry tables, ending on the last byte. A record
@@ -159,6 +197,7 @@ def parse_record(body: bytes, start: int, end: int) -> list[tuple[int, int]] | N
         elem_start, count = got
         lists.append((elem_start, count))
         p = elem_start + 4 * count
+    tables: list[tuple[int, int]] = []
     for _ in range(_N_TABLES):
         got = _read_list(body, p, end)
         if got is None:
@@ -166,10 +205,73 @@ def parse_record(body: bytes, start: int, end: int) -> list[tuple[int, int]] | N
         elem_start, count = got
         if count != _TABLE_LEN:
             return None
+        tables.append((elem_start, count))
         p = elem_start + 4 * count
     if p != end:
         return None                           # did not tile exactly
-    return lists
+    return lists, tables
+
+
+def parse_record(body: bytes, start: int, end: int) -> list[tuple[int, int]] | None:
+    """The record's three lists as (element_start, count), or None."""
+    got = parse_record_full(body, start, end)
+    return None if got is None else got[0]
+
+
+def _elements(body: bytes, es: int, count: int) -> list[int]:
+    return list(struct.unpack_from(f"<{count}I", body, es)) if count else []
+
+
+def learn_slot_keys(
+    body: bytes, offsets: dict, starts: list[int]
+) -> dict[int, int] | None:
+    """``{table-0 slot: statusinfo key}``, learned from the vanilla table.
+
+    Table 0 is a reverse index over list 1: slot ``s`` holds the POSITION
+    in that record's list 1 at which its key sits, or ``_SENTINEL`` when
+    the record does not carry that key. So ``list1[table0[s]]`` names the
+    key slot ``s`` stands for, and reading that across every record
+    recovers the whole slot->key correspondence without needing to know
+    why a given key lives at a given slot.
+
+    The correspondence is global: on the committed 1.15 fixture all 8
+    records agree on all 53 occupied slots, no slot naming two keys and
+    no key claiming two slots. Returns None if any record disagrees --
+    that would mean the reverse index is not what this function assumes,
+    and no write should be attempted on that assumption.
+    """
+    slot_key: dict[int, int] = {}
+    for key in sorted(offsets):
+        o = offsets[key]
+        i = starts.index(o)
+        end = starts[i + 1] if i + 1 < len(starts) else len(body)
+        got = parse_record_full(body, o, end)
+        if got is None:
+            continue                          # not our grammar; skip it
+        lists, tables = got
+        list1 = _elements(body, *lists[_STATUS_INFO_LIST])
+        table0 = _elements(body, *tables[0])
+        for slot, pos in enumerate(table0):
+            if pos == _SENTINEL:
+                continue
+            if pos >= len(list1):
+                logger.warning(
+                    "statusgroupinfo: record %d table-0 slot %d points at "
+                    "list-1 position %d of %d; reverse index is not the "
+                    "assumed shape", key, slot, pos, len(list1))
+                return None
+            seen = slot_key.get(slot)
+            if seen is not None and seen != list1[pos]:
+                logger.warning(
+                    "statusgroupinfo: table-0 slot %d names key %d in one "
+                    "record and %d in another; reverse index is not global",
+                    slot, seen, list1[pos])
+                return None
+            slot_key[slot] = list1[pos]
+    if len(set(slot_key.values())) != len(slot_key):
+        logger.warning("statusgroupinfo: table-0 slot->key is not injective")
+        return None
+    return slot_key
 
 
 def build_statusgroupinfo_changes(
@@ -194,6 +296,10 @@ def build_statusgroupinfo_changes(
     lo_key, hi_key = _status_key_space()
 
     changes: list[dict] = []
+    #: record key -> accepted writes, batched so the reverse index below
+    #: sees the record's FINAL list rather than one edit at a time. Two
+    #: intents that individually look fine can together duplicate a key.
+    pending: dict[int, list[tuple]] = {}
     for intent in intents:
         field = getattr(intent, "field", "") or ""
         m = _FIELD_RE.match(field)
@@ -266,9 +372,95 @@ def build_statusgroupinfo_changes(
         patched = struct.pack("<I", new)
         if original == patched:
             continue                          # already holds that key
-        changes.append({
-            "offset": at,
-            "original": original.hex(),
-            "patched": patched.hex(),
-        })
+        pending.setdefault(key, []).append((intent, idx, new, at, original,
+                                            patched))
+
+    # ── keep the reverse index consistent with the list ──────────────────
+    #
+    # Table 0 is a reverse index over list 1 (#320 review). Writing list 1
+    # and leaving table 0 alone leaves a slot claiming a key that no longer
+    # sits where it points -- the vanilla table has zero such conflicts, so
+    # that is a state the game never ships. Rather than write it and hope
+    # the game reads the list and not the index, the write now carries the
+    # index with it, and refuses outright where no consistent index exists.
+    slot_key = learn_slot_keys(vanilla_body, offsets, starts)
+    key_slot = ({k: s for s, k in slot_key.items()}
+                if slot_key is not None else None)
+
+    for rec_key, writes in pending.items():
+        o = offsets[rec_key]
+        i = starts.index(o)
+        end = starts[i + 1] if i + 1 < len(starts) else body_len
+        got = parse_record_full(vanilla_body, o, end)
+        if got is None:                       # already validated above
+            continue
+        lists, tables = got
+        list1 = _elements(vanilla_body, *lists[_STATUS_INFO_LIST])
+
+        after = list(list1)
+        for _it, idx, new, *_ in writes:
+            after[idx] = new
+
+        # A reverse index maps one key to one position, so a repeated key
+        # has no representation at all. The mod that motivated this PR asks
+        # for exactly that -- it puts one key at two positions and drops
+        # another -- so the honest answer is to refuse the edit, not to
+        # invent an index for a shape the format cannot express.
+        dupes = {v for v in after if after.count(v) > 1}
+        if dupes:
+            for it, idx, new, *_ in writes:
+                dropped.append((it, (
+                    f"writing status_info_list[{idx}] = {new} on record "
+                    f"{rec_key} would list {sorted(dupes)} more than once; "
+                    f"table 0 is a reverse index over this list and cannot "
+                    f"point one key at two positions, so there is no "
+                    f"consistent record to write")))
+            continue
+
+        if key_slot is None:
+            for it, idx, new, *_ in writes:
+                dropped.append((it, (
+                    "statusgroupinfo reverse index is not the assumed "
+                    "shape on this build, so the write cannot be carried "
+                    "into it")))
+            continue
+
+        unknown = sorted({new for _it, _idx, new, *_ in writes
+                          if new not in key_slot})
+        if unknown:
+            for it, idx, new, *_ in writes:
+                dropped.append((it, (
+                    f"statusinfo key(s) {unknown} never appear in this "
+                    f"table's reverse index, so the slot that must point "
+                    f"at them is unknown and the index cannot be updated")))
+            continue
+
+        # Rebuild the slots this record's list actually determines.
+        want = dict.fromkeys(
+            (s for s, k in slot_key.items() if k in set(list1) | set(after)),
+            _SENTINEL)
+        for pos, k in enumerate(after):
+            want[key_slot[k]] = pos
+
+        tbl_start, _tcnt = tables[0]
+        for slot, value in sorted(want.items()):
+            tat = tbl_start + 4 * slot
+            torig = vanilla_body[tat:tat + 4]
+            tpatched = struct.pack("<I", value)
+            if torig == tpatched:
+                continue
+            changes.append({
+                "offset": tat,
+                "original": torig.hex(),
+                "patched": tpatched.hex(),
+            })
+
+        for _it, _idx, _new, at, original, patched in writes:
+            changes.append({
+                "offset": at,
+                "original": original.hex(),
+                "patched": patched.hex(),
+            })
+
+    changes.sort(key=lambda c: c["offset"])
     return changes, dropped
