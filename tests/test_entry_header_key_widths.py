@@ -89,17 +89,38 @@ def test_the_id_is_always_key_size_bytes_wide(key_size):
     assert eid == int.from_bytes(body[:key_size], "little")
 
 
-def test_format3_accepts_one_byte_keys():
-    """The other half of the refusal: even read correctly, Format 3
-    dropped these tables on the key width alone."""
+def test_format3_still_refuses_one_byte_keys_loudly():
+    """Reading the id correctly is only half of it -- the WRITE path
+    still assumes 2-or-4.
+
+    _payload_offset, _entry_name, the batch path and
+    semantic/engine.py all compute ``eid_size = 2 if key_size == 2
+    else 4``, so a 1-byte-key table let past the H2 guard gets a
+    4-byte id read and _payload_offset returns None for every entry
+    (106 of 106 across the six live ks=1 tables). Its intents are then
+    dropped with NO warning, which is worse than refusing: a clear
+    diagnostic becomes silence.
+
+    So the guard deliberately stays at (2, 4) until those four sites
+    are widened in the same change. This test pins that, rather than
+    asserting a source string -- the previous version matched the
+    literal text "key_size not in (1, 2, 4)" via inspect.getsource,
+    which passed while the path it claimed to unlock produced nothing.
+    """
     import inspect
 
     from cdumm.engine import format3_apply
 
-    src = inspect.getsource(format3_apply)
-    assert "key_size not in (1, 2, 4)" in src, (
-        "the H2 guard should accept 1-byte keys now that their entry "
-        "headers parse")
+    src = inspect.getsource(format3_apply._intents_to_v2_changes)
+    assert "key_size not in (2, 4)" in src, (
+        "the H2 guard must keep refusing 1-byte keys while the write "
+        "path still hardcodes eid_size = 2 if key_size == 2 else 4")
+
+    # And the sites that make it so are still that way.
+    whole = inspect.getsource(format3_apply)
+    assert "eid_size = 2 if key_size == 2 else 4" in whole, (
+        "if the write path learned 1-byte ids, widen the H2 guard and "
+        "delete this test")
 
 
 def test_a_truncated_entry_is_still_refused():
