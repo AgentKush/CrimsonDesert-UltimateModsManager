@@ -49,6 +49,7 @@ import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 from statistics import median
+from typing import Any
 
 from cdumm.engine.format3_apply import _consume_field_bytes, _payload_offset
 from cdumm.semantic import parser as parser_mod
@@ -288,13 +289,181 @@ ORDER_VARIANTS: dict[str, tuple[tuple[str, tuple[str, ...]], ...]] = {
 _ORDER_CACHE: dict[tuple[str, int, int], tuple[str, list[str]]] = {}
 
 
+@dataclass(frozen=True)
+class ValueAgreement:
+    """How many decoded values an order gets *right*, not how far it walks.
+
+    ``per_field`` is kept because the aggregate hides the interesting
+    part: a field that agrees on zero records is a field being read from
+    the wrong offset, and that is invisible in any total.
+    """
+    agreeing: int
+    comparable: int
+    per_field: dict[str, tuple[int, int]]
+
+    @property
+    def rate(self) -> float:
+        return self.agreeing / self.comparable if self.comparable else 0.0
+
+    def zero_agreement_fields(self) -> list[str]:
+        return sorted(f for f, (ok, n) in self.per_field.items()
+                      if n and not ok)
+
+
+def _camel_to_snake(name: str) -> str:
+    """``_maxEndurance`` -> ``max_endurance``.
+
+    The walker names fields as the binary's reflection strings do; the
+    native parser names them in Python style. Comparing the two decoders
+    means bridging exactly that.
+    """
+    out: list[str] = []
+    for i, ch in enumerate(name.lstrip("_")):
+        if ch.isupper() and i:
+            out.append("_")
+        out.append(ch.lower())
+    return "".join(out)
+
+
+def _iteminfo_oracle(body: bytes, header: bytes) -> dict[int, dict[str, Any]]:
+    """``{entry key: {snake_field: value}}`` from the native iteminfo parser."""
+    from cdumm.engine.iteminfo_native_parser import (
+        detect_iteminfo_layout,
+        parse_iteminfo_from_bytes,
+    )
+    _key_size, offsets = parse_pabgh_index(header, "iteminfo")
+    if not offsets:
+        return {}
+    order = sorted(offsets.values())
+    layout = detect_iteminfo_layout(body, order)
+    truth: dict[int, dict[str, Any]] = {}
+    for rec in parse_iteminfo_from_bytes(body, order, layout):
+        if rec.get("_opaque_record"):
+            continue        # carried verbatim; it decodes no values to check
+        key = rec.get("key")
+        if key is not None:
+            truth[key] = rec
+    return truth
+
+
+#: table -> a second, independent decoder to check field values against.
+#: Only tables that have one may have their field order chosen.
+ORDER_ORACLES: dict[str, Any] = {"iteminfo": _iteminfo_oracle}
+
+
+def _oracle_for(table: str):
+    return ORDER_ORACLES.get(table.lower())
+
+
+#: Records compared per order when choosing one. Selection asks which of
+#: two orders agrees with the oracle *more*, and that margin is not close:
+#: on live 1.16 it is 405,280 values against 23,116. Comparing all 6,581
+#: records to re-establish that costs ~3s per distinct table body and buys
+#: nothing -- an evenly spread few hundred settles it just as firmly, and
+#: a field read from the wrong offset is wrong in every record, so the
+#: zero-agreement check survives sampling intact.
+AGREEMENT_SAMPLE = 400
+
+
+def value_agreement(table: str, order: list[str], body: bytes, header: bytes,
+                    truth: dict[int, dict[str, Any]],
+                    sample: int | None = AGREEMENT_SAMPLE) -> ValueAgreement:
+    """Count decoded values that match the oracle, walking as the GUI does.
+
+    Deliberately drives ``decode_record_display`` -- the function the Game
+    Data grid actually calls -- so the number measures the path being
+    wired, not a private re-implementation of it.
+
+    ``sample`` caps how many records are compared, spread evenly across
+    the table rather than taken from the front (the first entries of a
+    table are not representative of it). Pass ``None`` to compare every
+    record.
+    """
+    from cdumm.semantic.parser import (
+        _parse_entry_header,
+        decode_record_display,
+    )
+    schema = _schema_in_order(table, order)
+    key_size, offsets = parse_pabgh_index(header, table)
+    entries = sorted(offsets.items(), key=lambda kv: kv[1])
+    # A record ends where the NEXT one begins, so the boundary always comes
+    # from the full list. Taking it from the sampled list instead would hand
+    # every sampled record a too-generous end and let a runaway count look
+    # survivable -- the sampling would then change the answer, not just the
+    # cost of computing it.
+    picked: list[int] | range = range(len(entries))
+    if sample is not None and len(entries) > sample:
+        stride = len(entries) / sample
+        picked = [int(i * stride) for i in range(sample)]
+    n_picked = len(picked)
+
+    agreeing = comparable = undecodable = 0
+    first_error: str | None = None
+    per_field: dict[str, tuple[int, int]] = {}
+    for i in picked:
+        key, off = entries[i]
+        want = truth.get(key)
+        if want is None:
+            continue
+        end = entries[i + 1][1] if i + 1 < len(entries) else len(body)
+        if off >= len(body):
+            continue
+        entry = body[off:end]
+        if not schema.no_entry_header:
+            _parse_entry_header(entry, 0, key_size)
+        try:
+            got = decode_record_display(entry, schema, key_size)
+        except Exception as exc:                              # noqa: BLE001
+            # An order that cannot decode a record earns nothing for it,
+            # which is the scoring answer. But swallowing the reason in
+            # silence is the habit this whole change exists to correct,
+            # so it is counted and reported rather than dropped.
+            undecodable += 1
+            if first_error is None:
+                first_error = f"{type(exc).__name__}: {exc}"
+            continue
+        for fname, value in got.items():
+            if not isinstance(value, (int, str, float, bool)):
+                continue
+            ref = want.get(_camel_to_snake(fname))
+            if not isinstance(ref, (int, str, float, bool)):
+                continue
+            ok, n = per_field.get(fname, (0, 0))
+            hit = 1 if ref == value else 0
+            per_field[fname] = (ok + hit, n + 1)
+            agreeing += hit
+            comparable += 1
+    if undecodable:
+        logger.debug(
+            "%s: this order failed to decode %d of %d compared records "
+            "(first: %s)", table, undecodable, n_picked, first_error)
+    return ValueAgreement(agreeing, comparable, per_field)
+
+
+def _variants_for(table: str) -> tuple[tuple[str, tuple[str, ...]], ...] | None:
+    """``ORDER_VARIANTS`` lookup, case-insensitively.
+
+    ``ORDER_VARIANTS`` is keyed by the schema's spelling (``"ItemInfo"``),
+    but production reaches this through ``identify_table_from_path``, which
+    yields the file stem -- ``"iteminfo"``. A bare ``in`` test therefore
+    matched only in tests that happened to use the CamelCase spelling, so
+    the whole mechanism was green and unreachable at the same time.
+    ``get_schema`` already lowercases; this now matches it.
+    """
+    want = table.lower()
+    for key, variants in ORDER_VARIANTS.items():
+        if key.lower() == want:
+            return variants
+    return None
+
+
 def select_order(table: str, body: bytes, header: bytes) -> tuple[str, list[str]]:
     """``(label, order)`` -- the declared order, or a variant that beats it.
 
     Returns ``("base", ...)`` when the table declares no variants or none
     of them decodes better, so this can be called unconditionally.
     """
-    if table not in ORDER_VARIANTS:
+    if _variants_for(table) is None:
         return "base", verified_order(table)
 
     ck = (table, len(body), hash(body[:4096]) ^ hash(body[-4096:]))
@@ -308,28 +477,90 @@ def select_order(table: str, body: bytes, header: bytes) -> tuple[str, list[str]
 
 def _select_order_uncached(table: str, body: bytes,
                            header: bytes) -> tuple[str, list[str]]:
+    """Pick a field order by how many decoded VALUES the oracle confirms.
+
+    Walk depth used to decide this, and walk depth is blind to the error
+    class that matters. On live 1.16 the declared order scores a median
+    109 of 109 fields at 87.5% full depth while ``_respawnTimeSeconds``
+    and ``_maxEndurance`` agree with the native parser on **zero** of
+    5,756 records -- the walker lands both 10 bytes off, inside the
+    opaque run, and consumes exactly the same number of bytes doing it.
+    ``decode_score`` cannot see that, because the byte arithmetic is
+    identical either way.
+
+    So the arbiter is now the native parser's values. It is a real
+    oracle: #336 established it byte-exact against the whole table, and
+    the same oracle is what settled where the 1.16 10-byte run goes.
+
+    A table with no oracle gets **no variant at all**. Preferring a
+    deeper walk on faith is what produced the situation above, and there
+    is no way to check the answer without a second decoder to check it
+    against.
+    """
     base = verified_order(table)
-    variants = ORDER_VARIANTS.get(table)
+    variants = _variants_for(table)
     if not base or not variants:
         return "base", base
 
-    best_label, best_order = "base", base
-    base_score = best = decode_score(table, base, body, header)
+    oracle = _oracle_for(table)
+    if oracle is None:
+        logger.info(
+            "%s: declares order variants but has no value oracle; keeping "
+            "the declared order rather than choosing on walk depth alone",
+            table)
+        return "base", base
+
+    try:
+        truth = oracle(body, header)
+    except Exception as exc:                                  # noqa: BLE001
+        logger.warning("%s: value oracle failed (%s); keeping the declared "
+                       "order", table, exc)
+        return "base", base
+    if not truth:
+        return "base", base
+
+    scored = [("base", base, value_agreement(table, base, body, header, truth))]
     for label, dropped in variants:
         order = [f for f in base if f not in dropped]
-        score = decode_score(table, order, body, header)
-        # Strictly better on both axes, so a variant never wins by a tie.
-        if score.median_fields > best.median_fields or (
-                score.median_fields == best.median_fields
-                and score.frac_reached_last > best.frac_reached_last):
-            best_label, best_order, best = label, order, score
+        scored.append(
+            (label, order, value_agreement(table, order, body, header, truth)))
 
-    if best_label != "base":
-        logger.info(
-            "%s: field order %r decodes better than the declared one "
-            "(median %.0f vs %.0f fields per record); using it",
-            table, best_label, best.median_fields, base_score.median_fields)
-    return best_label, best_order
+    best = max(s[2].agreeing for s in scored)
+    winners = [s for s in scored if s[2].agreeing == best]
+    if len(winners) > 1:
+        # Ambiguity is refusal, not first-fit. The declared order is the
+        # one that was actually verified against bytes, so it keeps the
+        # benefit of the doubt.
+        logger.warning(
+            "%s: %d field orders agree with the oracle on %d values "
+            "(%s); refusing to choose and keeping the declared order",
+            table, len(winners), best, ", ".join(w[0] for w in winners))
+        return "base", base
+
+    label, order, score = winners[0]
+    base_score = scored[0][2]
+    if label == "base" or score.agreeing <= base_score.agreeing:
+        return "base", base
+
+    logger.info(
+        "%s: field order %r confirms %d of %d decoded values against the "
+        "native parser, against %d for the declared order; using it",
+        table, label, score.agreeing, score.comparable, base_score.agreeing)
+
+    # A field that agrees on NO record is not noise, it is a field being
+    # read from the wrong offset -- the winning order still shows it in
+    # the grid, so say so rather than let it pass as data. On 1.16 this
+    # names _maxEndurance and _respawnTimeSeconds, which straddle the
+    # opaque run a name-only order cannot express; the declared order
+    # gets them wrong on 1.13 too, so this is long-standing rather than
+    # something the variant introduces.
+    broken = score.zero_agreement_fields()
+    if broken:
+        logger.warning(
+            "%s: %d field(s) match the native parser on no record at all "
+            "and should not be trusted in the grid: %s",
+            table, len(broken), ", ".join(broken))
+    return label, order
 
 
 def schema_for_table(table: str, body: bytes, header: bytes) -> TableSchema:

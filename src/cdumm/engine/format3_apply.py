@@ -2103,15 +2103,21 @@ def _intents_to_v2_changes(
             "PABGH key_size=%d", target, key_size)
         return []
 
-    # Pick the field order that fits THIS table, not the one that fitted
-    # the build we last reverse-engineered. A patch that removes a field
-    # desyncs the walker from that field onward -- CD 1.16 dropped two
-    # ItemInfo fields and the walk fell from 110 of 113 fields to 10,
-    # which is the iteminfo grid going blank. Falls back to get_schema
-    # for every table with no variants declared. Imported here because
-    # schema_verify imports this module.
-    from cdumm.engine.schema_verify import schema_for_table
-    schema = schema_for_table(table_name, vanilla_body, vanilla_header)
+    # Order selection deliberately does NOT happen here.
+    #
+    # It was wired in at this line first, and that was the wrong place
+    # twice over. It is unreachable for the one table that has a variant:
+    # `iteminfo_force_batch` below routes every iteminfo intent to the
+    # native writer before `_resolve_write_pos`, the only consumer of
+    # `field_specs`. And selecting an order costs a decode of the whole
+    # table, which this function runs once per apply -- against a body
+    # that a previous intent has just modified, so the per-body cache
+    # misses every time and the cost lands on every mod applied.
+    #
+    # The symptom being fixed is a stale field order in the Game Data
+    # grid, so selection lives on that path (`parse_records_display`),
+    # where it runs once per table body and is actually reachable.
+    schema = get_schema(table_name)
     field_specs = {f.name: f for f in schema.fields}
     fs_entries = load_field_schema(table_name)
 

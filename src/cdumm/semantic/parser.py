@@ -784,8 +784,18 @@ def parse_records_display(table_name: str, body_bytes: bytes,
 
     Same {key: {field: value}} shape, but flag- and walker-aware so richly
     overridden tables decode fully. Never used by the apply/diff pipeline.
+
+    Uses ``schema_for_table`` rather than ``get_schema``: this is where a
+    stale field order is actually visible to a user. CD 1.16 removed two
+    ItemInfo fields, and a name-ordered walk that still expects them takes
+    the next field's bytes as the missing one and desyncs everything after
+    -- the grid then shows plausible-looking numbers in the wrong columns.
+    Identical to ``get_schema`` for every table that declares no variant,
+    and for any build the declared order already fits.
     """
-    schema = get_schema(table_name)
+    from cdumm.engine.schema_verify import schema_for_table
+
+    schema = schema_for_table(table_name, body_bytes, header_bytes)
     if schema is None:
         return {}
     key_size, offsets = parse_pabgh_index(header_bytes, table_name)
