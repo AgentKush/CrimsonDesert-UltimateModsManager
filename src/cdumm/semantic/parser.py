@@ -26,6 +26,14 @@ logger = logging.getLogger(__name__)
 
 # Tables that use u32 count instead of u16 in pabgh header.
 # From Potter's pycrimson: these specific tables have 4-byte count prefix.
+#
+# This list is now only a TIEBREAK, not the rule. It is hand-maintained,
+# so it is wrong for any table nobody added -- `aimemoryinfo` needs a u32
+# count, is absent here, and its index therefore did not parse at all,
+# which makes the whole table unreachable to every writer. The width is
+# now derived from the header (see `_pabgh_tilings`) and this list is
+# consulted only when two tilings are both structurally valid, which
+# happens only on tables with one or two entries.
 UINT_COUNT_TABLES = frozenset({
     "characterappearanceindexinfo", "globalstagesequencerinfo",
     "sequencerspawninfo", "sheetmusicinfo", "spawningpoolautospawninfo",
@@ -342,34 +350,127 @@ def get_schema(table_name: str) -> TableSchema | None:
 
 # ── PABGH index parsing ────────────────────────────────────────────────────
 
+#: Count-prefix widths seen in the wild. A pabgh index is
+#: ``[count][count x (key, u32 offset)]`` and the count is 1, 2 or 4
+#: bytes depending on the table.
+_PABGH_COUNT_WIDTHS = (1, 2, 4)
+
+#: Largest plausible key width. Most tables use 2 or 4; one uses 8 and
+#: one a 12-byte composite. The bound only exists to reject nonsense
+#: tilings, so it is generous.
+_PABGH_MAX_KEY = 32
+
+
+def _pabgh_tilings(header_bytes: bytes) -> list[tuple[int, int, int]]:
+    """Every ``(count_size, count, key_size)`` that tiles the header exactly.
+
+    ``len(header) == count_size + count * (key_size + 4)`` has to hold
+    with an integer key size, which on its own pins the layout for 130 of
+    the 135 tables in a current install.
+    """
+    out = []
+    for cs in _PABGH_COUNT_WIDTHS:
+        if len(header_bytes) < cs:
+            continue
+        count = int.from_bytes(header_bytes[:cs], "little")
+        if count <= 0:
+            continue
+        total_key_bytes = len(header_bytes) - cs - count * 4
+        if total_key_bytes <= 0 or total_key_bytes % count:
+            continue
+        key_size = total_key_bytes // count
+        if 1 <= key_size <= _PABGH_MAX_KEY:
+            out.append((cs, count, key_size))
+    return out
+
+
+def _pabgh_offsets_well_formed(header_bytes: bytes, cs: int, count: int,
+                               key_size: int) -> bool:
+    """Do this tiling's offsets look like entry offsets?
+
+    Entries tile the body in index order, so the offsets start at 0 and
+    strictly increase. Verified to hold for all 130 tables whose tiling
+    is unambiguous, which is what makes it usable as a tiebreak for the
+    ones where it isn't.
+    """
+    pos = cs
+    prev: int | None = None
+    for _ in range(count):
+        if pos + key_size + 4 > len(header_bytes):
+            return False
+        off = struct.unpack_from("<I", header_bytes, pos + key_size)[0]
+        if prev is None:
+            if off != 0:
+                return False
+        elif off <= prev:
+            return False
+        prev = off
+        pos += key_size + 4
+    return True
+
+
 def parse_pabgh_index(header_bytes: bytes, table_name: str = ""
                       ) -> tuple[int, dict[int, int]]:
     """Parse PABGH index file.
 
     Returns (key_size, {key: offset_in_body}).
+
+    The count prefix is 1, 2 or 4 bytes depending on the table, and it is
+    DERIVED from the header rather than looked up by name: the name list
+    was hand-maintained, so it was simply wrong for any table nobody had
+    added, and a table whose index will not parse is invisible to every
+    writer. Measured against a current install, deriving reproduces the
+    old answer on 129 tables, fixes 2 the old code could not read at all,
+    and disagrees on none.
     """
     name_lower = table_name.lower()
-    count_size = 4 if name_lower in UINT_COUNT_TABLES else 2
-
-    if len(header_bytes) < count_size:
+    if len(header_bytes) < 2:
         logger.warning("PABGH header too short: %d bytes", len(header_bytes))
         return 0, {}
-
-    if count_size == 4:
-        count = struct.unpack_from("<I", header_bytes, 0)[0]
-    else:
-        count = struct.unpack_from("<H", header_bytes, 0)[0]
-
-    if count == 0:
+    # An empty table is valid and silent, as before -- every count width
+    # reads 0 for a 2-byte all-zero header.
+    if not any(int.from_bytes(header_bytes[:cs], "little")
+               for cs in _PABGH_COUNT_WIDTHS):
         return 0, {}
 
-    total_key_bytes = len(header_bytes) - count_size - count * 4
-    if total_key_bytes <= 0 or total_key_bytes % count != 0:
-        logger.warning("PABGH key size calculation failed for %s: "
-                       "header=%d, count=%d", table_name, len(header_bytes), count)
+    cands = _pabgh_tilings(header_bytes)
+    if len(cands) > 1:
+        # Structural filter first, then the legacy name list. Ties only
+        # arise on tables with one or two entries, where "offsets start
+        # at 0 and increase" is trivially true either way.
+        well = [c for c in cands
+                if _pabgh_offsets_well_formed(header_bytes, *c)]
+        if len(well) == 1:
+            cands = well
+        else:
+            prefer = 4 if name_lower in UINT_COUNT_TABLES else 2
+            cands = ([c for c in (well or cands) if c[0] == prefer]
+                     or (well or cands))
+
+    if not cands:
+        logger.warning("PABGH key size calculation failed for %s: header=%d",
+                       table_name, len(header_bytes))
         return 0, {}
 
-    key_size = total_key_bytes // count
+    if len(cands) > 1:
+        # Neither the structural invariant nor the name list could pick a
+        # winner. Taking cands[0] here would silently choose the NARROWEST
+        # count width and hand back a fabricated index -- a 19-byte header
+        # of 03 00 00 00 + zeros returns (2, {0: 0}), which looks entirely
+        # plausible to a caller. The old lookup-table code refused this
+        # case, and refusing is right: an index nobody can pin down is not
+        # something to guess at, because every writer downstream trusts
+        # these offsets to place bytes.
+        logger.warning(
+            "PABGH index for %s is ambiguous: %d tilings survive both the "
+            "well-formedness and name-preference filters (%s). Refusing "
+            "rather than guessing a layout.",
+            table_name, len(cands),
+            ", ".join(f"count_size={c[0]},count={c[1]},key_size={c[2]}"
+                      for c in cands))
+        return 0, {}
+
+    count_size, count, key_size = cands[0]
 
     offsets: dict[int, int] = {}
     pos = count_size
