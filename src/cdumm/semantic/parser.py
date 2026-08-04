@@ -452,6 +452,24 @@ def parse_pabgh_index(header_bytes: bytes, table_name: str = ""
                        table_name, len(header_bytes))
         return 0, {}
 
+    if len(cands) > 1:
+        # Neither the structural invariant nor the name list could pick a
+        # winner. Taking cands[0] here would silently choose the NARROWEST
+        # count width and hand back a fabricated index -- a 19-byte header
+        # of 03 00 00 00 + zeros returns (2, {0: 0}), which looks entirely
+        # plausible to a caller. The old lookup-table code refused this
+        # case, and refusing is right: an index nobody can pin down is not
+        # something to guess at, because every writer downstream trusts
+        # these offsets to place bytes.
+        logger.warning(
+            "PABGH index for %s is ambiguous: %d tilings survive both the "
+            "well-formedness and name-preference filters (%s). Refusing "
+            "rather than guessing a layout.",
+            table_name, len(cands),
+            ", ".join(f"count_size={c[0]},count={c[1]},key_size={c[2]}"
+                      for c in cands))
+        return 0, {}
+
     count_size, count, key_size = cands[0]
 
     offsets: dict[int, int] = {}
