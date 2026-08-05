@@ -21,6 +21,15 @@ _UNRELEASED_NOTES: list[str] = [
 
 CHANGELOG = [
     {
+        "version": "3.10.0",
+        "date": "2026-08-05",
+        "notes": [
+            "<b>CDUMM now tells you when a UI mod is too old for the current game.</b> The August 1 update renamed the attributes the game's interface reads, so any mod that replaces a game screen and was built before that date installs perfectly and then does nothing at all — no error, no skipped file, no clue. CDUMM now compares the mod's file against the game's own copy and says plainly that the mod predates the change and needs an update from its author. It cannot repair those mods, but it will no longer stay silent about them. Found via umibozuT (#337).",
+            "<b>Status-group mods apply.</b> These edit a table that also carries an index pointing back into the list being changed, so writing the list alone left the two disagreeing. CDUMM now updates both together, and refuses edits that cannot be represented consistently rather than writing a table the game never ships.",
+            "Thanks to AgentKush, who wrote both of these.",
+        ],
+    },
+    {
         "version": "3.9.0",
         "date": "2026-08-04",
         "notes": [
