@@ -41,6 +41,27 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+
+def _safe_parser(**kwargs) -> etree.XMLParser:
+    """An ``XMLParser`` that will not expand entities or fetch anything.
+
+    Patch files arrive inside imported third-party mods, so every document this
+    module parses is untrusted input. lxml's default parser has
+    ``resolve_entities=True``, which leaves two holes open:
+
+    * **entity-expansion DoS** ("billion laughs") -- a few lines of nested
+      entities expand to gigabytes and take the app down;
+    * **XXE** -- ``<!ENTITY x SYSTEM "file:///...">`` reads local files, whose
+      contents can then surface through patch output or an error message.
+
+    ``resolve_entities=False`` closes both. ``no_network=True`` is lxml's
+    default but is set explicitly so a future lxml default-change cannot
+    silently re-open remote fetches.
+    """
+    kwargs.setdefault("resolve_entities", False)
+    kwargs.setdefault("no_network", True)
+    return etree.XMLParser(**kwargs)
+
 _SENTINEL_ROOT = "__cdumm_root__"
 _IDENTITY_ATTR_PRIORITY = ("Key", "Name", "Id", "key", "name", "id")
 _KNOWN_OPS = {
@@ -103,7 +124,7 @@ def detect_patch_file(path: Path) -> Optional[str]:
     if stripped.startswith("<"):
         try:
             root = etree.fromstring(head.encode("utf-8"),
-                                    parser=etree.XMLParser(recover=True))
+                                    parser=_safe_parser(recover=True))
             if root is None:
                 return None
             tag = root.tag.lower() if isinstance(root.tag, str) else ""
@@ -210,7 +231,7 @@ def _load_json_patch(text: str) -> tuple[Optional[XmlPatchFile], Optional[str]]:
 
 def _load_xml_patch(text: str) -> tuple[Optional[XmlPatchFile], Optional[str]]:
     try:
-        root = etree.fromstring(text.encode("utf-8"))
+        root = etree.fromstring(text.encode("utf-8"), _safe_parser())
     except etree.XMLSyntaxError as e:
         return None, f"XML parse error: {e}"
     if root.tag.lower() != "xml-patch":
@@ -511,7 +532,7 @@ def apply_patches(xml_data: bytes,
         # Preserve whitespace so re-serialising doesn't reformat the file.
         tree = etree.ElementTree(etree.fromstring(
             normalised.encode("utf-8"),
-            parser=etree.XMLParser(remove_blank_text=False),
+            parser=_safe_parser(remove_blank_text=False),
         ))
     except Exception as e:
         log.append(f"    [XML] ERROR: Failed to parse XML: {e}")
@@ -664,12 +685,12 @@ def _parse_fragment(value: str):
     if not stripped.startswith("<"):
         return None
     try:
-        return etree.fromstring(value)
+        return etree.fromstring(value, _safe_parser())
     except etree.XMLSyntaxError:
         # Wrap in sentinel and return first child if it parses.
         try:
             wrapped = f"<{_SENTINEL_ROOT}>{value}</{_SENTINEL_ROOT}>"
-            root = etree.fromstring(wrapped)
+            root = etree.fromstring(wrapped, _safe_parser())
             children = list(root)
             return children[0] if children else None
         except etree.XMLSyntaxError:
@@ -688,7 +709,7 @@ def apply_merge(xml_data: bytes,
         normalised, wrapped = _normalise_game_xml(text)
         tree = etree.ElementTree(etree.fromstring(
             normalised.encode("utf-8"),
-            parser=etree.XMLParser(remove_blank_text=False),
+            parser=_safe_parser(remove_blank_text=False),
         ))
     except Exception as e:
         log.append(f"    [MERGE] ERROR: Failed to parse target XML: {e}")
@@ -708,11 +729,12 @@ def apply_merge(xml_data: bytes,
             continue
         used_sentinel = False
         try:
-            merge_root = etree.fromstring(raw.encode("utf-8"))
+            merge_root = etree.fromstring(raw.encode("utf-8"), _safe_parser())
         except etree.XMLSyntaxError:
             try:
                 merge_root = etree.fromstring(
-                    f"<{_SENTINEL_ROOT}>{raw}</{_SENTINEL_ROOT}>".encode("utf-8"))
+                    f"<{_SENTINEL_ROOT}>{raw}</{_SENTINEL_ROOT}>".encode("utf-8"),
+                    _safe_parser())
                 used_sentinel = True
             except etree.XMLSyntaxError as e:
                 log.append(f"    [MERGE] ERROR in {mod_name}: {e}")
@@ -776,7 +798,7 @@ def _merge_element(merge_el, parent_hint, tree, log) -> tuple[int, int, int]:
             return 0, 0, 0
         target_parent = parent_hint if parent_hint is not None else tree.getroot()
         if target_parent is not None:
-            target_parent.append(etree.fromstring(etree.tostring(merge_el)))
+            target_parent.append(etree.fromstring(etree.tostring(merge_el), _safe_parser()))
             log.append(f"    [MERGE]   + <{tag}> added (no identity key)")
             return 0, 1, 0
         return 0, 0, 0
@@ -810,7 +832,7 @@ def _merge_element(merge_el, parent_hint, tree, log) -> tuple[int, int, int]:
 
     # Not found — add new element under the best parent we can find.
     clone_bytes = etree.tostring(merge_el)
-    clone = etree.fromstring(clone_bytes)
+    clone = etree.fromstring(clone_bytes, _safe_parser())
     if "__delete" in clone.attrib:
         del clone.attrib["__delete"]
     if parent_hint is not None:
