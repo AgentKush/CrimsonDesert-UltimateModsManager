@@ -27,7 +27,8 @@ CHANGELOG = [
             "<b>A mod can no longer smuggle extra commands past you when CDUMM runs its script.</b> The command was being handed to the Windows shell as a line of text, so anything the shell treats as punctuation inside a file name was read as a further instruction rather than as part of the name. CDUMM now starts the script directly and never gives the shell a second look at it, which means a file name is only ever a file name.",
             "<b>A mod can no longer use an XML patch to stall CDUMM or read files off your disk.</b> Mod-supplied XML was parsed with external entities left on. That allows a tiny file to unpack into an enormous one, and allows the document to pull in files from your machine while it parses. A four-line test file expanded to ten thousand characters before this change and expands to nothing after it. Entity resolution and network access are now off for every mod-supplied document.",
             "Both of these need a mod built on purpose to do it, so this is hardening rather than a fix for anything that has been reported happening. Neither changes how ordinary mods behave.",
-            "Thanks to AgentKush, who found and fixed both.",
+            "<b>The warning after Apply no longer tells you a mod did nothing when it did.</b> When CDUMM skipped a single character record, it still announced that the mod had \"produced 0 byte changes\", while the note directly underneath said the mod's other records had applied. Both could not be true, and the one on top was the wrong one: in the case that surfaced this, 19 of the mod's 25 edits had been written. The header now reports what it actually is, a warning, and the detail underneath still names any mod that genuinely wrote nothing. Found via woowoots (#302).",
+            "Thanks to AgentKush, who found and fixed the two security issues above.",
         ],
     },
     {
