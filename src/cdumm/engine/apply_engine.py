@@ -2161,6 +2161,15 @@ class ApplyWorker(QObject):
                 # to the same synth_data so the rest of the apply
                 # pipeline doesn't need to know which side a change
                 # came from.
+                # NB: this list mixes whole-mod dropouts (which really did
+                # write nothing) with per-record characterinfo refusals,
+                # where the mod's OTHER records applied normally. So the
+                # InfoBar header below must not claim "0 byte changes" for
+                # all of them -- on GitHub #302 it did, contradicting the
+                # refusal text printed directly beneath it ("the mod's other
+                # records still apply") and misdirecting diagnosis. Each
+                # genuine dropout already names itself as "produced 0 byte
+                # changes for '<table>'" in its own message text.
                 f3_warnings: list[str] = []
                 # Format 3 mods report their contributing mod ids
                 # here so persist_skip_summary can reset rows on a
@@ -2177,9 +2186,10 @@ class ApplyWorker(QObject):
                     # Same surfacing pattern v3.2.1's skipped-patches
                     # feature uses — InfoBar after Apply via the
                     # warning signal.
+                    # No "0 byte changes" claim here: see the note on
+                    # f3_warnings above (GitHub #302).
                     msg = (
-                        f"{len(f3_warnings)} Format 3 mod(s) produced "
-                        f"0 byte changes:\n\n"
+                        f"{len(f3_warnings)} Format 3 warning(s):\n\n"
                         + "\n\n".join(f"- {w}" for w in f3_warnings[:5])
                     )
                     if len(f3_warnings) > 5:
