@@ -5938,6 +5938,9 @@ def import_script_live(
 
     suffix = script_path.suffix.lower()
     if suffix == ".bat":
+        # ``cmd /c`` parses this itself, so the quotes around the path are what
+        # keep a filename containing ``&`` from splitting into a second command.
+        # Never pass this through ``shell=True`` as well -- see the Popen call.
         cmd = ["cmd", "/c", f'"{script_path}" & pause']
     elif suffix == ".py":
         cmd = ["py", "-3", str(script_path)]
@@ -5979,10 +5982,16 @@ def import_script_live(
     logger.info("Running script live: %s", script_path)
 
     try:
+        # NO ``shell=True``: ``cmd`` is already a list whose first element is an
+        # explicit interpreter, so the shell would re-join and re-parse it. A
+        # mod script called e.g. ``foo & calc.bat`` -- ``&`` is legal in Windows
+        # filenames -- survives the quoting above but NOT a second shell pass,
+        # which turned an imported mod's filename into arbitrary command
+        # execution. ``CREATE_NEW_CONSOLE`` is what gives the visible window,
+        # not the shell.
         proc = subprocess.Popen(
             cmd,
             cwd=str(script_path.parent),
-            shell=True,
             creationflags=subprocess.CREATE_NEW_CONSOLE,
         )
         proc.wait()
