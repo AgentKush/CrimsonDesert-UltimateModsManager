@@ -21,6 +21,16 @@ _UNRELEASED_NOTES: list[str] = [
 
 CHANGELOG = [
     {
+        "version": "3.11.0",
+        "date": "2026-08-07",
+        "notes": [
+            "<b>A mod can no longer smuggle extra commands past you when CDUMM runs its script.</b> The command was being handed to the Windows shell as a line of text, so anything the shell treats as punctuation inside a file name was read as a further instruction rather than as part of the name. CDUMM now starts the script directly and never gives the shell a second look at it, which means a file name is only ever a file name.",
+            "<b>A mod can no longer use an XML patch to stall CDUMM or read files off your disk.</b> Mod-supplied XML was parsed with external entities left on. That allows a tiny file to unpack into an enormous one, and allows the document to pull in files from your machine while it parses. A four-line test file expanded to ten thousand characters before this change and expands to nothing after it. Entity resolution and network access are now off for every mod-supplied document.",
+            "Both of these need a mod built on purpose to do it, so this is hardening rather than a fix for anything that has been reported happening. Neither changes how ordinary mods behave.",
+            "Thanks to AgentKush, who found and fixed both.",
+        ],
+    },
+    {
         "version": "3.10.0",
         "date": "2026-08-05",
         "notes": [
