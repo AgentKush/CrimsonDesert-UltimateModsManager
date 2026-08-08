@@ -157,6 +157,28 @@ class StoreLayout:
 #: Newest first -- detection prefers the current game, and an older build
 #: only wins if it actually decodes better.
 LAYOUTS: tuple[StoreLayout, ...] = (
+    # CD 1.16.03 (buildid 24568997, exe 2026-08-05): the stock-list COUNT
+    # moved one byte, 44 -> 45. Nothing inside the record moved -- the
+    # record-relative offsets below (34/38/41/42) still hold, because they
+    # are measured from the record start, which the count position derives.
+    #
+    # Measured on the live table, all 432 entries (GitHub #351):
+    #
+    #     count offset   parsed   non-empty   in-entry   round-trip
+    #        44 (old)       80         0          80         80
+    #        45            418       310         418        418
+    #        16            430         0         430        430
+    #
+    # 44 now yields only EMPTY stock lists: it parses 80 entries and every
+    # one has count 0, so the record walk never runs and the const-byte
+    # tripwire is never reached. That is why the failure looked like "a
+    # third of the table still parses" -- those 80 are vacuous passes, and
+    # no store containing stock parsed at all.
+    #
+    # 16 is the same trap: it parses the most entries and every one is
+    # empty. Only 45 reads real stock, and all 418 of its parses
+    # round-trip byte-exact through serialize_stock_list.
+    StoreLayout("CD 1.16.03", 45, 34, 38, 41, 42, low_price_threshold=True),
     # CD 1.16: a u32 (_lowPriceThresholdCount) inserted after raw_c pushed
     # everything below it down another four bytes. Under the CD 1.13 shape
     # the live 1.16 table decodes ZERO entries; under this one, 397 of 432

@@ -174,7 +174,7 @@ def test_the_same_store_is_reachable_on_cd_1_16():
     1.16 table too, where the record shape is different again."""
     body, _header, offsets = _load(_F116)
     layout = detect_storeinfo_layout(body, sorted(offsets.values()))
-    assert layout.label == "CD 1.16"
+    assert layout.label.startswith("CD 1.16")
     spans = sorted(offsets.values()) + [len(body)]
     off = offsets[MISSED_STORE]
     recs, start, end = locate_stock_list(

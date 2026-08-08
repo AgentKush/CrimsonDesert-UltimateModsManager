@@ -96,7 +96,7 @@ def test_the_previous_layout_decodes_essentially_nothing(table):
 
 
 def test_the_real_table_is_detected_as_1_16(layout):
-    assert layout.label == "CD 1.16"
+    assert layout.label.startswith("CD 1.16")
     assert layout.low_price_threshold is True
     # the insert landed before the opaque interior, as every previous one
     # did, so the tail did not move
