@@ -61,6 +61,33 @@ immediately after the field's read, in true sequence, outlined or not. With that
 | CharacterInfo | 7 | diverges @1 | diverges @1 |
 | StageInfo | 30 | diverges @6 | diverges @6 |
 
+### Named is not serialised — the trap
+
+An error string proves a field exists **on the type** and is read by the
+deserializer. It says nothing about whether that field occupies bytes **in the
+record body**. Two measured counterexamples:
+
+| field | named by exe | in the record body |
+|---|---|---|
+| `_stringKey` / `_key` | yes | **no** — the entry header consumes them; `_stringKey` *is* the entry name |
+| `SkillInfo._isNoAlert` | yes | **no** — see below |
+
+`_isNoAlert` is the sharper one because it looks so much like a fix.
+`_vendor/skillinfo_parser` reads **six** consecutive `u8` flags; the exe names
+**seven**, with `_isNoAlert` between `_isUseChildPatternDescriptionBuffData` and
+`_damageType`. A missing one-byte field is exactly the shape of the bug in
+[#355](https://github.com/faisalkindi/CrimsonDesert-UltimateModsManager/issues/355),
+where 29% of skill entries fail to parse. Adding it:
+
+```
+as shipped (6 flags)      1,424 / 2,013   (70.7%)
++ _isNoAlert (7 flags)      449 / 2,013   (22.3%)     -975 entries
+```
+
+Treat the output as an order over the fields that **are** serialised, not as a
+list of what to read. A field this tool names that a walker does not consume is
+a hypothesis; only decoding real records settles it.
+
 ### Two things it does not give you
 
 **It is not a complete order.** Only fields with an error string are named — 12 of

@@ -61,6 +61,28 @@ are never named this way, so the output is not a drop-in `_ordered_fields`
 runs through `verify_order_source_relative`, which compares on shared names
 and reports the unplaced ones rather than pretending they do not exist.
 
+NAMED IS NOT SERIALISED. This is the trap, and it is worth stating on its
+own because the inference is so tempting: an error string proves the field
+exists ON THE TYPE and is read by the deserializer. It says NOTHING about
+whether that field occupies bytes in the record body.
+
+Two measured counterexamples:
+
+  * `_stringKey` / `_key` are named here, but the ENTRY HEADER consumes
+    them -- `_stringKey` IS the entry name. Splicing this order into a
+    verified one without pinning those two takes RegionInfo's walker from
+    a median of 21 fields to 2.
+  * `SkillInfo._isNoAlert` is named, and sits in a run of seven
+    consecutive `u8` flags where `_vendor/skillinfo_parser` reads only
+    six. Adding it as the obvious missing byte takes skill parsing from
+    1,424/2,013 entries (70.7%) to 449/2,013 (22.3%). It is not in the
+    record body. (GitHub #355.)
+
+So treat the output as an ORDER over the fields that are serialised, not
+as a list of what to read. A field this tool names and a walker does not
+consume is a hypothesis, and the only thing that settles it is decoding
+real records.
+
 Requires `capstone` and `pefile`, which are analysis-only and deliberately
 not runtime dependencies of the app::
 
