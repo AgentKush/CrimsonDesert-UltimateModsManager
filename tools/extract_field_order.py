@@ -18,6 +18,15 @@ IMPORTANT — which binary:
     still run, but the order it produces from a Windows binary will fail
     verification — that's expected, not a bug.
 
+    That is a limitation of THIS script's method, not of the Windows exe.
+    Order is recoverable from the exe, just not from the string table:
+    `tools/extract_field_order_win.py` orders fields by where the *code*
+    references each string, and reproduces ItemInfo's verified order
+    exactly on all 101 fields it shares with the shipped schema. Reach for
+    that when you only have the Windows build. It needs `capstone` and
+    `pefile`, and it covers only the fields that have an error string, so
+    it corroborates an order rather than replacing one.
+
 Whatever binary you give it, the output is run through
 `cdumm.engine.schema_verify.verify_order_source`: the extracted order for
 every table CDUMM already has a verified `_ordered_fields` for must match
