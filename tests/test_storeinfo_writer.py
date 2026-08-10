@@ -33,6 +33,23 @@ _HDR = _BASE / "vanilla" / "storeinfo.pabgh"
 _MOD = _BASE / "HernandPets_v1.1.json"
 
 
+def _fixture_layout():
+    """The layout this snapshot was extracted under — CD 1.11.
+
+    Pinned rather than defaulted (GitHub #351). ``parse_stock_list``
+    defaults to the *newest* layout, so a verification step that omits it
+    parses this 1.11 snapshot as whatever ships next: CD 1.11 puts the
+    const byte at record offset 34 and CD 1.16 at 42, and the resulting
+    "const byte at record offset 42 is 0" read as a live format
+    regression when nothing had changed.
+
+    ``build_storeinfo_changes`` itself detects the layout, so this is
+    only needed where the test re-parses to check the writer's output.
+    """
+    from cdumm.engine.storeinfo_native_parser import LAYOUTS
+    return {ly.label: ly for ly in LAYOUTS}["CD 1.11"]
+
+
 def _have_fixtures() -> bool:
     return _BODY.exists() and _HDR.exists() and _MOD.exists()
 
@@ -69,12 +86,14 @@ def _apply(body: bytes, changes: list[dict]) -> bytes:
 @pytest.mark.skipif(not _have_fixtures(), reason="183 fixtures absent")
 def test_hernandpets_applies_end_to_end():
     from cdumm.engine.storeinfo_writer import build_storeinfo_changes
-    from cdumm.engine.storeinfo_native_parser import (
-        LIST_COUNT_PAYLOAD_OFFSET, parse_stock_list)
+    from cdumm.engine.storeinfo_native_parser import parse_stock_list
     from cdumm.semantic.parser import parse_pabgh_index, _parse_entry_header
 
     from cdumm.engine.storeinfo_native_parser import serialize_stock_list
     from cdumm.engine.storeinfo_writer import _record_identity
+
+    layout = _fixture_layout()
+    list_count_off = layout.count_payload_offset
 
     body = _BODY.read_bytes()
     header = _HDR.read_bytes()
@@ -95,7 +114,7 @@ def test_hernandpets_applies_end_to_end():
     ks, offs = parse_pabgh_index(new_header, "storeinfo")
     _, _, payload = _parse_entry_header(patched, offs[3101], ks)
     records, _s, _e = parse_stock_list(
-        patched, payload + LIST_COUNT_PAYLOAD_OFFSET)
+        patched, payload + list_count_off, layout)
     assert len(records) == 42
 
     # Split the mod's records into matched-vanilla vs new by identity
@@ -104,7 +123,7 @@ def test_hernandpets_applies_end_to_end():
     _, voffs = parse_pabgh_index(header, "storeinfo")
     _, _, vpayload = _parse_entry_header(body, voffs[3101], ks)
     vrecords, _vs, _ve = parse_stock_list(
-        body, vpayload + LIST_COUNT_PAYLOAD_OFFSET)
+        body, vpayload + list_count_off, layout)
     vbodies = {r.body for r in vrecords}
     new_js = [j for j in intent.new
               if _record_identity(j) not in vbodies]
@@ -152,9 +171,9 @@ def test_hernandpets_applies_end_to_end():
 def test_new_record_with_unmapped_field_refuses():
     from cdumm.engine.storeinfo_writer import (
         StoreinfoWriteRefused, build_storeinfo_changes, _record_identity)
-    from cdumm.engine.storeinfo_native_parser import (
-        LIST_COUNT_PAYLOAD_OFFSET, parse_stock_list)
+    from cdumm.engine.storeinfo_native_parser import parse_stock_list
     from cdumm.semantic.parser import parse_pabgh_index, _parse_entry_header
+    layout = _fixture_layout()
     body = _BODY.read_bytes()
     header = _HDR.read_bytes()
     intent = _mod_intent()
@@ -163,7 +182,8 @@ def test_new_record_with_unmapped_field_refuses():
     # unmapped interior value.
     ks, offs = parse_pabgh_index(header, "storeinfo")
     _, _, pl = _parse_entry_header(body, offs[3101], ks)
-    vrecs, _s, _e = parse_stock_list(body, pl + LIST_COUNT_PAYLOAD_OFFSET)
+    vrecs, _s, _e = parse_stock_list(
+        body, pl + layout.count_payload_offset, layout)
     vbodies = {r.body for r in vrecs}
     bad = json.loads(json.dumps(intent.new))
     new_i = next(i for i, j in enumerate(bad)
