@@ -32,8 +32,10 @@ import pytest
 
 from cdumm.engine.format3_handler import Format3Intent, validate_intents
 from cdumm.engine.statusgroupinfo_writer import (
+    _SENTINEL,
     build_statusgroupinfo_changes,
     parse_record,
+    parse_record_full,
 )
 from cdumm.semantic.parser import parse_pabgh_index
 from tests.fixture_loaders import has_vanilla115, load_vanilla115
@@ -310,30 +312,53 @@ def test_refuses_keys_outside_the_statusinfo_key_space(bad):
     assert "outside the statusinfo key space" in dropped[0][1]
 
 
-def test_the_key_space_bound_agrees_with_the_index_table_width():
-    """The bound isn't a magic number: the statusinfo snapshot has one
-    key per reverse-index slot. If those ever disagree the bound is
-    wrong, so pin the agreement rather than the literal."""
+def test_the_key_space_bound_covers_the_shipped_snapshot():
+    """The bound must never be TIGHTER than the keys we know about.
+
+    This used to assert the bound EQUALLED the snapshot's range and that
+    the range equalled the reverse-index width. Both were true on CD 1.13
+    and both are false on CD 1.16: the table grew to 78 records spanning
+    1000000..1000078, so an equality assertion pinned CDUMM to a stale
+    game build and refused references the game itself makes.
+    """
     from cdumm.engine.stat_names import STAT_NAMES_CD113
+    from cdumm.engine.statusgroupinfo_writer import _status_key_space
+    lo, hi = _status_key_space()
+    assert lo <= min(STAT_NAMES_CD113)
+    assert hi >= max(STAT_NAMES_CD113)
+
+
+def test_the_key_space_widens_to_cover_keys_the_game_actually_uses():
+    """Observed on-disk keys raise the ceiling; nothing lowers the floor.
+
+    The floor is structural, so a source carrying values below it is not
+    a statusinfo key set and must be ignored rather than trusted -- else
+    a bare ``5`` becomes an acceptable record reference, which is the
+    exact garbage this check exists to stop.
+    """
     from cdumm.engine.statusgroupinfo_writer import (
-        _TABLE_LEN,
+        _MAX_STATUS_KEY,
+        _MIN_STATUS_KEY,
         _status_key_space,
     )
-    assert len(STAT_NAMES_CD113) == _TABLE_LEN
-    lo, hi = _status_key_space()
-    assert (lo, hi) == (min(STAT_NAMES_CD113), max(STAT_NAMES_CD113))
-    assert hi - lo + 1 == _TABLE_LEN
+    base_lo, base_hi = _status_key_space()
+
+    # A key above the snapshot ceiling (CD 1.16 really does have these)
+    lo, hi = _status_key_space({_MAX_STATUS_KEY + 4})
+    assert lo == base_lo
+    assert hi == _MAX_STATUS_KEY + 4
+
+    # Garbage below the floor must not widen anything
+    lo, hi = _status_key_space({5, 2, _MIN_STATUS_KEY})
+    assert (lo, hi) == (base_lo, base_hi)
 
 
 def test_key_space_falls_back_when_the_snapshot_is_unusable(monkeypatch,
                                                             caplog):
-    """The bound is derived, so it has two failure modes: the snapshot
-    module missing (trimmed build) and the snapshot disagreeing with the
-    table width. Neither may silently drop the range check -- both must
-    fall back to the literal bound, and the disagreement must be logged.
+    """The bound must survive a trimmed build, and must not be widened
+    downward by a snapshot that clearly is not a statusinfo key set.
     """
     import builtins
-    import logging
 
     from cdumm.engine import stat_names
     from cdumm.engine.statusgroupinfo_writer import (
@@ -343,12 +368,10 @@ def test_key_space_falls_back_when_the_snapshot_is_unusable(monkeypatch,
     )
     expected = (_MIN_STATUS_KEY, _MAX_STATUS_KEY)
 
-    # 1. snapshot present but the wrong width -> fall back AND warn
+    # 1. snapshot present but plainly not statusinfo keys -> ignored
+    #    entirely, floor intact, ceiling unmoved.
     monkeypatch.setattr(stat_names, "STAT_NAMES_CD113", {1: "x", 2: "y"})
-    with caplog.at_level(logging.WARNING):
-        assert _status_key_space() == expected
-    assert any("reverse-index tables" in r.message for r in caplog.records), (
-        [r.message for r in caplog.records])
+    assert _status_key_space() == expected
     monkeypatch.undo()
 
     # 2. module unimportable -> fall back, no crash
@@ -537,11 +560,17 @@ def test_parse_record_refuses_malformed_records(mutate, why):
 
 @pytest.mark.parametrize("count,why", [
     (10 ** 9, "list count past the sanity bound"),
-    (74, "index table is not 75 entries"),
+    (74, "the two index tables disagree on width"),
 ])
 def test_parse_record_refuses_bad_list_and_table_widths(count, why):
-    """_read_list's bound and the _TABLE_LEN check. Both exist so a
-    drifted layout is refused rather than written into on old offsets."""
+    """_read_list's bound, and the two-tables-must-agree check.
+
+    The width itself is no longer asserted against a constant -- it is a
+    build property (75 pre-1.16, 78 on 1.16). What IS asserted is that
+    the two reverse-index tables agree with each other and that the
+    record tiles exactly, which is what makes a drifted layout refuse
+    rather than get written into on stale offsets.
+    """
     body, header = _tables()
     o, end = _bounds(body, header, STAT_ON_ITEM)
     lists = parse_record(body, o, end)
@@ -756,3 +785,44 @@ def test_validate_intents_accepts_status_info_list():
     v = validate_intents("statusgroupinfo.pabgb", intents)
     assert len(v.supported) == 1, v
     assert not v.skipped, v
+
+
+def test_parse_record_accepts_a_wider_index_table_than_the_snapshot():
+    """The CD 1.16 regression, pinned (GitHub #355).
+
+    The reverse-index tables carry one slot per statusinfo record, and
+    the game added three of those: 75 slots pre-1.16, 78 on 1.16. The
+    width used to be hardcoded, so on the live build `parse_record`
+    returned None for ALL 8 records and every intent was refused with
+    "does not match the known statusgroupinfo layout" -- which reads as
+    "CDUMM cannot read this table" when the table was fine.
+
+    Widening both tables together must still parse. Nothing here depends
+    on the number 78; it rebuilds the record at a new width and checks
+    the grammar follows the data.
+    """
+    body, header = _tables()
+    o, end = _bounds(body, header, STAT_ON_ITEM)
+    full = parse_record_full(body, o, end)
+    assert full is not None
+    lists, tables = full
+    old_width = tables[0][1]
+    assert tables[1][1] == old_width, "fixture's tables should already agree"
+
+    # Rebuild the record with both index tables three slots wider, the
+    # way a game patch that adds three statusinfo records would.
+    extra = 3
+    t0_count_at = tables[0][0] - 4
+    rebuilt = bytearray(body[o:t0_count_at])
+    for _elem_start, _c in tables:
+        rebuilt += struct.pack("<I", old_width + extra)
+        rebuilt += body[_elem_start:_elem_start + 4 * old_width]
+        rebuilt += struct.pack("<I", _SENTINEL) * extra
+
+    got = parse_record_full(bytes(rebuilt), 0, len(rebuilt))
+    assert got is not None, (
+        "a wider index table must parse -- it is a game-build property, "
+        "not a constant")
+    new_lists, new_tables = got
+    assert [c for _s, c in new_lists] == [c for _s, c in lists]
+    assert [c for _s, c in new_tables] == [old_width + extra] * 2
