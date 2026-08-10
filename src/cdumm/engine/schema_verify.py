@@ -29,12 +29,20 @@ A candidate order source is a mapping::
    real records", not "someone said so"), and it flags gross corruption.
 
    It is corroboration, NOT the primary gate, and it has a known blind
-   spot: two fields of the same width, swapped upstream of the point where
-   the walker stalls, decode identically — the byte count doesn't move.
-   Order-identity is what catches those. The decode score's sharpness also
-   scales with how far the walker reaches (it stalls early on some tables
-   until their nested types are modelled), so it is reported, weighed, but
-   never trusted alone.
+   spot. The narrow statement is that two fields of the same width, swapped
+   upstream of where the walker stalls, decode identically — the byte count
+   doesn't move. The blind spot is actually WIDER than that: the score is a
+   function of bytes consumed, so **any** rearrangement preserving the total
+   width over a span is invisible to it, not only swaps of equal-width
+   pairs. Measured: reordering six of CharacterInfo's fields (moving two u8s
+   from before a u16 + two u64s + a u8 to after them) leaves the score
+   unchanged at 14/14 fields on 100% of records. Order-identity is what
+   catches those, and where two orders disagree only in that way the decode
+   score cannot referee at all — that needs ``value_agreement``.
+
+   The decode score's sharpness also scales with how far the walker reaches
+   (it stalls early on some tables until their nested types are modelled),
+   so it is reported, weighed, but never trusted alone.
 
 Order-identity is the workhorse; the decode score keeps it honest. A
 source that fails EITHER on any known table is rejected. A source that
