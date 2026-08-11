@@ -38,21 +38,47 @@ def _ground_truth() -> dict[str, list[str]]:
 
 # ── ground truth: the harness must not reject what's real ────────────────
 
-def test_the_seven_verified_tables_are_discovered():
+#: The seven tables whose order was reverse engineered by hand.
+HAND_RE = {"CharacterInfo", "FieldInfo", "ItemInfo", "RegionInfo",
+           "StageInfo", "VehicleInfo", "WantedInfo"}
+
+#: Thirteen tables whose order was DERIVED and proven by exact tiling
+#: (tools/derive_table_layout.py, game buildid 24613230). Their order is
+#: byte-exact on every record, which is what this harness means by verified
+#: order -- but their `_verified_fields` is empty, because tiling proves
+#: structure and not semantics.
+DERIVED = {"AIDialogTypeInfo", "BreakableObjectInfo", "CategoryGroupInfo",
+           "DetectInfo", "DialogVoiceInfo", "FailMessageInfo",
+           "GameAdviceGroupInfo", "GamePlayVariableInfo",
+           "GimmickEventTableInfo", "JobInfo", "LocalStringInfo",
+           "MaterialRelationInfo", "VibratePatternInfo",
+           "CharacterAppearanceIndexInfo", "MercenaryInfo",
+           "SocketInfo", "TerrainRegionNaviInfo",
+           "AIMemoryInfo", "ContentsPhaseInfo",
+           "FactionOperationGroupInfo", "HouseInfo",
+           "ZoneInfo"}
+
+
+def test_the_verified_order_set_is_exactly_what_we_expect():
+    """A change here must be deliberate, not accidental.
+
+    It grew from 7 to 29 deliberately: the 22 in DERIVED have an
+    `_ordered_fields` proven by exact tiling on 100% of their records, so a
+    candidate order source now has to reproduce them too. That is a real
+    strengthening of the gate, and the reason it is spelled out rather than
+    left as a count.
+    """
     tabs = tables_with_verified_order()
     assert ITEM in tabs
-    # the hand-RE'd set as of this writing; a change here should be
-    # deliberate, not accidental
-    assert set(tabs) == {
-        "CharacterInfo", "FieldInfo", "ItemInfo", "RegionInfo",
-        "StageInfo", "VehicleInfo", "WantedInfo"}
+    assert set(tabs) == HAND_RE | DERIVED
+    assert len(tabs) == 29
 
 
 def test_ground_truth_passes_itself():
     body, header = _fixture()
     rep = verify_order_source(_ground_truth(), {ITEM: (body, header)})
     assert rep.trustworthy
-    assert len(rep.passed) == rep.known_tables == 7
+    assert len(rep.passed) == rep.known_tables == len(HAND_RE | DERIVED)
     item = next(r for r in rep.results if r.table == ITEM)
     assert item.order_matches is True
     assert item.decode_ok is True
@@ -153,7 +179,8 @@ def test_partial_candidate_is_trustworthy_on_what_it_covers():
     rep = verify_order_source(cand)
     assert len(rep.covered) == 1
     assert rep.trustworthy is True                  # got its one table right
-    assert len(rep.results) == 7                    # but reports all knowns
+    # ...but reports every known table, hand-RE'd and derived alike
+    assert len(rep.results) == len(HAND_RE | DERIVED)
 
 
 def test_partial_candidate_still_fails_if_its_one_table_is_wrong():

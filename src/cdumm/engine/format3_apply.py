@@ -2929,7 +2929,18 @@ def _payload_offset(body: bytes, entry_off: int,
         # also catch a subsequent read, but rejecting up front
         # surfaces malformed PAMT offsets at the right layer.
         return entry_off if 0 <= entry_off < len(body) else None
-    eid_size = 2 if key_size == 2 else 4
+    # The id width is simply key_size. This used to read
+    # `2 if key_size == 2 else 4`, which silently truncated every other
+    # width -- and `parser._parse_entry_header` was fixed for exactly that
+    # bug while this copy was not. Its docstring names the cost: mercenaryinfo
+    # has 1-byte keys, so reading the id as u32 swallowed three bytes of the
+    # header and the table "was written off as memory-order misaligned on the
+    # strength of it".
+    #
+    # Widening is inert for everything that already worked -- widths 1 and 2
+    # already used key_size there, and for width 4 key_size IS 4 -- so this
+    # only changes tables that were being mis-read.
+    eid_size = key_size if key_size > 0 else 4
     head_size = eid_size + 4
     if entry_off + head_size > len(body):
         return None
@@ -2947,8 +2958,14 @@ def _payload_offset(body: bytes, entry_off: int,
 def _entry_name(body: bytes, entry_off: int,
                 key_size: int) -> str:
     """Read the name string from an entry header. Empty string on
-    failure, the caller falls back to ``intent.entry``."""
-    eid_size = 2 if key_size == 2 else 4
+    failure, the caller falls back to ``intent.entry``.
+
+    Same id-width fix as ``_payload_offset``: the width is ``key_size``,
+    not ``2 if key_size == 2 else 4``. On a 1-byte-key table the old form
+    read three bytes of the id as part of ``name_len`` and returned a
+    garbage name, which then silently fell back to ``intent.entry``.
+    """
+    eid_size = key_size if key_size > 0 else 4
     head_size = eid_size + 4
     if entry_off + head_size > len(body):
         return ""
