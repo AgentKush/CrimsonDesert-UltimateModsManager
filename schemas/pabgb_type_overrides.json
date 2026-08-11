@@ -1497,5 +1497,177 @@
     "_vibratePatternDataList": {
       "type": "CArray<[u8;13]>"
     }
+  },
+  "CharacterAppearanceIndexInfo": {
+    "_meta_note": "Derived 2026-08-11 from game buildid 24613230 by tools/derive_table_layout.py. Field ORDER comes from the exe's reflection error strings ordered by the hot-path branch that reaches each error block (tools/extract_field_order_win.py). Field WIDTHS come from the sized reads in the deserializer, with count-prefixed list element widths solved against the table data under a unique-or-nothing rule. PROOF: the walk consumes every one of this table's 8344 records to its exact last byte, and no other shape in the format's documented grammar does. _stringKey/_key are omitted because the entry header consumes them. _verified_fields is EMPTY on purpose: tiling proves the structure and each field's offset, NOT what any field means, so nothing here may be presented as a fact or written to until its values are cross-checked.",
+    "_no_null_skip": true,
+    "_ordered_fields": [
+      "_isBlocked",
+      "_characterEditName",
+      "_appearanceName",
+      "_characterScale",
+      "_characterInfo"
+    ],
+    "_verified_fields": [],
+    "_isBlocked": {
+      "type": "u8"
+    },
+    "_characterEditName": {
+      "type": "u32"
+    },
+    "_appearanceName": {
+      "type": "u32"
+    },
+    "_characterScale": {
+      "type": "u32"
+    },
+    "_characterInfo": {
+      "type": "u32"
+    }
+  },
+  "MercenaryInfo": {
+    "_meta_note": "Derived 2026-08-11 from game buildid 24613230 by tools/derive_table_layout.py. Field ORDER comes from the exe's reflection error strings ordered by the hot-path branch that reaches each error block (tools/extract_field_order_win.py). Field WIDTHS come from the sized reads in the deserializer, with count-prefixed list element widths solved against the table data under a unique-or-nothing rule. PROOF: the walk consumes every one of this table's 21 records to its exact last byte, and no other shape in the format's documented grammar does. _stringKey/_key are omitted because the entry header consumes them. _verified_fields is EMPTY on purpose: tiling proves the structure and each field's offset, NOT what any field means, so nothing here may be presented as a fact or written to until its values are cross-checked.",
+    "_no_null_skip": true,
+    "_ordered_fields": [
+      "_isBlocked",
+      "_defaultLimitSummonCount",
+      "_defaultLimitHireCount",
+      "_maxLimitHireCount",
+      "_mercenaryType",
+      "_farFromLeaderOption",
+      "_isControllable",
+      "_isPlayable",
+      "_summonAfterRegist",
+      "_mainMercenaryPerTribe",
+      "_isForceStackable",
+      "_useCampLevel",
+      "_applyEquipItemStat",
+      "_checkItemNoOnPushToItem",
+      "_allowExceedLimitHireCount",
+      "_isSelectMercenarySpawn",
+      "_unspawnOnFocusActorChanged",
+      "_checkOwnedItemForRestoreItem",
+      "_mainDischargeableType",
+      "_spawnPositionType",
+      "_summonOwnerOption",
+      "_inventoryOwnerType",
+      "_parentMercenaryGroupInfo",
+      "_sharedSummonCountTag",
+      "_feedFromGimmickInfo",
+      "_expandedSlotList"
+    ],
+    "_verified_fields": [],
+    "_isBlocked": {
+      "type": "u8"
+    },
+    "_defaultLimitSummonCount": {
+      "type": "u32"
+    },
+    "_defaultLimitHireCount": {
+      "type": "u32"
+    },
+    "_maxLimitHireCount": {
+      "type": "u32"
+    },
+    "_mercenaryType": {
+      "type": "u8"
+    },
+    "_farFromLeaderOption": {
+      "type": "u8"
+    },
+    "_isControllable": {
+      "type": "u8"
+    },
+    "_isPlayable": {
+      "type": "u8"
+    },
+    "_summonAfterRegist": {
+      "type": "u8"
+    },
+    "_mainMercenaryPerTribe": {
+      "type": "u8"
+    },
+    "_isForceStackable": {
+      "type": "u8"
+    },
+    "_useCampLevel": {
+      "type": "u8"
+    },
+    "_applyEquipItemStat": {
+      "type": "u8"
+    },
+    "_checkItemNoOnPushToItem": {
+      "type": "u8"
+    },
+    "_allowExceedLimitHireCount": {
+      "type": "u8"
+    },
+    "_isSelectMercenarySpawn": {
+      "type": "u8"
+    },
+    "_unspawnOnFocusActorChanged": {
+      "type": "u8"
+    },
+    "_checkOwnedItemForRestoreItem": {
+      "type": "u8"
+    },
+    "_mainDischargeableType": {
+      "type": "u8"
+    },
+    "_spawnPositionType": {
+      "type": "u8"
+    },
+    "_summonOwnerOption": {
+      "type": "u8"
+    },
+    "_inventoryOwnerType": {
+      "type": "u8"
+    },
+    "_parentMercenaryGroupInfo": {
+      "type": "u8"
+    },
+    "_sharedSummonCountTag": {
+      "type": "u32"
+    },
+    "_feedFromGimmickInfo": {
+      "type": "u32"
+    },
+    "_expandedSlotList": {
+      "type": "CArray<[u8;16]>"
+    }
+  },
+  "SocketInfo": {
+    "_meta_note": "Derived 2026-08-11 from game buildid 24613230 by tools/derive_table_layout.py. Field ORDER comes from the exe's reflection error strings ordered by the hot-path branch that reaches each error block (tools/extract_field_order_win.py). Field WIDTHS come from the sized reads in the deserializer, with count-prefixed list element widths solved against the table data under a unique-or-nothing rule. PROOF: the walk consumes every one of this table's 2 records to its exact last byte, and no other shape in the format's documented grammar does. _stringKey/_key are omitted because the entry header consumes them. _verified_fields is EMPTY on purpose: tiling proves the structure and each field's offset, NOT what any field means, so nothing here may be presented as a fact or written to until its values are cross-checked.",
+    "_no_null_skip": true,
+    "_ordered_fields": [
+      "_isBlocked",
+      "_socketName",
+      "_iconPath"
+    ],
+    "_verified_fields": [],
+    "_isBlocked": {
+      "type": "u8"
+    },
+    "_socketName": {
+      "type": "LocalizableString"
+    },
+    "_iconPath": {
+      "type": "u32"
+    }
+  },
+  "TerrainRegionNaviInfo": {
+    "_meta_note": "Derived 2026-08-11 from game buildid 24613230 by tools/derive_table_layout.py. Field ORDER comes from the exe's reflection error strings ordered by the hot-path branch that reaches each error block (tools/extract_field_order_win.py). Field WIDTHS come from the sized reads in the deserializer, with count-prefixed list element widths solved against the table data under a unique-or-nothing rule. PROOF: the walk consumes every one of this table's 19 records to its exact last byte, and no other shape in the format's documented grammar does. _stringKey/_key are omitted because the entry header consumes them. _verified_fields is EMPTY on purpose: tiling proves the structure and each field's offset, NOT what any field means, so nothing here may be presented as a fact or written to until its values are cross-checked.",
+    "_no_null_skip": true,
+    "_ordered_fields": [
+      "_isBlocked",
+      "_isForestRegion"
+    ],
+    "_verified_fields": [],
+    "_isBlocked": {
+      "type": "u8"
+    },
+    "_isForestRegion": {
+      "type": "u8"
+    }
   }
 }

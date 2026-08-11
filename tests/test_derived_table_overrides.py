@@ -50,6 +50,10 @@ DERIVED = {
     "LocalStringInfo": 43863,
     "MaterialRelationInfo": 11,
     "VibratePatternInfo": 28,
+    "CharacterAppearanceIndexInfo": 8344,
+    "MercenaryInfo": 21,
+    "SocketInfo": 2,
+    "TerrainRegionNaviInfo": 19,
 }
 
 
