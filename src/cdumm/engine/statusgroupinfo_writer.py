@@ -19,16 +19,24 @@ nothing short::
     <u32 count><count * u32 statusinfo key>   list 0
     <u32 count><count * u32 statusinfo key>   list 1
     <u32 count><count * u32 statusinfo key>   list 2
-    <u32 75><75 * u32>                        slot table for list 1
-    <u32 75><75 * u32>                        slot table for list 0
+    <u32 W><W * u32>                          slot table for list 1
+    <u32 W><W * u32>                          slot table for list 0
 
-The two 75-entry tables are reverse indexes -- 75 is exactly the number of
-``statusinfo`` records. Each holds one set entry (everything else is
-0xFFFFFFFF) per element of the list it serves, and the entry value is that
-element's position in the list. That correspondence holds on all 8 records
-for both tables, which is what pairs table 0 with list 1 and table 1 with
-list 0. The slot ids are stable across records: slot 9 resolves to
-CriticalRate in every record that sets it, slot 10 to DHIT, and so on.
+The two W-entry tables are reverse indexes, and ``W`` is exactly the number
+of ``statusinfo`` records -- so it is a property of the GAME BUILD, not a
+constant: 75 pre-1.16, **78** on CD 1.16, which added three statusinfo
+records. It used to be hardcoded at 75, which made every record fail to
+parse on 1.16 and refused every intent with a layout error that read as
+"CDUMM cannot read this table" when the table was fine (GitHub #355). It is
+now derived per record -- the two tables must agree with each other, and
+the record must tile exactly, which a wrong width cannot do.
+
+Each table holds one set entry (everything else is 0xFFFFFFFF) per element
+of the list it serves, and the entry value is that element's position in the
+list. That correspondence holds on all 8 records for both tables, which is
+what pairs table 0 with list 1 and table 1 with list 0. The slot ids are
+stable across records: slot 9 resolves to CriticalRate in every record that
+sets it, slot 10 to DHIT, and so on.
 
 Which list is ``status_info_list``
 ----------------------------------
@@ -113,6 +121,7 @@ from __future__ import annotations
 import logging
 import re
 import struct
+from contextlib import suppress
 
 from cdumm.semantic.parser import parse_pabgh_index
 
@@ -122,17 +131,38 @@ _ENVELOPE = 8
 _N_LISTS = 3
 _STATUS_INFO_LIST = 1        # which of the three lists (see module docstring)
 _N_TABLES = 2
-_TABLE_LEN = 75              # one entry per statusinfo record
+
+#: There is deliberately NO reverse-index width constant here.
+#:
+#: The tables carry one slot per ``statusinfo`` record, so the width is a
+#: property of the GAME BUILD: 75 when this writer was written, 78 on CD
+#: 1.16, which added three statusinfo records. It WAS hardcoded at 75, and
+#: that made ``parse_record_full`` return None for all 8 records on the
+#: live build -- refusing every intent with "does not match the known
+#: statusgroupinfo layout", which reads as "CDUMM cannot read this table"
+#: when the table was fine (GitHub #355).
+#:
+#: It is now derived per record: the two tables must agree with each other
+#: and the record must tile exactly. That is self-validating, since a wrong
+#: width cannot land on the record's last byte -- the same "derive and
+#: validate" move that fixed the store list (#338) and the entry keys
+#: (#341).
 _MAX_COUNT = 4096            # sanity bound while walking
 
 #: These lists hold ``statusinfo`` record keys, so a value outside that
 #: key space is a dangling reference in a list the game dereferences --
-#: a plausible crash vector, and never what a mod means. The key space is
-#: 1000000..1000074, which is not a magic number here: it is the repo's
-#: own statusinfo snapshot (``stat_names.STAT_NAMES_CD113``, 75 keys),
-#: and 75 is exactly ``_TABLE_LEN`` -- the reverse-index tables carry one
-#: slot per statusinfo record. The two agreeing is the check that this
-#: bound is the real one. Verified at import.
+#: a plausible crash vector, and never what a mod means.
+#:
+#: These are the FLOOR and a STARTING ceiling, not the answer.
+#: 1000000..1000074 is the repo's CD 1.13 snapshot
+#: (``stat_names.STAT_NAMES_CD113``, 75 keys). On CD 1.16 the table has 78
+#: records spanning 1000000..**1000078**, and the vanilla lists reference
+#: keys right to that top -- so treating this as the exact range refused
+#: references the game itself makes. ``_status_key_space`` widens the
+#: ceiling from evidence and never lowers the floor.
+#:
+#: Note the space is NOT contiguous: 78 records span 79 slots, so the
+#: ceiling cannot be derived from the reverse-index width either.
 _MIN_STATUS_KEY = 1000000
 _MAX_STATUS_KEY = 1000074
 
@@ -143,23 +173,52 @@ _SENTINEL = 0xFFFFFFFF
 _FIELD_RE = re.compile(r"^status_info_list\[(\d+)\]$")
 
 
-def _status_key_space() -> tuple[int, int]:
-    """(min, max) statusinfo key, cross-checked against ``_TABLE_LEN``.
+def _status_key_space(
+    observed: set[int] | None = None,
+) -> tuple[int, int]:
+    """(min, max) statusinfo key the range check will accept.
 
-    Falls back to the constants above if the snapshot is unavailable, so
-    a trimmed build still range-checks rather than accepting anything.
+    Widened from every source of evidence, never narrowed. The check
+    exists to catch a value that is obviously not a record reference --
+    a 5, a 2**31 -- not to be an exact membership test, so a bound that
+    is too TIGHT is the harmful direction: it refuses mods that are
+    correct.
+
+    That is exactly what went wrong. The shipped snapshot is CD 1.13's 75
+    keys (1000000..1000074), and on CD 1.16 the statusinfo table has 78
+    records spanning 1000000..**1000078** -- and the vanilla
+    statusgroupinfo lists reference keys right up to that top. The frozen
+    bound would refuse a reference the game itself makes.
+
+    ``observed`` is the set of keys the vanilla lists actually hold, which
+    the caller has already parsed. It is direct, on-disk evidence from the
+    build in front of us and costs nothing to collect, so it is folded in.
+
+    Note the key space is NOT contiguous -- 78 records span 79 slots, so
+    one key in the range is absent. That is why the bound cannot be
+    derived from the reverse-index width (``lo + width - 1`` would be one
+    short); the span has to come from real keys.
+
+    Only the CEILING moves. ``_MIN_STATUS_KEY`` is a structural fact of
+    the key space, so a source containing something below it is telling
+    us it is not a statusinfo key set -- widening the floor to match
+    would let a bare ``5`` through, which is the garbage this check
+    exists to stop. Keys below the floor are therefore ignored, not
+    trusted.
     """
-    try:
+    lo, hi = _MIN_STATUS_KEY, _MAX_STATUS_KEY
+    sources: list[set[int]] = []
+    with suppress(Exception):   # optional module; the literal bound applies
         from cdumm.engine.stat_names import STAT_NAMES_CD113 as names
-    except Exception:  # noqa: BLE001 -- optional module, bound still applies
-        return _MIN_STATUS_KEY, _MAX_STATUS_KEY
-    if len(names) != _TABLE_LEN:
-        logger.warning(
-            "statusgroupinfo: statusinfo snapshot has %d keys but the "
-            "reverse-index tables have %d slots; using the wider bound",
-            len(names), _TABLE_LEN)
-        return _MIN_STATUS_KEY, _MAX_STATUS_KEY
-    return min(names), max(names)
+        if names:
+            sources.append(set(names))
+    if observed:
+        sources.append(set(observed))
+    for src in sources:
+        usable = [k for k in src if k >= lo]
+        if usable:
+            hi = max(hi, max(usable))
+    return lo, hi
 
 
 def _read_list(body: bytes, p: int, end: int) -> tuple[int, int] | None:
@@ -198,15 +257,26 @@ def parse_record_full(
         lists.append((elem_start, count))
         p = elem_start + 4 * count
     tables: list[tuple[int, int]] = []
+    table_len: int | None = None
     for _ in range(_N_TABLES):
         got = _read_list(body, p, end)
         if got is None:
             return None
         elem_start, count = got
-        if count != _TABLE_LEN:
+        # The two reverse-index tables carry one slot per statusinfo
+        # record, so they must be the SAME width as each other. Their
+        # actual width is a build property (75 pre-1.16, 78 on 1.16), so
+        # it is derived here rather than asserted -- see the comment on
+        # the constant note above. Exact tiling below is what validates it: a
+        # wrong width cannot finish on the record's last byte.
+        if table_len is None:
+            table_len = count
+        elif count != table_len:
             return None
         tables.append((elem_start, count))
         p = elem_start + 4 * count
+    if not table_len:
+        return None                           # zero-width tables are not a record
     if p != end:
         return None                           # did not tile exactly
     return lists, tables
@@ -293,7 +363,20 @@ def build_statusgroupinfo_changes(
                     for i in intents]
     starts = sorted(offsets.values())
     body_len = len(vanilla_body)
-    lo_key, hi_key = _status_key_space()
+
+    # Every statusinfo key the vanilla table already references. Direct
+    # evidence from THIS build, so the range check below cannot be
+    # tighter than the game's own data (see _status_key_space).
+    observed: set[int] = set()
+    for _o in offsets.values():
+        _i = starts.index(_o)
+        _end = starts[_i + 1] if _i + 1 < len(starts) else body_len
+        _got = parse_record(vanilla_body, _o, _end)
+        if _got is None:
+            continue
+        for _es, _c in _got:
+            observed.update(_elements(vanilla_body, _es, _c))
+    lo_key, hi_key = _status_key_space(observed)
 
     changes: list[dict] = []
     #: record key -> accepted writes, batched so the reverse index below
