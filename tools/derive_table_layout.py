@@ -25,8 +25,19 @@ Stage 1 -- static, from the exe
     (hash-lookup helpers, allocators, loggers) solved 2 of 193 readers
     instead of 5.
 
-    Any reader containing a BACKWARD BRANCH is refused. That is a
-    count-prefixed list, and its element width is not derivable this way.
+    A stream read is a SIZED vtable call -- a width in ``r8d``, then
+    ``call qword ptr [rax + 8]``. The width is the load-bearing half; a
+    bare vtable call is an ordinary virtual call on some other object.
+
+    A reader whose loop is on a stream-reading path is refused: that is a
+    count-prefixed list, and stage 2 derives its element width. A loop in
+    a helper that reads nothing consumes nothing and does not disqualify
+    its caller.
+
+    Readers stage 1 still cannot derive can be supplied by hand through
+    ``HAND_VERIFIED``, kept separate and labelled so it is always visible
+    which models are automatic and which are asserted. Those are held to
+    the same tiling gate.
 
 Stage 2 -- by constraint, from the table data
     A list reader is ``u32 count`` then ``count * E``. No game file states
@@ -96,6 +107,28 @@ HEADER_FIELDS = ("_stringKey", "_key")
 #: Widest plausible list element for the constraint search.
 MAX_ELEM = 128
 
+#: Reader models read off the disassembly BY HAND, for readers stage 1
+#: cannot derive on its own. Kept separate and labelled rather than folded
+#: in, so it is always visible which models are automatic and which are
+#: asserted -- an unmarked hand constant is how a schema stops being
+#: trustworthy.
+#:
+#: Each is still subject to the same gate: a table using one of these is
+#: only reported when it tiles exactly on 100% of records.
+#:
+#: Addresses are BUILD-SPECIFIC (derived on buildid 24613230). A different
+#: build shifts them, and a stale entry then simply fails to match a
+#: callee, which is the safe direction -- it cannot silently apply a wrong
+#: width to the wrong reader.
+HAND_VERIFIED: dict[int, tuple[str, int]] = {
+    # 1 byte, then 8 bytes, then sub_1411A31F0 (the CString) -- so 13 + n.
+    # Stage 1 refuses it because a post-read helper it calls
+    # (sub_1410741B0) makes an unsized vtable call on a container, which
+    # the reads-stream test cannot currently tell apart from a real read.
+    # Proven by tiling localstringinfo exactly on all 43,863 records.
+    0x141071DE0: ("strplus", 9),
+}
+
 
 def _cs():
     from capstone import CS_ARCH_X86, CS_MODE_64, Cs
@@ -119,8 +152,64 @@ class Deriver:
         self.model: dict[int, tuple[str, int]] = {}
         self.elem: dict[int, int] = {}
         self._memo: dict[int, tuple[str, int] | None] = {}
+        self._reads: dict[int, bool] = {}
 
     # ── stage 1: static reader models ────────────────────────────────────
+
+    def reads_stream(self, va: int, depth: int = 0,
+                     seen: set[int] | None = None) -> bool:
+        """Does this function touch the byte stream at all, transitively?
+
+        The distinction this draws is the one that matters most in stage 1.
+        A function that performs no stream read consumes ZERO bytes no
+        matter what else it does -- including looping. Allocators, string
+        builders and hash-lookup helpers all loop, and treating a loop as
+        automatically undecidable let them refuse their callers.
+
+        sub_141071DE0 is the case that exposed it: it reads 1 byte, 8
+        bytes, then the CString reader, so it is plainly 13 + n. It was
+        refused because a post-read helper it calls (sub_1410741B0, which
+        just stores a pointer) contains a loop.
+
+        A stream read is a SIZED vtable call: a width put in ``r8d``, then
+        ``call qword ptr [rax + 8]``. The width is the load-bearing half.
+        A bare ``call qword ptr [rax + 8]`` with no width is an ordinary
+        virtual call on some other object, and counting it is what kept
+        sub_141071DE0 refused -- its helper sub_1410741B0 makes exactly
+        that call on ``r13 + 0x20``, a container rather than the stream.
+        """
+        from capstone import CS_OP_IMM, CS_OP_MEM, CS_OP_REG
+        if va in self._reads:
+            return self._reads[va]
+        if seen is None:
+            seen = set()
+        if depth > 4 or va in seen:
+            return False
+        seen.add(va)
+        off = self.img.va_to_off(va)
+        if off is None:
+            return False
+        answer = False
+        subs: list[int] = []
+        pend = None
+        for i in self.md.disasm(self.img.data[off:off + 600], va):
+            o = i.operands
+            if (i.mnemonic in ("mov", "lea") and len(o) == 2
+                    and o[0].type == CS_OP_REG
+                    and "r8" in i.op_str.split(",")[0]):
+                pend = o[1] if o[1].type in (CS_OP_IMM, CS_OP_MEM) else None
+            elif i.mnemonic == "call" and len(o) == 1:
+                if o[0].type == CS_OP_MEM:
+                    if pend is not None:          # a SIZED read
+                        answer = True
+                        break
+                elif o[0].type == CS_OP_IMM:
+                    subs.append(o[0].imm)
+                pend = None
+        if not answer:
+            answer = any(self.reads_stream(s, depth + 1, seen) for s in subs)
+        self._reads[va] = answer
+        return answer
 
     def solve_reader(self, va: int, depth: int = 0):
         """('fixed'|'str'|'strplus', base) or None when not derivable."""
@@ -140,6 +229,7 @@ class Deriver:
         subs: list[int] = []
         pend = None
         var_read = False
+        has_loop = False
         for i in ins:
             o = i.operands
             if (i.mnemonic in ("mov", "lea") and len(o) == 2
@@ -161,12 +251,20 @@ class Deriver:
                     subs.append(o[0].imm)
             if (i.mnemonic.startswith("j") and len(o) == 1
                     and o[0].type == CS_OP_IMM and va <= o[0].imm < i.address):
-                return None                         # loop: not derivable here
+                has_loop = True
+        # A loop is only undecidable here when it reads the stream -- that
+        # is a count-prefixed list, and stage 2 derives its element width.
+        # A loop in a helper that reads nothing consumes nothing.
+        if has_loop and (reads or var_read
+                         or any(self.reads_stream(s) for s in subs)):
+            return None
         if var_read and reads[:1] == [4]:
             self._memo[va] = ("str", 0)
             return self._memo[va]
         extra, kind = 0, "fixed"
         for s in subs:
+            if not self.reads_stream(s):
+                continue                            # consumes no stream bytes
             r = self.solve_reader(s, depth + 1)
             if r is None:
                 return None
@@ -412,12 +510,18 @@ def main(argv: list[str] | None = None) -> int:
     # stage 1
     callees = {v for f in fields.values() for _n, k, v in f if k == "call"}
     for c in callees:
-        self_memo = d._memo
-        self_memo.clear()
+        d._memo.clear()
         got = d.solve_reader(c)
         if got is not None:
             d.model[c] = got
-    print(f"sub-readers solved statically: {len(d.model)} of {len(callees)}")
+    auto = len(d.model)
+    hand = 0
+    for c, m in HAND_VERIFIED.items():
+        if c in callees and c not in d.model:
+            d.model[c] = m
+            hand += 1
+    print(f"sub-readers: {auto} solved statically, {hand} hand-verified "
+          f"(of {len(callees)} used as field readers)")
 
     loaded = {}
     for s in stems:
