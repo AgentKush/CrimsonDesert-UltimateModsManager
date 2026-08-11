@@ -489,32 +489,53 @@ class Deriver:
 
     # ── the gate ─────────────────────────────────────────────────────────
 
+    def _apply(self, body, p, end, spec):
+        """Advance ``p`` past one reader described by ``spec``.
+
+        ``spec`` is ``(kind, n)``:
+          ('fixed', n)   n bytes
+          ('str',   n)   n bytes, then u32 len + len bytes
+          ('list',  n)   u32 count, then count * n bytes
+        """
+        kind, n = spec
+        if kind == "fixed":
+            return p + n
+        if kind == "str":
+            p += n
+            if p + 4 > end:
+                return None
+            ln = struct.unpack_from("<I", body, p)[0]
+            p += 4
+            if ln > 2_000_000 or p + ln > end:
+                return None
+            return p + ln
+        if kind == "list":
+            if p + 4 > end:
+                return None
+            cnt = struct.unpack_from("<I", body, p)[0]
+            p += 4
+            if cnt > 100_000 or p + cnt * n > end:
+                return None
+            return p + cnt * n
+        return None
+
     def _consume(self, body, p, end, fields, elem):
+        """``elem`` maps an unresolved callee to a candidate ``(kind, n)``."""
         for name, kind, val in fields:
             if kind == "fixed":
                 p += val
             elif kind == "call":
                 m = self.model.get(val)
-                if m is not None:
-                    t, base = m
-                    p += base
-                    if t in ("str", "strplus"):
-                        if p + 4 > end:
-                            return None, name
-                        n = struct.unpack_from("<I", body, p)[0]
-                        p += 4
-                        if n > 2_000_000 or p + n > end:
-                            return None, name
-                        p += n
-                elif val in elem:
-                    if p + 4 > end:
-                        return None, name
-                    cnt = struct.unpack_from("<I", body, p)[0]
-                    p += 4
-                    if cnt > 100_000 or p + cnt * elem[val] > end:
-                        return None, name
-                    p += cnt * elem[val]
-                else:
+                if m is None:
+                    m = elem.get(val)
+                if m is None:
+                    return None, name
+                t, base = m
+                # stage-1 models use 'strplus' for "base then a string"
+                spec = ("str", base) if t in ("str", "strplus") else \
+                       ("list", base) if t == "list" else ("fixed", base)
+                p = self._apply(body, p, end, spec)
+                if p is None:
                     return None, name
             else:
                 return None, name
@@ -543,36 +564,64 @@ class Deriver:
                 return False
         return True
 
-    def search(self, body, ent, key_size, fields, unknown: list[int]):
-        """Every element-width assignment that tiles the WHOLE table.
+    def candidates(self):
+        """Every reader shape stage 2 will try, in one flat list.
 
-        One or two unknowns. Two is 128*128, so a spread of records prunes
-        first and only survivors are verified in full -- sound, because a
-        subset failure cannot be a false rejection.
+        Widened from list-only. A reader stage 1 refused is not necessarily
+        a count-prefixed list -- it may be a fixed width or a string whose
+        derivation failed for an unrelated reason (an unaccounted subcall,
+        say). Only offering the list form meant those could never solve no
+        matter how well constrained they were by the data.
+
+        Unique-or-nothing now applies across the WHOLE space: if a fixed
+        width and a list width both tile, the data cannot tell them apart
+        and the answer is unknown.
+        """
+        out = [("fixed", n) for n in range(MAX_ELEM + 1)]
+        out += [("list", n) for n in range(1, MAX_ELEM + 1)]
+        out += [("str", n) for n in range(33)]
+        return out
+
+    def search(self, body, ent, key_size, fields, unknown: list[int]):
+        """Every shape assignment that tiles the WHOLE table.
+
+        One or two unknowns. A spread of records prunes first and only
+        survivors are verified in full -- sound, because a shape that tiles
+        every record must also tile any subset, so a subset failure cannot
+        be a false rejection.
         """
         n = len(ent)
         step = max(1, n // 24)
         probe = list(range(0, n, step))[:24] or [0]
+        cands = self.candidates()
 
         if len(unknown) == 1:
             c = unknown[0]
-            cheap = [e for e in range(1, MAX_ELEM + 1)
+            cheap = [x for x in cands
                      if self.tiles(body, ent, key_size, fields,
-                                   {**self.elem, c: e}, probe)]
-            return [(e,) for e in cheap
+                                   {**self.elem, c: x}, probe)]
+            return [(x,) for x in cheap
                     if self.tiles(body, ent, key_size, fields,
-                                  {**self.elem, c: e})]
+                                  {**self.elem, c: x})]
 
         a, b = unknown
-        cheap = []
-        for ea in range(1, MAX_ELEM + 1):
-            for eb in range(1, MAX_ELEM + 1):
+        # Two unknowns over the full space would be ~300^2 tilings per
+        # table. Prune each slot alone first: a shape that cannot tile the
+        # probe for ANY partner cannot be part of a full solution.
+        viable_a = [x for x in cands
+                    if any(self.tiles(body, ent, key_size, fields,
+                                      {**self.elem, a: x, b: y}, probe[:4])
+                           for y in cands[::8])]
+        viable_b = [y for y in cands
+                    if any(self.tiles(body, ent, key_size, fields,
+                                      {**self.elem, a: x, b: y}, probe[:4])
+                           for x in viable_a[::8] or cands[::8])]
+        cheap = [(x, y) for x in viable_a for y in viable_b
+                 if self.tiles(body, ent, key_size, fields,
+                               {**self.elem, a: x, b: y}, probe)]
+        return [(x, y) for x, y in cheap
                 if self.tiles(body, ent, key_size, fields,
-                              {**self.elem, a: ea, b: eb}, probe):
-                    cheap.append((ea, eb))
-        return [(ea, eb) for ea, eb in cheap
-                if self.tiles(body, ent, key_size, fields,
-                              {**self.elem, a: ea, b: eb})]
+                              {**self.elem, a: x, b: y})]
 
 
 def load_table(game: Path, stem: str):
@@ -725,13 +774,16 @@ def main(argv: list[str] | None = None) -> int:
                 if c not in d.elem:
                     d.elem[c] = e
                     added += 1
-                    print(f"  round {rnd}: sub_{c:X} = 4 + count*{e}"
+                    shape = (f"4 + count*{e[1]}" if e[0] == "list"
+                             else f"{e[1]} + str" if e[0] == "str"
+                             else f"{e[1]} bytes")
+                    print(f"  round {rnd}: sub_{c:X} = {shape}"
                           f"   (from {stem}, {len(ent)} records{note})")
             if len(pinned) == len(unknown):
                 proven[stem] = len(ent)
             else:
                 free = [c for c in unknown if c not in pinned]
-                ambiguous[stem] = sorted({s[unknown.index(free[0])]
+                ambiguous[stem] = sorted({str(s[unknown.index(free[0])])
                                           for s in sols})
         if not added:
             break
@@ -745,7 +797,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"\nAMBIGUOUS (more than one width tiles -> reported, NOT "
               f"guessed): {len(ambiguous)}")
         for s, hits in sorted(ambiguous.items())[:10]:
-            print(f"   {s:<32} {len(hits)} widths tile, e.g. {hits[:6]}")
+            print(f"   {s:<32} {len(hits)} shapes tile, e.g. {hits[:4]}")
     print("\nReminder: tiling proves STRUCTURE, not semantics. Gate every "
           "new field to _verified_fields after a value spot-check before "
           "anything writes to it.")
