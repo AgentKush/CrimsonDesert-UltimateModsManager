@@ -107,30 +107,24 @@ HEADER_FIELDS = ("_stringKey", "_key")
 #: Widest plausible list element for the constraint search.
 MAX_ELEM = 128
 
-#: Reader models read off the disassembly BY HAND, for readers stage 1
-#: cannot derive on its own. Kept separate and labelled rather than folded
-#: in, so it is always visible which models are automatic and which are
-#: asserted -- an unmarked hand constant is how a schema stops being
-#: trustworthy.
+#: An escape hatch for readers stage 1 genuinely cannot derive: a model
+#: read off the disassembly by hand, kept SEPARATE from the automatic ones
+#: so it is always visible which is which. An unmarked hand constant is how
+#: a schema stops being trustworthy.
 #:
-#: Each is still subject to the same gate: a table using one of these is
-#: only reported when it tiles exactly on 100% of records.
+#: Currently EMPTY, and that is the part worth recording. It held
+#: sub_141071DE0 = 13 + n, which I added because stage 1 refused it.
+#: Bounding the disassembly to the function's own end (see ``body``) made
+#: stage 1 derive that reader by itself, along with 34 others -- so the hand
+#: model was never filling a gap in the method, it was covering for a bug in
+#: my scan.
 #:
-#: Addresses are BUILD-SPECIFIC (derived on buildid 24613230). A different
-#: build shifts them, and a stale entry then simply fails to match a
-#: callee, which is the safe direction -- it cannot silently apply a wrong
-#: width to the wrong reader.
-#: Currently EMPTY, and that is the point worth recording.
+#: Kept as a mechanism, kept empty, and kept with this note: the first thing
+#: to suspect about a reader stage 1 cannot derive is stage 1.
 #:
-#: It held one entry, sub_141071DE0 = 13 + n, which I read off the
-#: disassembly because stage 1 refused it. Bounding the disassembly to the
-#: function's own end (see ``body``) made stage 1 derive it automatically,
-#: along with 34 other readers. So the hand model was never filling a real
-#: gap in the method -- it was papering over a bug in my scan.
-#:
-#: Kept as a mechanism because a genuinely underivable reader will turn up.
-#: Kept empty, and with this note, because the first thing to suspect about
-#: a reader stage 1 cannot derive is stage 1.
+#: Any entry added here is still held to the tiling gate, and addresses are
+#: BUILD-SPECIFIC -- on another build a stale entry simply fails to match a
+#: callee, which is the safe direction.
 HAND_VERIFIED: dict[int, tuple[str, int]] = {}
 
 
@@ -258,6 +252,63 @@ class Deriver:
         self._reads[va] = answer
         return answer
 
+    def fixed_loops(self, ins: list):
+        """Loops whose trip count is a compile-time constant.
+
+        Not every backward branch is a count-prefixed list. Some readers
+        contain a fixed-length loop -- a vector of four, say -- and its
+        consumption is fully determined:
+
+            loop: mov r8d, 8 ; call [rax+8]      ; read 8
+                  inc esi
+                  cmp esi, 4                     ; trip count, an IMMEDIATE
+                  jb  loop
+
+        sub_1412656D0 is exactly that: two 4-byte reads, then four 8-byte
+        reads. I first mis-read it as a plain 4-byte reader because my
+        earlier scan stopped at the failure path's `ret`, and had I asserted
+        that width it would have been simply wrong.
+
+        Returns ``[(body_start, branch_addr, trip)]`` for the loops it can
+        pin, or None if ANY backward branch cannot be pinned -- because a
+        reader with one underivable loop is not derivable, and a partial
+        answer here is a wrong width.
+
+        Deliberately narrow: single counter, `cmp reg, imm` immediately
+        governing the branch, unsigned/signed below. Anything else is
+        refused rather than assumed.
+        """
+        from capstone import CS_OP_IMM, CS_OP_REG
+        by_addr = {i.address: n for n, i in enumerate(ins)}
+        loops = []
+        for n, i in enumerate(ins):
+            o = i.operands
+            if not (i.mnemonic.startswith("j") and len(o) == 1
+                    and o[0].type == CS_OP_IMM and o[0].imm < i.address):
+                continue
+            if i.mnemonic not in ("jb", "jl", "jbe", "jle", "jne"):
+                return None
+            target = o[0].imm
+            if target not in by_addr:
+                return None
+            # the compare governing this branch: nearest preceding
+            # `cmp <reg>, <imm>` within a few instructions
+            trip = None
+            for k in range(n - 1, max(-1, n - 5), -1):
+                c = ins[k]
+                co = c.operands
+                if (c.mnemonic == "cmp" and len(co) == 2
+                        and co[0].type == CS_OP_REG
+                        and co[1].type == CS_OP_IMM):
+                    trip = co[1].imm
+                    if i.mnemonic in ("jbe", "jle"):
+                        trip += 1          # inclusive bound
+                    break
+            if trip is None or not (1 <= trip <= 4096):
+                return None
+            loops.append((by_addr[target], n, trip))
+        return loops
+
     def solve_reader(self, va: int, depth: int = 0):
         """('fixed'|'str'|'strplus', base) or None when not derivable."""
         from capstone import CS_OP_IMM, CS_OP_MEM, CS_OP_REG
@@ -310,12 +361,46 @@ class Deriver:
             if (i.mnemonic.startswith("j") and len(o) == 1
                     and o[0].type == CS_OP_IMM and va <= o[0].imm < i.address):
                 has_loop = True
-        # A loop is only undecidable here when it reads the stream -- that
+        # A loop is only undecidable when its trip count is unknown -- that
         # is a count-prefixed list, and stage 2 derives its element width.
-        # A loop in a helper that reads nothing consumes nothing.
+        # A loop whose bound is an immediate is fully determined, and a loop
+        # in a helper that reads nothing consumes nothing either way.
         if has_loop and (reads or var_read
                          or any(self.reads_stream(s) for s in subs)):
-            return None
+            loops = self.fixed_loops(ins)
+            if not loops:
+                return None
+            # Re-attribute: a sized read inside a fixed loop counts `trip`
+            # times, and once outside. Anything nested is refused above by
+            # fixed_loops returning None for a branch it cannot pin.
+            in_loop = {}
+            for start, end, trip in loops:
+                for idx in range(start, end + 1):
+                    if idx in in_loop:
+                        return None            # nested / overlapping
+                    in_loop[idx] = trip
+            total = 0
+            pend2 = None
+            for idx, i2 in enumerate(ins):
+                o2 = i2.operands
+                d2 = i2.op_str.split(",")[0].strip()
+                if (i2.mnemonic in ("mov", "lea") and len(o2) == 2
+                        and o2[0].type == CS_OP_REG and "r8" in d2):
+                    pend2 = o2[1].imm if o2[1].type == CS_OP_IMM else None
+                elif i2.mnemonic == "call":
+                    if (len(o2) == 1 and o2[0].type == CS_OP_MEM
+                            and pend2 is not None):
+                        total += pend2 * in_loop.get(idx, 1)
+                    elif (len(o2) == 1 and o2[0].type == CS_OP_REG
+                            and pend2 is not None):
+                        # `call r9` -- an indirect sized read inside a loop
+                        total += pend2 * in_loop.get(idx, 1)
+                    pend2 = None
+            if not total:
+                return None
+            got = ("fixed", total)
+            self._memo[va] = got
+            return got
         if var_read and reads[:1] == [4]:
             self._memo[va] = ("str", 0)
             return self._memo[va]
