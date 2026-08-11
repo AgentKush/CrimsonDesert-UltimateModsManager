@@ -16,12 +16,14 @@ from __future__ import annotations
 
 import random
 
+import pytest
 
 from tests.fixture_loaders import load_vanilla113
 
 from cdumm.engine.schema_verify import (
-    DecodeScore, decode_score, tables_with_verified_order, verified_order,
-    verify_order_source)
+    DecodeScore, decode_score, relative_order_matches,
+    tables_with_verified_order, verified_order, verify_order_source,
+    verify_order_source_relative)
 
 ITEM = "ItemInfo"
 
@@ -167,3 +169,88 @@ def test_decode_score_at_least_ordering():
     b = DecodeScore(100, 4.0, 0.0, "x")
     assert a.at_least(b)
     assert not b.at_least(a)
+
+
+# ── superset candidates: relative_order_matches ──────────────────────────
+#
+# A reflection-derived order names the fields the binary has an error string
+# for. That set overlaps the shipped schema without equalling it in either
+# direction, so `cand == truth` rejects it for being differently shaped
+# rather than for being wrong. These pin the weaker check that does carry
+# information — and pin that it is genuinely weaker, so it cannot be
+# mistaken for the real gate.
+
+
+def test_relative_order_passes_the_ground_truth():
+    r = relative_order_matches(ITEM, verified_order(ITEM))
+    assert r.matches
+    assert r.complete
+    assert r.shared == verified_order(ITEM)
+    assert r.candidate_only == [] and r.verified_only == []
+
+
+def test_relative_order_still_rejects_a_scrambled_order():
+    r = relative_order_matches(ITEM, list(reversed(verified_order(ITEM))))
+    assert not r.matches
+    assert r.first_divergence == 0
+
+
+def test_relative_order_catches_one_field_moved_to_the_end():
+    """The cold-block failure mode, in the abstract.
+
+    One field relocated to the end is the whole bug the Windows extractor
+    had, so the check must fail on exactly that and not shrug it off as a
+    shape difference.
+    """
+    truth = verified_order(ITEM)
+    moved = truth[:5] + truth[6:] + [truth[5]]
+    r = relative_order_matches(ITEM, moved)
+    assert not r.matches
+    assert r.first_divergence == 5
+    assert r.complete, "no field was dropped, only moved"
+
+
+def test_relative_order_tolerates_extra_names_but_reports_them():
+    truth = verified_order(ITEM)
+    cand = ["_someFieldTheSchemaLacks"] + truth + ["_andAnother"]
+    r = relative_order_matches(ITEM, cand)
+    assert r.matches
+    assert r.candidate_only == ["_someFieldTheSchemaLacks", "_andAnother"]
+    assert r.complete
+
+
+def test_a_matching_but_incomplete_candidate_is_not_complete():
+    """Matching on shared names does not earn `_ordered_fields`.
+
+    A source that omits fields cannot place them, so `complete` is what
+    separates "corroborates the order" from "can be the order".
+    """
+    truth = verified_order(ITEM)
+    r = relative_order_matches(ITEM, truth[:-3])
+    assert r.matches
+    assert not r.complete
+    assert r.verified_only == truth[-3:]
+
+
+def test_relative_order_is_weaker_than_identity_and_says_so():
+    """A candidate the strict gate rejects can pass the relative one.
+
+    That is the point, and it is also the risk: this asserts the gap
+    exists so nobody swaps one for the other by accident.
+    """
+    truth = verified_order(ITEM)
+    cand = truth[:20]                             # a correct prefix only
+    assert verify_order_source({ITEM: cand}).trustworthy is False
+    assert relative_order_matches(ITEM, cand).matches is True
+
+
+def test_relative_order_raises_for_a_table_with_no_verified_order():
+    with pytest.raises(KeyError):
+        relative_order_matches("NoSuchTableInfo", ["_a", "_b"])
+
+
+def test_verify_relative_skips_uncovered_tables_rather_than_failing_them():
+    results = verify_order_source_relative({ITEM: verified_order(ITEM)})
+    assert [r.table for r in results] == [ITEM]
+    assert all(r.matches for r in results)
+    assert verify_order_source_relative({}) == []

@@ -29,12 +29,20 @@ A candidate order source is a mapping::
    real records", not "someone said so"), and it flags gross corruption.
 
    It is corroboration, NOT the primary gate, and it has a known blind
-   spot: two fields of the same width, swapped upstream of the point where
-   the walker stalls, decode identically — the byte count doesn't move.
-   Order-identity is what catches those. The decode score's sharpness also
-   scales with how far the walker reaches (it stalls early on some tables
-   until their nested types are modelled), so it is reported, weighed, but
-   never trusted alone.
+   spot. The narrow statement is that two fields of the same width, swapped
+   upstream of where the walker stalls, decode identically — the byte count
+   doesn't move. The blind spot is actually WIDER than that: the score is a
+   function of bytes consumed, so **any** rearrangement preserving the total
+   width over a span is invisible to it, not only swaps of equal-width
+   pairs. Measured: reordering six of CharacterInfo's fields (moving two u8s
+   from before a u16 + two u64s + a u8 to after them) leaves the score
+   unchanged at 14/14 fields on 100% of records. Order-identity is what
+   catches those, and where two orders disagree only in that way the decode
+   score cannot referee at all — that needs ``value_agreement``.
+
+   The decode score's sharpness also scales with how far the walker reaches
+   (it stalls early on some tables until their nested types are modelled),
+   so it is reported, weighed, but never trusted alone.
 
 Order-identity is the workhorse; the decode score keeps it honest. A
 source that fails EITHER on any known table is rejected. A source that
@@ -614,3 +622,99 @@ def verify_order_source(
             decode_ok=decode_ok,
         ))
     return report
+
+
+# ── superset candidates ──────────────────────────────────────────────────
+#
+# `verify_order_source` compares with `cand == truth`, which is the right
+# test for a candidate that claims to be a table's COMPLETE order. Some
+# sources are not that shape. A reflection-derived order names every field
+# the binary has a read-error string for, which can be more fields than the
+# shipped schema models (CharacterInfo: 190 named vs 164 in the schema) and
+# fewer than it in the other direction (9 CharacterInfo fields have no error
+# string at all). It also uses the binary's real names where the schema
+# still carries hand-written placeholders (`_characterName` vs `_stringKey2`).
+#
+# Exact equality rejects such a source for being differently-shaped rather
+# than for being wrong, which tells you nothing. The test that does carry
+# information is whether the two agree on the fields they BOTH name, in
+# order. That still catches the failure that matters -- a field in the wrong
+# slot -- while not penalising a source for knowing more or less.
+#
+# This is deliberately weaker than `verify_order_source` and does not
+# replace it. A superset source earns the right to CORROBORATE a verified
+# order, or to supply order for tables that have none; it does not earn
+# `_ordered_fields` on its own, because the fields it omits still have to
+# be placed by something.
+
+
+@dataclass
+class RelativeOrderResult:
+    table: str
+    shared: list[str]              # fields both orders name, verified order
+    candidate_sequence: list[str]  # the same fields, in candidate order
+    first_divergence: int | None   # index into `shared`, None if identical
+    candidate_only: list[str]      # named by candidate, absent from verified
+    verified_only: list[str]       # in verified order, candidate never names
+
+    @property
+    def matches(self) -> bool:
+        return self.first_divergence is None
+
+    @property
+    def complete(self) -> bool:
+        """True when the candidate names every verified field.
+
+        A candidate that matches but is not complete cannot become
+        ``_ordered_fields`` by itself: the fields in ``verified_only`` have
+        no position from this source.
+        """
+        return not self.verified_only
+
+    def summary(self) -> str:
+        tag = "MATCH" if self.matches else f"DIVERGES@{self.first_divergence}"
+        return (f"{self.table:<16} {tag}  shared={len(self.shared)}"
+                f" cand_only={len(self.candidate_only)}"
+                f" unplaced={len(self.verified_only)}")
+
+
+def relative_order_matches(table: str, candidate: list[str]
+                           ) -> RelativeOrderResult:
+    """Check ``candidate`` against ``table``'s verified order, on shared names.
+
+    Raises ``KeyError`` if ``table`` has no verified order to check against.
+    """
+    truth = verified_order(table)
+    if not truth:
+        raise KeyError(f"{table} has no verified _ordered_fields")
+    pos = {f: i for i, f in enumerate(candidate)}
+    tset = set(truth)
+    shared = [f for f in truth if f in pos]
+    seq = sorted(shared, key=lambda f: pos[f])
+    div = next((i for i, (a, b) in enumerate(zip(shared, seq)) if a != b),
+               None)
+    return RelativeOrderResult(
+        table=table,
+        shared=shared,
+        candidate_sequence=seq,
+        first_divergence=div,
+        candidate_only=[f for f in candidate if f not in tset],
+        verified_only=[f for f in truth if f not in pos],
+    )
+
+
+def verify_order_source_relative(candidate: dict[str, list[str]]
+                                 ) -> list[RelativeOrderResult]:
+    """``relative_order_matches`` over every table with a verified order.
+
+    Tables the candidate does not cover are omitted rather than failed --
+    coverage is reported by the caller, which can weigh it separately.
+    """
+    parser_mod._loaded_schemas = None
+    out = []
+    for table in tables_with_verified_order():
+        cand = candidate.get(table)
+        if not cand:
+            continue
+        out.append(relative_order_matches(table, cand))
+    return out

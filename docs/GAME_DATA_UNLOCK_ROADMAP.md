@@ -177,8 +177,32 @@ have (2026-07-11): the Korean error-string machinery is present (4362
 "read", 5309 "fail" strings) and 105/113 ItemInfo field names are present —
 but the names are **not** laid out in order (longest ordered, packed run =
 2 fields). They're pointer-referenced from descriptor structs, so on Windows
-you still need IDA on the reader functions. **The Mac binary is the
-artifact that makes this a regex instead of an RE project.**
+the string table alone is not enough.
+
+**Update (2026-08-10) — Windows works too, and it did not need IDA.**
+`tools/extract_field_order_win.py` orders fields by the *code* that
+references each string rather than by the string table, and reproduces
+ItemInfo's verified order exactly on all **101** fields it shares with the
+shipped schema. It is a scripted `capstone` sweep, not an interactive RE
+session. Two things had to be right:
+
+* each field's error string has exactly one rip-relative `lea` xref, and all
+  of a class's xrefs sit inside one densely packed deserializer
+  (CharacterInfo: 190 xrefs across 9.3 KB, no gap above 512 bytes);
+* ordering must key on the **hot-path branch reaching the error block**, not
+  the `lea`'s own address — conditionally read fields get their error block
+  outlined to the end of the function, and the address sort silently drops
+  them to the end of the table.
+
+So the earlier conclusion was too pessimistic about Windows, but right about
+one thing: this is not a regex. See `docs/EXTRACT_FIELD_ORDER.md`.
+
+**The Mac binary still buys something the Windows route cannot.** The
+Windows method only names fields that *have* an error string — 12 of
+ItemInfo's 113 and 9 of CharacterInfo's 164 are never named — so it
+corroborates an order and supplies order for unknown tables, but it cannot
+be a table's complete `_ordered_fields` by itself. If the macOS build is
+obtainable it remains the better artifact; it is no longer a prerequisite.
 
 Concrete next step for this path: obtain the macOS build of Crimson Desert
 (same game, Steam macOS depot), scan its per-class Korean error strings for
@@ -278,11 +302,26 @@ big win available, and the licence is clean (MIT, with attribution).
       + `tests/test_schema_verify.py`. Any order source now runs through
       `verify_order_source` before it is trusted. This was the answer to
       "who's to say the rest works."
-- [ ] **Path C′ (macOS binary) is now the recommended first attempt** — it
-      is a regex over unstripped Korean error strings, per NattKh's MPL-2.0
-      method doc, not a live hook or a disassembly. Get the macOS build,
-      extract per-class field order, run it through §4a. Far cheaper than
-      Path C if it pans out.
+- [x] **Path C′ on the WINDOWS exe — DONE, partially.**
+      `tools/extract_field_order_win.py` recovers read order from the exe we
+      already have, by xref position rather than string-table position, and
+      reproduces ItemInfo's verified order on all 101 shared fields. Covers
+      only fields that have an error string, so it corroborates an order
+      rather than replacing one. §4a gained
+      `verify_order_source_relative` to judge such a source honestly.
+- [ ] **Path C′ (macOS binary) — still worth getting, no longer a
+      prerequisite.** Its strings are in read order *and* it names the
+      fields the Windows route misses, so it is the artifact that turns a
+      corroborating source into a complete one. Get the macOS build, extract
+      per-class field order, run it through §4a.
+- [ ] **Settle the four disagreements the byte oracle cannot referee.**
+      Where the Windows order disagrees with a verified one (CharacterInfo,
+      StageInfo, RegionInfo, WantedInfo) `decode_score` scores both
+      identically — it counts bytes consumed, so any width-preserving
+      rearrangement is invisible to it. Splicing the extracted CharacterInfo
+      order into the verified one leaves both at 14/14 fields on 100% of
+      records. These need `value_agreement`, not more disassembly, and until
+      then they are open questions rather than conflicts.
 - [ ] **Path C (ASI reader-order hook)** stays the durable, version-proof
       fallback for whatever the Mac scan can't resolve. The reflection
       metadata is unencrypted in the exe (§4); the live hook observes
