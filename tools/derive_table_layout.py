@@ -281,9 +281,17 @@ class Deriver:
                 return None, name
         return p, None
 
-    def tiles(self, body, ent, key_size, fields, elem) -> bool:
-        """Exact tiling on EVERY record, or False. No partial credit."""
-        for i, (_k, o) in enumerate(ent):
+    def tiles(self, body, ent, key_size, fields, elem, subset=None) -> bool:
+        """Exact tiling on EVERY record, or False. No partial credit.
+
+        ``subset`` restricts which records are checked, used only to PRUNE
+        a search: a width that tiles all records must also tile any subset,
+        so a subset failure is a sound rejection. Every survivor is then
+        re-checked against the full table before it is believed.
+        """
+        rng = subset if subset is not None else range(len(ent))
+        for i in rng:
+            o = ent[i][1]
             end = ent[i + 1][1] if i + 1 < len(ent) else len(body)
             if o + key_size + 4 > end:
                 return False
@@ -293,6 +301,37 @@ class Deriver:
             if got != end:
                 return False
         return True
+
+    def search(self, body, ent, key_size, fields, unknown: list[int]):
+        """Every element-width assignment that tiles the WHOLE table.
+
+        One or two unknowns. Two is 128*128, so a spread of records prunes
+        first and only survivors are verified in full -- sound, because a
+        subset failure cannot be a false rejection.
+        """
+        n = len(ent)
+        step = max(1, n // 24)
+        probe = list(range(0, n, step))[:24] or [0]
+
+        if len(unknown) == 1:
+            c = unknown[0]
+            cheap = [e for e in range(1, MAX_ELEM + 1)
+                     if self.tiles(body, ent, key_size, fields,
+                                   {**self.elem, c: e}, probe)]
+            return [(e,) for e in cheap
+                    if self.tiles(body, ent, key_size, fields,
+                                  {**self.elem, c: e})]
+
+        a, b = unknown
+        cheap = []
+        for ea in range(1, MAX_ELEM + 1):
+            for eb in range(1, MAX_ELEM + 1):
+                if self.tiles(body, ent, key_size, fields,
+                              {**self.elem, a: ea, b: eb}, probe):
+                    cheap.append((ea, eb))
+        return [(ea, eb) for ea, eb in cheap
+                if self.tiles(body, ent, key_size, fields,
+                              {**self.elem, a: ea, b: eb})]
 
 
 def load_table(game: Path, stem: str):
@@ -412,18 +451,41 @@ def main(argv: list[str] | None = None) -> int:
                 if d.tiles(body, ent, ks, f, d.elem):
                     proven[stem] = len(ent)
                 continue
-            if len(unknown) != 1:
+            if len(unknown) > 2:
                 continue
-            hits = [e for e in range(1, MAX_ELEM + 1)
-                    if d.tiles(body, ent, ks, f, {**d.elem, unknown[0]: e})]
-            if len(hits) == 1:
-                d.elem[unknown[0]] = hits[0]
+
+            sols = d.search(body, ent, ks, f, unknown)
+            if not sols:
+                continue
+
+            # A reader is determined when EVERY tiling solution agrees on
+            # it. With two unknowns that is strictly more informative than
+            # all-or-nothing: one reader can be pinned while the other is
+            # left unconstrained (its lists are empty in this table, so
+            # nothing here can speak to it). Extracting the pinned one is
+            # safe; assuming the free one is not.
+            pinned = {}
+            for i, c in enumerate(unknown):
+                vals = {s[i] for s in sols}
+                if len(vals) == 1:
+                    pinned[c] = next(iter(vals))
+            note = ""
+            if len(unknown) == 2:
+                note = (", both of 2 unknowns" if len(pinned) == 2
+                        else ", 1 of 2 unknowns (the other is unconstrained "
+                             "here)")
+            for c, e in pinned.items():
+                if c not in d.elem:
+                    d.elem[c] = e
+                    added += 1
+                    print(f"  round {rnd}: sub_{c:X} = 4 + count*{e}"
+                          f"   (from {stem}, {len(ent)} records{note})")
+            if len(pinned) == len(unknown):
                 proven[stem] = len(ent)
-                added += 1
-                print(f"  round {rnd}: sub_{unknown[0]:X} = 4 + count*"
-                      f"{hits[0]}   (from {stem}, {len(ent)} records)")
-            elif hits:
-                ambiguous[stem] = hits
+            else:
+                free = [c for c in unknown if c not in pinned]
+                ambiguous[stem] = sorted({s[unknown.index(free[0])]
+                                          for s in sols})
         if not added:
             break
 
