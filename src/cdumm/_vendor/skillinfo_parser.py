@@ -12,6 +12,17 @@ Field order and sizes reverse-engineered from IDA decompilation of
 SkillInfo::readEntryFields (sub_1410F8680) and BuffData factory
 (sub_1419D8660), validated against game baselines 1.0.0.3 and 1.0.0.4.
 
+MODIFICATIONS (this file is MPL-2.0; changes below are marked as required)
+-------------------------------------------------------------------------
+* CD 1.16 support (CDUMM GitHub #355): the game inserted a u8,
+  ``_isNoAlert``, between ``_isUseChildPatternDescriptionBuffData`` and
+  ``_damageType``, making the run of six consecutive u8 flags seven. Adds
+  the ``_has_is_no_alert`` layout flag, reads/writes the field when it is
+  set, widens the flag-run skip in ``_try_parse_post_buff`` to match, and
+  detects the layout per table in ``_detect_is_no_alert``. Without it the
+  1.16 table parsed 1424 of 2013 entries; with it, 2013 of 2013, all
+  byte-exact. Pre-1.16 tables are unaffected and still parse 1999 of 1999.
+
 BODY LAYOUT (sequential from entry header):
   u8   _isBlocked
   3B   _pad_01
@@ -107,6 +118,17 @@ def _p_list_u16(lst): return struct.pack("<I", len(lst)) + b"".join(struct.pack(
 
 # Format version: True = has field_58 (1.0.0.4+), False = no field_58 (1.0.0.3)
 _has_field_58: bool = True  # default to newer format
+
+# CD 1.16 inserted ``_isNoAlert``, a u8, between
+# ``_isUseChildPatternDescriptionBuffData`` and ``_damageType`` -- turning the
+# run of six consecutive u8 flags into seven. The field is named by the game
+# binary's own reflection data (SkillInfo index 25, between indices 24 and 26),
+# and every record on that build is exactly one byte longer than its 1.13
+# counterpart.
+#
+# Defaults False so a caller that never runs detection keeps the pre-1.16
+# behaviour. ``parse_all`` detects it per table; see ``_detect_is_no_alert``.
+_has_is_no_alert: bool = False
 
 
 def _read_buff_common_base(body, p):
@@ -234,7 +256,7 @@ def _try_parse_post_buff(body, p):
         if p > body_len: return None
 
         p += 8  # _useBatteryStat
-        p += 6  # 6 u8 flags
+        p += 7 if _has_is_no_alert else 6  # u8 flag run (+_isNoAlert on 1.16)
         if p > body_len: return None
 
         cnt = struct.unpack_from("<I", body, p)[0]  # _reserveSlotInfoList
@@ -363,6 +385,8 @@ def _read_post_buff(body, p):
     f["_isLearnUseArtifact"] = body[p]; p += 1
     f["_allowSkillWithLowResource"] = body[p]; p += 1
     f["_isUseChildPatternDescriptionBuffData"] = body[p]; p += 1
+    if _has_is_no_alert:
+        f["_isNoAlert"] = body[p]; p += 1
     f["_damageType"] = body[p]; p += 1
     f["_uiType"] = body[p]; p += 1
 
@@ -416,6 +440,8 @@ def _serialize_post_buff(f):
     parts.append(_p_u8(f["_isLearnUseArtifact"]))
     parts.append(_p_u8(f["_allowSkillWithLowResource"]))
     parts.append(_p_u8(f["_isUseChildPatternDescriptionBuffData"]))
+    if _has_is_no_alert:
+        parts.append(_p_u8(f["_isNoAlert"]))
     parts.append(_p_u8(f["_damageType"]))
     parts.append(_p_u8(f["_uiType"]))
     parts.append(_p_list_u32(f["_reserveSlotInfoList"]))
@@ -465,6 +491,43 @@ def _try_parse_remaining(body, p, remaining_buffs, remaining_levels, body_end):
         return result == body_end
     except (struct.error, IndexError):
         return False
+
+
+def _detect_is_no_alert(index, pabgb_bytes, sample=80):
+    """Auto-detect whether this table's records carry ``_isNoAlert``.
+
+    Decided per TABLE, not per record, and that is deliberate. A single
+    record cannot tell the two layouts apart: ``_find_post_buff_start``
+    brute-forces a start offset and accepts any position where the reader
+    lands exactly on the record end, so on a 1.16 record the pre-1.16
+    reader simply starts one byte late and still finishes exactly on the
+    end. It then round-trips byte-exact as well, because it writes back
+    what it read. Both signals a single record can offer are therefore
+    blind to the difference; only the aggregate separates them.
+
+    Aggregate is decisive: on the CD 1.16 table the pre-1.16 layout parses
+    1424 of 2013 records against 2013 of 2013 for the 1.16 layout, and on
+    the CD 1.13 table the comparison reverses (1999 vs 1576).
+    """
+    global _has_is_no_alert
+    best, best_ok = _has_is_no_alert, -1
+    for candidate in (False, True):
+        _has_is_no_alert = candidate
+        ok = 0
+        step = max(1, len(index) // sample)
+        for i in range(0, len(index), step):
+            offset = index[i][1]
+            end = (index[i + 1][1] if i + 1 < len(index)
+                   else len(pabgb_bytes))
+            try:
+                parse_skill_entry(pabgb_bytes, offset, end)
+            except (ValueError, struct.error, IndexError, AssertionError):
+                continue
+            ok += 1
+        if ok > best_ok:
+            best, best_ok = candidate, ok
+    _has_is_no_alert = best
+    return best
 
 
 def _detect_format(body):
@@ -736,6 +799,11 @@ def parse_all(pabgh_bytes, pabgb_bytes):
             if bc > 0 and body[12] == 0:  # flag == 0 means non-null buff
                 _has_field_58 = _detect_format(body)
                 break
+
+    # Then the u8-flag-run width. Runs after _detect_format because it
+    # parses whole entries, which depends on _has_field_58 already being
+    # settled.
+    _detect_is_no_alert(index, pabgb_bytes)
 
     entries = []
     for i, (key, offset) in enumerate(index):
