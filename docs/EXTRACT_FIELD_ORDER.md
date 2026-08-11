@@ -65,28 +65,49 @@ immediately after the field's read, in true sequence, outlined or not. With that
 
 An error string proves a field exists **on the type** and is read by the
 deserializer. It says nothing about whether that field occupies bytes **in the
-record body**. Two measured counterexamples:
+record body**. The measured counterexample:
 
 | field | named by exe | in the record body |
 |---|---|---|
 | `_stringKey` / `_key` | yes | **no** — the entry header consumes them; `_stringKey` *is* the entry name |
-| `SkillInfo._isNoAlert` | yes | **no** — see below |
 
-`_isNoAlert` is the sharper one because it looks so much like a fix.
-`_vendor/skillinfo_parser` reads **six** consecutive `u8` flags; the exe names
-**seven**, with `_isNoAlert` between `_isUseChildPatternDescriptionBuffData` and
-`_damageType`. A missing one-byte field is exactly the shape of the bug in
-[#355](https://github.com/faisalkindi/CrimsonDesert-UltimateModsManager/issues/355),
-where 29% of skill entries fail to parse. Adding it:
-
-```
-as shipped (6 flags)      1,424 / 2,013   (70.7%)
-+ _isNoAlert (7 flags)      449 / 2,013   (22.3%)     -975 entries
-```
+Splicing this tool's order into a verified one without pinning those two takes
+RegionInfo's walker from a median of 21 fields to 2, on the live table.
 
 Treat the output as an order over the fields that **are** serialised, not as a
-list of what to read. A field this tool names that a walker does not consume is
-a hypothesis; only decoding real records settles it.
+list of what to read.
+
+#### But do not over-apply this
+
+A named field a walker skips is **far more often a real missing field** than a
+memory-only one, and this very caveat was used to wave away a genuine bug.
+
+`SkillInfo._isNoAlert` (index 25) is named here and was not read by
+`_vendor/skillinfo_parser`, which took a run of seven consecutive `u8` flags for
+six. **It is serialised**, and inserting it is the fix for
+[#355](https://github.com/faisalkindi/CrimsonDesert-UltimateModsManager/issues/355)
+— 2013/2013 records on CD 1.16, up from 1424.
+
+An earlier revision of this page cited it as a counterexample, on the strength
+of a measurement showing 449/2013. **That measurement was wrong.** It patched
+the field *reader* without widening the matching flag-run skip in the boundary
+probe, so the brute-force search then landed on wrong offsets. The field was
+right; the test of it was incomplete.
+
+So the lesson is narrower than "distrust the tool":
+
+> Decide with an **aggregate decode over a whole table, on both an old and a new
+> build**. Per-record signals cannot referee. The boundary search makes a wrong
+> layout land exactly on the record end, and the record then round-trips
+> byte-exact too — because it writes back whatever it read.
+
+The aggregate is decisive where per-record evidence is blind:
+
+```
+layout      CD 1.13          CD 1.16
+6 flags     1999/1999        1424/2013
+7 flags     1576/1999        2013/2013
+```
 
 ### Two things it does not give you
 

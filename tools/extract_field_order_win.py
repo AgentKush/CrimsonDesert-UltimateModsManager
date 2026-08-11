@@ -72,16 +72,32 @@ Two measured counterexamples:
     them -- `_stringKey` IS the entry name. Splicing this order into a
     verified one without pinning those two takes RegionInfo's walker from
     a median of 21 fields to 2.
-  * `SkillInfo._isNoAlert` is named, and sits in a run of seven
-    consecutive `u8` flags where `_vendor/skillinfo_parser` reads only
-    six. Adding it as the obvious missing byte takes skill parsing from
-    1,424/2,013 entries (70.7%) to 449/2,013 (22.3%). It is not in the
-    record body. (GitHub #355.)
-
 So treat the output as an ORDER over the fields that are serialised, not
 as a list of what to read. A field this tool names and a walker does not
 consume is a hypothesis, and the only thing that settles it is decoding
 real records.
+
+DO NOT OVER-APPLY THAT. A named field the walker skips is far more often a
+real missing field than a memory-only one, and this caveat has already
+been used to wave away a genuine bug:
+
+    `SkillInfo._isNoAlert` (index 25) is named here and was not read by
+    `_vendor/skillinfo_parser`, which took a run of seven consecutive u8
+    flags for six. It IS serialised, and inserting it is the fix for
+    GitHub #355 -- 2013/2013 records on CD 1.16, up from 1424.
+
+    An earlier revision of this file cited it as a counterexample on the
+    strength of a measurement showing 449/2013. That measurement was
+    wrong: it patched the field READER without widening the matching
+    flag-run skip in the boundary probe, so the brute-force search then
+    landed on the wrong offsets. The field was right; the test of it was
+    incomplete.
+
+The lesson is narrower than "distrust the tool". It is: decide with an
+AGGREGATE decode over a whole table, on both an old and a new build.
+Per-record signals cannot referee here -- the boundary search makes a
+wrong layout land exactly on the record end, and the record then
+round-trips byte-exact too, because it writes back whatever it read.
 
 Requires `capstone` and `pefile`, which are analysis-only and deliberately
 not runtime dependencies of the app::
