@@ -54,6 +54,11 @@ DERIVED = {
     "MercenaryInfo": 21,
     "SocketInfo": 2,
     "TerrainRegionNaviInfo": 19,
+    "AIMemoryInfo": 3,
+    "ContentsPhaseInfo": 3,
+    "FactionOperationGroupInfo": 9,
+    "HouseInfo": 4,
+    "ZoneInfo": 6,
 }
 
 

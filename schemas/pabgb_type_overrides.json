@@ -1669,5 +1669,180 @@
     "_isForestRegion": {
       "type": "u8"
     }
+  },
+  "AIMemoryInfo": {
+    "_meta_note": "Derived 2026-08-11 from game buildid 24613230 by tools/derive_table_layout.py. Field ORDER comes from the exe's reflection error strings ordered by the hot-path branch that reaches each error block (tools/extract_field_order_win.py). Field WIDTHS come from the sized reads in the deserializer, with count-prefixed list element widths solved against the table data under a unique-or-nothing rule. PROOF: the walk consumes every one of this table's 3 records to its exact last byte, and no other shape in the format's documented grammar does. _stringKey/_key are omitted because the entry header consumes them. _verified_fields is EMPTY on purpose: tiling proves the structure and each field's offset, NOT what any field means, so nothing here may be presented as a fact or written to until its values are cross-checked.",
+    "_no_null_skip": true,
+    "_ordered_fields": [
+      "_isBlocked"
+    ],
+    "_verified_fields": [],
+    "_isBlocked": {
+      "type": "u8"
+    }
+  },
+  "ContentsPhaseInfo": {
+    "_meta_note": "Derived 2026-08-11 from game buildid 24613230 by tools/derive_table_layout.py. Field ORDER comes from the exe's reflection error strings ordered by the hot-path branch that reaches each error block (tools/extract_field_order_win.py). Field WIDTHS come from the sized reads in the deserializer, with count-prefixed list element widths solved against the table data under a unique-or-nothing rule. PROOF: the walk consumes every one of this table's 3 records to its exact last byte, and no other shape in the format's documented grammar does. _stringKey/_key are omitted because the entry header consumes them. _verified_fields is EMPTY on purpose: tiling proves the structure and each field's offset, NOT what any field means, so nothing here may be presented as a fact or written to until its values are cross-checked.",
+    "_no_null_skip": true,
+    "_ordered_fields": [
+      "_isBlocked",
+      "_contentsPhaseType",
+      "_cameraPresetNameHash",
+      "_cameraPivotOffsetYRatio",
+      "_activeCursorMode",
+      "_playGlobalStageSequencer",
+      "_hidePlayer",
+      "_checkActivatedGamePlayTrigger",
+      "_useHousingPlacement",
+      "_useChangeHouse",
+      "_housingPlacementLimit",
+      "_enableButtonUITemplateName",
+      "_disableButtonUITemplateName",
+      "_enableButtonUIComponentName",
+      "_disableButtonUIComponentName",
+      "_uiItemListMercenaryInfo",
+      "_uiTitleLocalString",
+      "_uiTextureIconPath",
+      "_uiListEmptyLocalString",
+      "_uiListExceedWarningLocalString",
+      "_cameraPivotTargetLevelGimmickSceneObjectInfo"
+    ],
+    "_verified_fields": [],
+    "_isBlocked": {
+      "type": "u8"
+    },
+    "_contentsPhaseType": {
+      "type": "u8"
+    },
+    "_cameraPresetNameHash": {
+      "type": "u32"
+    },
+    "_cameraPivotOffsetYRatio": {
+      "type": "u32"
+    },
+    "_activeCursorMode": {
+      "type": "u8"
+    },
+    "_playGlobalStageSequencer": {
+      "type": "u8"
+    },
+    "_hidePlayer": {
+      "type": "u8"
+    },
+    "_checkActivatedGamePlayTrigger": {
+      "type": "u8"
+    },
+    "_useHousingPlacement": {
+      "type": "u8"
+    },
+    "_useChangeHouse": {
+      "type": "u8"
+    },
+    "_housingPlacementLimit": {
+      "type": "u32"
+    },
+    "_enableButtonUITemplateName": {
+      "type": "u32"
+    },
+    "_disableButtonUITemplateName": {
+      "type": "u32"
+    },
+    "_enableButtonUIComponentName": {
+      "type": "u32"
+    },
+    "_disableButtonUIComponentName": {
+      "type": "u32"
+    },
+    "_uiItemListMercenaryInfo": {
+      "type": "u8"
+    },
+    "_uiTitleLocalString": {
+      "type": "u32"
+    },
+    "_uiTextureIconPath": {
+      "type": "u32"
+    },
+    "_uiListEmptyLocalString": {
+      "type": "u32"
+    },
+    "_uiListExceedWarningLocalString": {
+      "type": "u32"
+    },
+    "_cameraPivotTargetLevelGimmickSceneObjectInfo": {
+      "type": "u32"
+    }
+  },
+  "FactionOperationGroupInfo": {
+    "_meta_note": "Derived 2026-08-11 from game buildid 24613230 by tools/derive_table_layout.py. Field ORDER comes from the exe's reflection error strings ordered by the hot-path branch that reaches each error block (tools/extract_field_order_win.py). Field WIDTHS come from the sized reads in the deserializer, with count-prefixed list element widths solved against the table data under a unique-or-nothing rule. PROOF: the walk consumes every one of this table's 9 records to its exact last byte, and no other shape in the format's documented grammar does. _stringKey/_key are omitted because the entry header consumes them. _verified_fields is EMPTY on purpose: tiling proves the structure and each field's offset, NOT what any field means, so nothing here may be presented as a fact or written to until its values are cross-checked.",
+    "_no_null_skip": true,
+    "_ordered_fields": [
+      "_isBlocked",
+      "_initialVariable",
+      "_devMemo",
+      "_mainGroupLocalStringInfo",
+      "_name",
+      "_iconPathStringInfo"
+    ],
+    "_verified_fields": [],
+    "_isBlocked": {
+      "type": "u8"
+    },
+    "_initialVariable": {
+      "type": "u8"
+    },
+    "_devMemo": {
+      "type": "CString"
+    },
+    "_mainGroupLocalStringInfo": {
+      "type": "u32"
+    },
+    "_name": {
+      "type": "LocalizableString"
+    },
+    "_iconPathStringInfo": {
+      "type": "u32"
+    }
+  },
+  "HouseInfo": {
+    "_meta_note": "Derived 2026-08-11 from game buildid 24613230 by tools/derive_table_layout.py. Field ORDER comes from the exe's reflection error strings ordered by the hot-path branch that reaches each error block (tools/extract_field_order_win.py). Field WIDTHS come from the sized reads in the deserializer, with count-prefixed list element widths solved against the table data under a unique-or-nothing rule. PROOF: the walk consumes every one of this table's 4 records to its exact last byte, and no other shape in the format's documented grammar does. _stringKey/_key are omitted because the entry header consumes them. _verified_fields is EMPTY on purpose: tiling proves the structure and each field's offset, NOT what any field means, so nothing here may be presented as a fact or written to until its values are cross-checked.",
+    "_no_null_skip": true,
+    "_ordered_fields": [
+      "_isBlocked",
+      "_houseName",
+      "_unlockConditionInfo",
+      "_houseRegionDataList",
+      "_floorHeight"
+    ],
+    "_verified_fields": [],
+    "_isBlocked": {
+      "type": "u8"
+    },
+    "_houseName": {
+      "type": "LocalizableString"
+    },
+    "_unlockConditionInfo": {
+      "type": "u32"
+    },
+    "_houseRegionDataList": {
+      "type": "CArray<[u8;46]>"
+    },
+    "_floorHeight": {
+      "type": "u32"
+    }
+  },
+  "ZoneInfo": {
+    "_meta_note": "Derived 2026-08-11 from game buildid 24613230 by tools/derive_table_layout.py. Field ORDER comes from the exe's reflection error strings ordered by the hot-path branch that reaches each error block (tools/extract_field_order_win.py). Field WIDTHS come from the sized reads in the deserializer, with count-prefixed list element widths solved against the table data under a unique-or-nothing rule. PROOF: the walk consumes every one of this table's 6 records to its exact last byte, and no other shape in the format's documented grammar does. _stringKey/_key are omitted because the entry header consumes them. _verified_fields is EMPTY on purpose: tiling proves the structure and each field's offset, NOT what any field means, so nothing here may be presented as a fact or written to until its values are cross-checked.",
+    "_no_null_skip": true,
+    "_ordered_fields": [
+      "_isBlocked",
+      "_prefabPath"
+    ],
+    "_verified_fields": [],
+    "_isBlocked": {
+      "type": "u8"
+    },
+    "_prefabPath": {
+      "type": "CString"
+    }
   }
 }

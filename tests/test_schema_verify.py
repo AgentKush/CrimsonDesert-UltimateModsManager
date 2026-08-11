@@ -53,13 +53,16 @@ DERIVED = {"AIDialogTypeInfo", "BreakableObjectInfo", "CategoryGroupInfo",
            "GimmickEventTableInfo", "JobInfo", "LocalStringInfo",
            "MaterialRelationInfo", "VibratePatternInfo",
            "CharacterAppearanceIndexInfo", "MercenaryInfo",
-           "SocketInfo", "TerrainRegionNaviInfo"}
+           "SocketInfo", "TerrainRegionNaviInfo",
+           "AIMemoryInfo", "ContentsPhaseInfo",
+           "FactionOperationGroupInfo", "HouseInfo",
+           "ZoneInfo"}
 
 
 def test_the_verified_order_set_is_exactly_what_we_expect():
     """A change here must be deliberate, not accidental.
 
-    It grew from 7 to 24 deliberately: the 17 in DERIVED have an
+    It grew from 7 to 29 deliberately: the 22 in DERIVED have an
     `_ordered_fields` proven by exact tiling on 100% of their records, so a
     candidate order source now has to reproduce them too. That is a real
     strengthening of the gate, and the reason it is spelled out rather than
@@ -68,7 +71,7 @@ def test_the_verified_order_set_is_exactly_what_we_expect():
     tabs = tables_with_verified_order()
     assert ITEM in tabs
     assert set(tabs) == HAND_RE | DERIVED
-    assert len(tabs) == 24
+    assert len(tabs) == 29
 
 
 def test_ground_truth_passes_itself():
