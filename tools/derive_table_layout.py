@@ -492,10 +492,17 @@ class Deriver:
     def _apply(self, body, p, end, spec):
         """Advance ``p`` past one reader described by ``spec``.
 
-        ``spec`` is ``(kind, n)``:
-          ('fixed', n)   n bytes
-          ('str',   n)   n bytes, then u32 len + len bytes
-          ('list',  n)   u32 count, then count * n bytes
+        ``spec`` is ``(kind, n)``. The families mirror the format's own
+        grammar, documented in ``semantic/pabgb_types``:
+
+          ('fixed', n)   n bytes                     -- primitive, [T;N]
+          ('str',   n)   n bytes, then u32 len + len -- CString and
+                                                       LocalizableString
+                                                       (which is 13 + n)
+          ('list',  n)   u32 count + count * n       -- CArray<fixed>
+          ('slist', 0)   u32 count + count*(u32 len + len)
+                                                     -- CArray<CString>
+          ('opt',   n)   u8 flag + (n bytes if set)  -- COptional<fixed>
         """
         kind, n = spec
         if kind == "fixed":
@@ -517,6 +524,32 @@ class Deriver:
             if cnt > 100_000 or p + cnt * n > end:
                 return None
             return p + cnt * n
+        if kind == "slist":
+            if p + 4 > end:
+                return None
+            cnt = struct.unpack_from("<I", body, p)[0]
+            p += 4
+            if cnt > 100_000:
+                return None
+            for _ in range(cnt):
+                if p + 4 > end:
+                    return None
+                ln = struct.unpack_from("<I", body, p)[0]
+                p += 4
+                if ln > 2_000_000 or p + ln > end:
+                    return None
+                p += ln
+            return p
+        if kind == "opt":
+            if p + 1 > end:
+                return None
+            flag = body[p]
+            p += 1
+            if flag == 0:
+                return p
+            if flag != 1 or p + n > end:
+                return None       # a real COptional flag is 0 or 1
+            return p + n
         return None
 
     def _consume(self, body, p, end, fields, elem):
