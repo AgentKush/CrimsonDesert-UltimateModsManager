@@ -192,20 +192,30 @@ class Deriver:
         answer = False
         subs: list[int] = []
         pend = None
+        rcx_is_stream = True          # rcx holds the stream on entry
         for i in self.md.disasm(self.img.data[off:off + 600], va):
             o = i.operands
+            dst = i.op_str.split(",")[0].strip()
             if (i.mnemonic in ("mov", "lea") and len(o) == 2
-                    and o[0].type == CS_OP_REG
-                    and "r8" in i.op_str.split(",")[0]):
+                    and o[0].type == CS_OP_REG and "r8" in dst):
                 pend = o[1] if o[1].type in (CS_OP_IMM, CS_OP_MEM) else None
+            elif i.mnemonic in ("mov", "lea") and len(o) == 2 and dst == "rcx":
+                # rcx only still points at the stream if it came from a
+                # register. Loaded from memory or a rip-relative global, it
+                # is some other object -- which is how the hash-lookup
+                # helper is called, and counting that as a stream read is
+                # what refused sub_141297490 and the 10 tables behind it.
+                rcx_is_stream = (i.mnemonic == "mov"
+                                 and o[1].type == CS_OP_REG)
             elif i.mnemonic == "call" and len(o) == 1:
                 if o[0].type == CS_OP_MEM:
                     if pend is not None:          # a SIZED read
                         answer = True
                         break
-                elif o[0].type == CS_OP_IMM:
+                elif o[0].type == CS_OP_IMM and rcx_is_stream:
                     subs.append(o[0].imm)
                 pend = None
+                rcx_is_stream = False             # rcx is clobbered by a call
         if not answer:
             answer = any(self.reads_stream(s, depth + 1, seen) for s in subs)
         self._reads[va] = answer
@@ -230,8 +240,17 @@ class Deriver:
         pend = None
         var_read = False
         has_loop = False
+        rcx_is_stream = True          # rcx holds the stream on entry
         for i in ins:
             o = i.operands
+            _dst = i.op_str.split(",")[0].strip()
+            if (i.mnemonic in ("mov", "lea") and len(o) == 2
+                    and _dst == "rcx"):
+                # See reads_stream: rcx loaded from memory or a global is
+                # not our stream, so a call taking it cannot consume from
+                # the stream.
+                rcx_is_stream = (i.mnemonic == "mov"
+                                 and o[1].type == CS_OP_REG)
             if (i.mnemonic in ("mov", "lea") and len(o) == 2
                     and o[0].type == CS_OP_REG
                     and "r8" in i.op_str.split(",")[0]):
@@ -248,7 +267,9 @@ class Deriver:
                         reads.append(pend)
                     pend = None
                 elif len(o) == 1 and o[0].type == CS_OP_IMM:
-                    subs.append(o[0].imm)
+                    if rcx_is_stream:
+                        subs.append(o[0].imm)
+                rcx_is_stream = False             # a call clobbers rcx
             if (i.mnemonic.startswith("j") and len(o) == 1
                     and o[0].type == CS_OP_IMM and va <= o[0].imm < i.address):
                 has_loop = True
