@@ -21,6 +21,16 @@ _UNRELEASED_NOTES: list[str] = [
 
 CHANGELOG = [
     {
+        "version": "3.12.0",
+        "date": "2026-08-11",
+        "notes": [
+            "<b>Skill mods work again on the current game.</b> The August update added one byte to every record in the game's skill table, and CDUMM could no longer read 589 of its 2,013 entries. Any mod touching one of those skills reported success and changed nothing. Worse, the entries CDUMM did read were being read from one byte too far in, so the first half of each skill's data was wrong without anything looking wrong. Both are fixed: all 2,013 entries now read correctly, and CDUMM works out which layout your game uses instead of assuming.",
+            "<b>Character Creator's Female Animations starts the game again.</b> CDUMM was writing the character's gender value into the wrong place, so the part of the mod that actually switches the character over never happened, and an unrelated slot was overwritten instead. This mod had never once worked in CDUMM, on any version. Confirmed working in game by woowoots (#302), who tested it three times and whose observation that it had never worked is what found the cause.",
+            "<b>Status-group mods apply again.</b> The writer checked the table against a size that was correct when it was written and is not correct now, so it refused every record and reported a layout error. Nothing was wrong with the table. It now measures the size from the file instead of assuming it. Found by AgentKush (#356) while investigating something else.",
+            "Thanks to AgentKush, who found the skill-table break and built the tool that identified the missing field from the game's own data, and to woowoots and lurkser for testing the character fix and reporting results that repeatedly proved earlier theories wrong.",
+        ],
+    },
+    {
         "version": "3.11.0",
         "date": "2026-08-07",
         "notes": [
