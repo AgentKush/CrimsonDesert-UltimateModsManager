@@ -765,6 +765,11 @@ def main(argv: list[str] | None = None) -> int:
     proven: dict[str, int] = {}
     ambiguous: dict[str, list[int]] = {}   # keyed, so a table
     # re-tested on a later round is not reported twice
+    #: reader -> the shapes still permitted by EVERY table seen so far.
+    #: Intersecting across tables is the main source of new answers once
+    #: single-table uniqueness runs out.
+    viable: dict[int, set] = {}
+    crossed: set[int] = set()   # readers pinned only by intersection
     for rnd in range(1, 9):
         added = 0
         for stem in sorted(loaded):
@@ -796,8 +801,18 @@ def main(argv: list[str] | None = None) -> int:
             pinned = {}
             for i, c in enumerate(unknown):
                 vals = {s[i] for s in sols}
+                # Record what THIS table permits for this reader, and
+                # intersect it with what every other table permits. A
+                # reader ambiguous here is often pinned by another table
+                # that uses it, and intersecting constraints is sound in a
+                # way that picking a favourite is not.
+                prev = viable.get(c)
+                viable[c] = vals if prev is None else (prev & vals)
                 if len(vals) == 1:
                     pinned[c] = next(iter(vals))
+                elif len(viable[c]) == 1:
+                    pinned[c] = next(iter(viable[c]))
+                    crossed.add(c)
             note = ""
             if len(unknown) == 2:
                 note = (", both of 2 unknowns" if len(pinned) == 2
@@ -810,8 +825,10 @@ def main(argv: list[str] | None = None) -> int:
                     shape = (f"4 + count*{e[1]}" if e[0] == "list"
                              else f"{e[1]} + str" if e[0] == "str"
                              else f"{e[1]} bytes")
+                    how = (" [by intersecting tables]" if c in crossed
+                           else "")
                     print(f"  round {rnd}: sub_{c:X} = {shape}"
-                          f"   (from {stem}, {len(ent)} records{note})")
+                          f"   (from {stem}, {len(ent)} records{note}){how}")
             if len(pinned) == len(unknown):
                 proven[stem] = len(ent)
             else:
