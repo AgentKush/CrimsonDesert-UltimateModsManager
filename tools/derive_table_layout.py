@@ -120,14 +120,18 @@ MAX_ELEM = 128
 #: build shifts them, and a stale entry then simply fails to match a
 #: callee, which is the safe direction -- it cannot silently apply a wrong
 #: width to the wrong reader.
-HAND_VERIFIED: dict[int, tuple[str, int]] = {
-    # 1 byte, then 8 bytes, then sub_1411A31F0 (the CString) -- so 13 + n.
-    # Stage 1 refuses it because a post-read helper it calls
-    # (sub_1410741B0) makes an unsized vtable call on a container, which
-    # the reads-stream test cannot currently tell apart from a real read.
-    # Proven by tiling localstringinfo exactly on all 43,863 records.
-    0x141071DE0: ("strplus", 9),
-}
+#: Currently EMPTY, and that is the point worth recording.
+#:
+#: It held one entry, sub_141071DE0 = 13 + n, which I read off the
+#: disassembly because stage 1 refused it. Bounding the disassembly to the
+#: function's own end (see ``body``) made stage 1 derive it automatically,
+#: along with 34 other readers. So the hand model was never filling a real
+#: gap in the method -- it was papering over a bug in my scan.
+#:
+#: Kept as a mechanism because a genuinely underivable reader will turn up.
+#: Kept empty, and with this note, because the first thing to suspect about
+#: a reader stage 1 cannot derive is stage 1.
+HAND_VERIFIED: dict[int, tuple[str, int]] = {}
 
 
 def _cs():
@@ -155,6 +159,39 @@ class Deriver:
         self._reads: dict[int, bool] = {}
 
     # ── stage 1: static reader models ────────────────────────────────────
+
+    def body(self, va: int, window: int = 600) -> list:
+        """Instructions of the function at ``va``, STOPPING at its end.
+
+        This is not a nicety. Disassembling a fixed window runs off the end
+        of a short function into whatever follows it, and then attributes
+        the neighbour's loops and calls to this reader. That is how
+        sub_1412656D0 -- literally ``read(4)`` then a tail-call thunk --
+        came out as "contains a loop, refused".
+
+        Worse than the missed win: bytes from an unrelated function could
+        contribute a sized read and produce a WRONG width, which the tiling
+        gate would then have to catch. Better not to generate it.
+
+        The end is the first ``ret`` that no forward branch jumps past. A
+        ``ret`` before the furthest branch target is just one arm of the
+        function, not its end.
+        """
+        from capstone import CS_OP_IMM
+        off = self.img.va_to_off(va)
+        if off is None:
+            return []
+        out = []
+        furthest = va
+        for i in self.md.disasm(self.img.data[off:off + window], va):
+            out.append(i)
+            o = i.operands
+            if (i.mnemonic.startswith("j") and len(o) == 1
+                    and o[0].type == CS_OP_IMM and o[0].imm > furthest):
+                furthest = o[0].imm
+            if i.mnemonic in ("ret", "int3") and i.address >= furthest:
+                break
+        return out
 
     def reads_stream(self, va: int, depth: int = 0,
                      seen: set[int] | None = None) -> bool:
@@ -193,7 +230,7 @@ class Deriver:
         subs: list[int] = []
         pend = None
         rcx_is_stream = True          # rcx holds the stream on entry
-        for i in self.md.disasm(self.img.data[off:off + 600], va):
+        for i in self.body(va):
             o = i.operands
             dst = i.op_str.split(",")[0].strip()
             if (i.mnemonic in ("mov", "lea") and len(o) == 2
@@ -232,7 +269,7 @@ class Deriver:
         off = self.img.va_to_off(va)
         if off is None:
             return None
-        ins = list(self.md.disasm(self.img.data[off:off + 600], va))
+        ins = self.body(va)
         if not ins:
             return None
         reads: list[int] = []
