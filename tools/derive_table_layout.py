@@ -249,6 +249,7 @@ class Deriver:
         self.elem: dict[int, int] = {}
         self._memo: dict[int, tuple[str, int] | None] = {}
         self._reads: dict[int, bool] = {}
+        self._parts: dict[int, list] = {}
 
     # ── stage 1: static reader models ────────────────────────────────────
 
@@ -691,8 +692,14 @@ class Deriver:
         if lo is None:
             return None
 
-        # 3. what the loop body consumes per iteration
-        total = 0
+        # 3. what the loop body consumes per iteration, MEMBER BY MEMBER.
+        # Keeping the sequence rather than only the sum is what lets a
+        # variable-length element still be described: the format can express
+        # `CArray<Substruct>`, so an element of u32 + u32 + CString is
+        # representable even though its width is not constant. Recording the
+        # parts here is what HouseInfo_RegionDataEntry was written by hand
+        # from.
+        parts: list[tuple[str, int]] = []
         pend = None
         for i in ins[lo:hi + 1]:
             o = i.operands
@@ -709,7 +716,7 @@ class Deriver:
                 if o[0].type == CS_OP_MEM:
                     if pend is None:
                         return None       # unsized stream call: no verdict
-                    total += pend
+                    parts.append(("fixed", pend))
                 elif o[0].type == CS_OP_IMM and self.reads_stream(o[0].imm):
                     sub = self.solve_reader(o[0].imm)
                     if sub is None:
@@ -726,22 +733,46 @@ class Deriver:
                             inner = self.list_element(o[0].imm,
                                                       seen | {va})
                             if inner is not None:
-                                return ("variable",
-                                        (f"sub_{o[0].imm:X} is itself a "
-                                         f"count-prefixed list "
-                                         f"({inner[0]}), so this element "
-                                         f"varies with the inner count"))
+                                parts.append(("nested", o[0].imm))
+                                pend = None
+                                continue
                         return None
-                    if sub[0] in ("str", "strplus"):
-                        return ("variable",
-                                (f"sub_{o[0].imm:X} is {sub[0]}({sub[1]}), "
-                                 f"so the element is "
-                                 f"{total + sub[1] + 4} + n"))
-                    total += sub[1]
+                    parts.append(sub)
                 pend = None
-        if total <= 0:
+        if not parts:
             return None
-        return ("fixed", total)
+        self._parts[va] = parts
+        if all(p[0] == "fixed" for p in parts):
+            total = sum(p[1] for p in parts)
+            return ("fixed", total) if total > 0 else None
+        bad = next(p for p in parts if p[0] != "fixed")
+        fixed_before = sum(p[1] for p in parts if p[0] == "fixed")
+        if bad[0] == "nested":
+            why = (f"sub_{bad[1]:X} is itself a count-prefixed list, so this "
+                   f"element varies with the inner count")
+        else:
+            why = (f"a {bad[0]}({bad[1]}) read, so the element is "
+                   f"{fixed_before + bad[1] + 4} + n")
+        return ("variable", why)
+
+    def element_parts(self, va: int):
+        """The element's members in program order, or None.
+
+        ``[('fixed', n) | ('str', 0) | ('strplus', 9) | ('nested', callee)]``
+
+        This is what makes a variable-length element shippable rather than
+        merely refused. ``CArray<[u8;N]>`` cannot describe an element whose
+        width varies, but ``CArray<Substruct>`` can, and the format already
+        supports it (see SUBSTRUCT_DEFS, e.g. StageInfo_Field608Entry =
+        u32 + CString). HouseInfo_RegionDataEntry and FailMessageInfo_Entry
+        were read off these same parts by hand; this returns them so the
+        remaining tables do not need hand work.
+
+        Structure only. It says nothing about what any member MEANS, so the
+        names generated from it must stay out of ``_verified_fields``.
+        """
+        self.list_element(va)
+        return self._parts.get(va)
 
     # ── field order + per-field read shape ───────────────────────────────
 

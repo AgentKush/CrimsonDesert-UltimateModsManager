@@ -28517,5 +28517,22 @@
   {
    "f": "_updateType"
   }
+ ],
+ "royalsupply": [
+  {
+   "f": "_isBlocked"
+  },
+  {
+   "f": "_Quest"
+  },
+  {
+   "f": "_Mission"
+  },
+  {
+   "f": "_defaultRandomList"
+  },
+  {
+   "f": "_stageInfo"
+  }
  ]
 }

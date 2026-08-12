@@ -76,6 +76,16 @@ DERIVED = {
     "uisocialaction": 2,
     "factionreblockadinginfo": 108,
     "globalgameeventgroup": 12,
+    # ── added 2026-08-12: variable-length list elements ──────────────────
+    # Each of these has a CArray whose ELEMENT has no constant width, so it
+    # is CArray<Substruct>, with the members taken from the reader's own
+    # loop body. All four are FULLY STATIC -- no width came from a data
+    # search -- which is what makes a 2-record or 4-record table acceptable
+    # here: the data confirmed the layout, it did not referee it.
+    "FieldLevelNameTableInfo": 2,
+    "PartPrefabDyeTexturePalleteInfo": 11,
+    "RelationInfo": 52,
+    "royalsupply": 4,
 }
 
 

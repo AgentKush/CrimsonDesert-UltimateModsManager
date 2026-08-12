@@ -2041,5 +2041,113 @@
     "_physicsMaterialName": {
       "type": "CString"
     }
+  },
+  "FieldLevelNameTableInfo": {
+    "_meta_note": "Derived 2026-08-12 from game buildid 24613230 by tools/derive_table_layout.py, reflection class FieldLevelNameTableInfo. Field ORDER from the exe's reflection error strings ordered by the hot-path branch that reaches each error block. Field WIDTHS from the sized reads in the deserializer; count-prefixed list element widths from the loop body via Deriver.list_element. PROOF: the walk consumes every one of this table's 2 records to its exact last byte. KEYED BY FILE STEM 'fieldlevelnametableinfo' because that is what identify_table_from_path returns and what get_schema is asked for. _stringKey/_key are omitted because the entry header consumes them. _verified_fields is EMPTY on purpose: tiling proves the structure and each field's offset, NOT what any field means. _levelNameInfoDataList is a list whose ELEMENT has no constant width, so it is CArray<FieldLevelNameTableInfo_KeyEntry> rather than CArray<[u8;N]>. The element's members come from the loop body's own read sequence via Deriver.element_parts, which independently reproduces the two substructs written by hand for HouseInfo and FailMessageInfo. Member names are anonymous on purpose: the parts give structure and say nothing about meaning.",
+    "_no_null_skip": true,
+    "_ordered_fields": [
+      "_isBlocked",
+      "_fieldLevelName",
+      "_levelNameInfoDataList"
+    ],
+    "_verified_fields": [],
+    "_isBlocked": {
+      "type": "u8"
+    },
+    "_fieldLevelName": {
+      "type": "CString"
+    },
+    "_levelNameInfoDataList": {
+      "type": "CArray<FieldLevelNameTableInfo_KeyEntry>"
+    }
+  },
+  "PartPrefabDyeTexturePalleteInfo": {
+    "_meta_note": "Derived 2026-08-12 from game buildid 24613230 by tools/derive_table_layout.py, reflection class PartPrefabDyeTexturePalleteInfo. Field ORDER from the exe's reflection error strings ordered by the hot-path branch that reaches each error block. Field WIDTHS from the sized reads in the deserializer; count-prefixed list element widths from the loop body via Deriver.list_element. PROOF: the walk consumes every one of this table's 11 records to its exact last byte. KEYED BY FILE STEM 'partprefabdyetexturepalleteinfo' because that is what identify_table_from_path returns and what get_schema is asked for. _stringKey/_key are omitted because the entry header consumes them. _verified_fields is EMPTY on purpose: tiling proves the structure and each field's offset, NOT what any field means. _textureSetArray is a list whose ELEMENT has no constant width, so it is CArray<PartPrefabDyeTexturePalleteInfo_KeyEntry> rather than CArray<[u8;N]>. The element's members come from the loop body's own read sequence via Deriver.element_parts, which independently reproduces the two substructs written by hand for HouseInfo and FailMessageInfo. Member names are anonymous on purpose: the parts give structure and say nothing about meaning.",
+    "_no_null_skip": true,
+    "_ordered_fields": [
+      "_isBlocked",
+      "_textureSetIndex",
+      "_textureSetArray"
+    ],
+    "_verified_fields": [],
+    "_isBlocked": {
+      "type": "u8"
+    },
+    "_textureSetIndex": {
+      "type": "u32"
+    },
+    "_textureSetArray": {
+      "type": "CArray<PartPrefabDyeTexturePalleteInfo_KeyEntry>"
+    }
+  },
+  "RelationInfo": {
+    "_meta_note": "Derived 2026-08-12 from game buildid 24613230 by tools/derive_table_layout.py, reflection class RelationInfo. Field ORDER from the exe's reflection error strings ordered by the hot-path branch that reaches each error block. Field WIDTHS from the sized reads in the deserializer; count-prefixed list element widths from the loop body via Deriver.list_element. PROOF: the walk consumes every one of this table's 52 records to its exact last byte. KEYED BY FILE STEM 'relationinfo' because that is what identify_table_from_path returns and what get_schema is asked for. _stringKey/_key are omitted because the entry header consumes them. _verified_fields is EMPTY on purpose: tiling proves the structure and each field's offset, NOT what any field means. _gimmickTagDataList is a list whose ELEMENT has no constant width, so it is CArray<RelationInfo_KeyEntry> rather than CArray<[u8;N]>. The element's members come from the loop body's own read sequence via Deriver.element_parts, which independently reproduces the two substructs written by hand for HouseInfo and FailMessageInfo. Member names are anonymous on purpose: the parts give structure and say nothing about meaning.",
+    "_no_null_skip": true,
+    "_ordered_fields": [
+      "_isBlocked",
+      "_relationReactionType",
+      "_order",
+      "_detectRestrictCount",
+      "_detectMemorizeTime",
+      "_doCompleteNotPriorityActor",
+      "_detectValueRatio",
+      "_isDetectEventOnly",
+      "_gimmickTagDataList"
+    ],
+    "_verified_fields": [],
+    "_isBlocked": {
+      "type": "u8"
+    },
+    "_relationReactionType": {
+      "type": "u8"
+    },
+    "_order": {
+      "type": "u8"
+    },
+    "_detectRestrictCount": {
+      "type": "u8"
+    },
+    "_detectMemorizeTime": {
+      "type": "u64"
+    },
+    "_doCompleteNotPriorityActor": {
+      "type": "u8"
+    },
+    "_detectValueRatio": {
+      "type": "u32"
+    },
+    "_isDetectEventOnly": {
+      "type": "u8"
+    },
+    "_gimmickTagDataList": {
+      "type": "CArray<RelationInfo_KeyEntry>"
+    }
+  },
+  "royalsupply": {
+    "_meta_note": "Derived 2026-08-12 from game buildid 24613230 by tools/derive_table_layout.py, reflection class RoyalSupplyInfo. Field ORDER from the exe's reflection error strings ordered by the hot-path branch that reaches each error block. Field WIDTHS from the sized reads in the deserializer; count-prefixed list element widths from the loop body via Deriver.list_element. PROOF: the walk consumes every one of this table's 4 records to its exact last byte. KEYED BY FILE STEM 'royalsupply' because that is what identify_table_from_path returns and what get_schema is asked for. _stringKey/_key are omitted because the entry header consumes them. _verified_fields is EMPTY on purpose: tiling proves the structure and each field's offset, NOT what any field means. _Quest is a list whose ELEMENT has no constant width, so it is CArray<RoyalSupplyInfo_QuestEntry> rather than CArray<[u8;N]>. The element's members come from the loop body's own read sequence via Deriver.element_parts, which independently reproduces the two substructs written by hand for HouseInfo and FailMessageInfo. Member names are anonymous on purpose: the parts give structure and say nothing about meaning. _Mission is a list whose ELEMENT has no constant width, so it is CArray<RoyalSupplyInfo_QuestEntry> rather than CArray<[u8;N]>. The element's members come from the loop body's own read sequence via Deriver.element_parts, which independently reproduces the two substructs written by hand for HouseInfo and FailMessageInfo. Member names are anonymous on purpose: the parts give structure and say nothing about meaning.",
+    "_no_null_skip": true,
+    "_ordered_fields": [
+      "_isBlocked",
+      "_Quest",
+      "_Mission",
+      "_defaultRandomList",
+      "_stageInfo"
+    ],
+    "_verified_fields": [],
+    "_isBlocked": {
+      "type": "u8"
+    },
+    "_Quest": {
+      "type": "CArray<RoyalSupplyInfo_QuestEntry>"
+    },
+    "_Mission": {
+      "type": "CArray<RoyalSupplyInfo_QuestEntry>"
+    },
+    "_defaultRandomList": {
+      "type": "CArray<[u8;20]>"
+    },
+    "_stageInfo": {
+      "type": "u32"
+    }
   }
 }

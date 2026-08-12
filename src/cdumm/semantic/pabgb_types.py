@@ -403,6 +403,35 @@ SUBSTRUCT_DEFS: dict[str, list[tuple[str, str]]] = {
         ("key", "u32"),
         ("message", "LocalizableString"),
     ],
+    # ── Derived variable-length list elements (2026-08-12) ──────────────
+    # Members come from each reader's own loop body via
+    # Deriver.element_parts. Names are anonymous: structure is
+    # derived, meaning is not, so nothing here may be gated to
+    # _verified_fields on the strength of a name.
+    "RoyalSupplyInfo_QuestEntry": [  # sub_1412A1370 element
+        ("u32", "u32"),
+        ("list", "CArray<[u8;20]>"),
+    ],
+    "RelationInfo_KeyEntry": [  # sub_1412A1970 element
+        ("u32", "u32"),
+        ("list", "CArray<u32>"),
+        ("list_2", "CArray<u32>"),
+    ],
+    "PartPrefabDyeTexturePalleteInfo_KeyEntry": [  # sub_1412A3630 element
+        ("name", "CString"),
+        ("name_2", "CString"),
+        ("name_3", "CString"),
+        ("name_4", "CString"),
+        ("u32", "u32"),
+    ],
+    "FieldLevelNameTableInfo_KeyEntry": [  # sub_1412A69D0 element
+        ("u32", "u32"),
+        ("u32_2", "u32"),
+        ("name", "CString"),
+        ("u8", "u8"),
+        ("blob", "[u8;12]"),
+        ("blob_2", "[u8;12]"),
+    ],
 }
 
 
