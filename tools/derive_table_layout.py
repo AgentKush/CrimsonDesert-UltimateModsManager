@@ -888,13 +888,33 @@ class Deriver:
         reports the reader unresolved, which is the correct outcome: the
         shape it needs is one this walker cannot express, and saying
         "unknown" is worth more than a constant that happens to fit today.
+
+        And symmetrically: a reader that IS a count-prefixed list must never
+        be offered a plain FIXED width. factionrelationgroup is the worked
+        example, found by an adversarial review of this pipeline.
+        sub_1412C3ED0 reads a u32 count and then 2 bytes per element, yet
+        stage 2 pinned it ('fixed', 24) UNIQUELY on 5 records -- because the
+        record's four counts happen to sum to 4 every time:
+
+            Graymane        0,2,0,2      HostileCombat   0,3,0,1
+            FriendlyCombat  0,2,0,2      NPC_Common      0,1,0,3
+            Monster_Common  0,4,0,0
+
+        so consumption is 16 + 2*4 = 24 in all five. Byte +12 of that field
+        is two list elements in one record and a u32 list header in another.
+        Perturbing the width does not catch it -- every +/-1 of 24 fails, so
+        it looks firmly pinned -- and the five records agree with each other,
+        so more of THIS table would not help either. Only the reader's own
+        code separates the two readings.
+
+        Stage 1b pins such a reader before any search, so this branch is the
+        second line of defence for a caller that reaches search() without it.
         """
-        out = [("fixed", n) for n in range(MAX_ELEM + 1)]
-        offer_lists = True
-        if va is not None:
-            el = self.list_element(va)
-            if el is not None and el[0] == "variable":
-                offer_lists = False
+        el = self.list_element(va) if va is not None else None
+        offer_fixed = el is None or el[0] != "fixed"
+        offer_lists = el is None or el[0] != "variable"
+        out = ([("fixed", n) for n in range(MAX_ELEM + 1)]
+               if offer_fixed else [])
         if offer_lists:
             out += [("list", n) for n in range(1, MAX_ELEM + 1)]
         out += [("str", n) for n in range(33)]
