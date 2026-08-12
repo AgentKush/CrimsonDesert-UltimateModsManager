@@ -21,6 +21,16 @@ _UNRELEASED_NOTES: list[str] = [
 
 CHANGELOG = [
     {
+        "version": "3.13.0",
+        "date": "2026-08-12",
+        "notes": [
+            "<b>CDUMM reads five more of the game's tables correctly.</b> It was working out how wide each record's id is with a rule that only held for the two most common widths, so on tables using any other width it read the id too wide and swallowed part of the record with it. Mercenary data, mercenary groups, sockets, spawn filters and the game-start table were all affected: CDUMM could not recover a single entry name from any of them, and now recovers every one. A sixth table was reading 3,508 of its records as nonsense and is now read correctly as having no names at all.",
+            "<b>Twenty-two more of the game's tables can be read.</b> Their layouts were worked out from the game's own code and each one is checked by requiring it to account for every byte of every record, rather than merely reaching the end. These are readable only for now, not editable: no mod can write to them until each field has been checked against real values, which is deliberate.",
+            "Nothing that worked before changes. The id-width fix is inert on every table using the two common widths, which is 126 of the 135 on this build.",
+            "Thanks to AgentKush, who found the id-width bug while deriving the new layouts, and who also added a post-update check that answers whether a game patch has broken CDUMM's readers before users have to discover it.",
+        ],
+    },
+    {
         "version": "3.12.0",
         "date": "2026-08-11",
         "notes": [
