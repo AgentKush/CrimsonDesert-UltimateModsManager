@@ -905,6 +905,14 @@ def main(argv: list[str] | None = None) -> int:
         if not added:
             break
 
+    # A table reported AMBIGUOUS in an early round is often PROVEN in a
+    # later one, once another table pins the reader that was free here.
+    # `ambiguous` was never cleared when that happened, so the report
+    # listed the same table under both headings and contradicted itself --
+    # dialogvoiceinfo showed up as 519 records proven AND as "130 shapes
+    # tile". Proven wins: it is the later, stronger result.
+    ambiguous = {s: v for s, v in ambiguous.items() if s not in proven}
+
     print()
     print(f"PROVEN -- exact tiling on 100% of records: {len(proven)} tables, "
           f"{sum(proven.values()):,} records")
