@@ -718,6 +718,33 @@ def find_index(explicit: Path | None = None) -> Path | None:
     return next((p for p in cands if _carries_table_list(p)), None)
 
 
+def class_for_stem(stem: str, lower: dict[str, str]) -> str | None:
+    """Map a table's filename stem onto its reflection class name.
+
+    Most tables are the class name lowercased, but a sizeable minority
+    drop the ``Info`` suffix from the FILENAME while keeping it on the
+    class: ``faction.pabgb`` <-> ``FactionInfo``, ``inventory.pabgb`` <->
+    ``InventoryInfo``, ``board.pabgb`` <-> ``BoardInfo``. Twenty of this
+    install's 135 tables are named that way.
+
+    That mattered more than it looks. main() filtered candidates with
+    ``s.lower() in lower`` and silently dropped the rest, so the deriver
+    never looked at ONE of those tables -- they were not failing the
+    tiling gate, they were never offered to it.
+
+    EXACT matches only, ``stem`` then ``stem + "info"``. Deliberately no
+    fuzzy matching: difflib cheerfully offers ``QuickSlotInfo`` for
+    ``equipslotinfo`` and ``RegionInfo`` for ``reviepointinfo``, and
+    binding a table to the wrong class would hand the walker a different
+    type's field order -- which tiling might not even catch if the widths
+    happened to add up.
+    """
+    for k in (stem.lower(), stem.lower() + "info"):
+        if k in lower:
+            return lower[k]
+    return None
+
+
 def table_stems(index: Path) -> list[str]:
     import sqlite3
     con = sqlite3.connect(f"file:{index}?mode=ro", uri=True)
@@ -757,10 +784,20 @@ def main(argv: list[str] | None = None) -> int:
         print("No candidate tables.")
         return 2
     lower = {k.lower(): k for k in d.by_cls}
-    stems = [s for s in stems if s.lower() in lower]
-    print(f"candidate tables with a reflection class: {len(stems)}")
+    resolved = {s: class_for_stem(s, lower) for s in stems}
+    dropped = [s for s, c in resolved.items() if c is None]
+    stems = [s for s in stems if resolved[s]]
+    suffixed = sum(1 for s in stems if resolved[s].lower() != s.lower())
+    print(f"candidate tables with a reflection class: {len(stems)} "
+          f"({suffixed} matched via the dropped-Info filename convention)")
+    if dropped:
+        # Never silently. A table with no reflection class is outside the
+        # static route entirely, and that is a fact about coverage worth
+        # seeing rather than a row quietly missing from the report.
+        print(f"no reflection class, cannot be derived statically: "
+              f"{len(dropped)} ({', '.join(sorted(dropped))})")
 
-    fields = {s: d.field_reads(lower[s.lower()]) for s in stems}
+    fields = {s: d.field_reads(resolved[s]) for s in stems}
 
     # stage 1
     callees = {v for f in fields.values() for _n, k, v in f if k == "call"}
