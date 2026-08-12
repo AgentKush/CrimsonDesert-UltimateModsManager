@@ -138,3 +138,75 @@ def test_the_derivation_provenance_is_recorded():
             f"against")
         assert "_verified_fields is EMPTY" in note, (
             f"{table} note must state why it is gated")
+
+
+# ── the fixed-vs-variable list element trap ──────────────────────────────
+#
+# Two entries shipped in v3.13 described a list element as a FIXED width when
+# the element actually ends in a string. Stage 2 recovers an element width by
+# fitting the table data, and `Deriver.candidates()` offers only fixed-width
+# elements -- there is no variable-element list shape in that space. So for
+# these two the search could not see the competing hypothesis, and
+# "unique-or-nothing" reported uniqueness inside an incomplete space.
+#
+# It fitted because every string in this build happens to be one length:
+#   HouseInfo        7 element strings, all 34 bytes -> 12 + 34 == 46
+#   FailMessageInfo 18 element strings, all 16 bytes -> 17 + 16 == 33
+# Both the fixed and the variable model tile 100% of records EXACTLY, so no
+# amount of data from this build separates them. The reader's disassembly
+# does: the element makes a CString / LocalizableString read.
+#
+# These pin the corrected shape so the wrong one cannot come back. A future
+# derivation re-running stage 2 on a build where the strings are still
+# uniform would fit the fixed width again and look perfectly proven.
+
+#: field -> (struct descriptor it must use, the fixed width it must NOT use)
+_VARIABLE_ELEMENT_LISTS = {
+    ("HouseInfo", "_houseRegionDataList"):
+        ("CArray<HouseInfo_RegionDataEntry>", "CArray<[u8;46]>"),
+    ("FailMessageInfo", "_failMessageInfoList"):
+        ("CArray<FailMessageInfo_Entry>", "CArray<[u8;33]>"),
+}
+
+
+@pytest.mark.parametrize("key", sorted(_VARIABLE_ELEMENT_LISTS))
+def test_variable_length_list_elements_are_not_modelled_as_fixed(key):
+    table, field = key
+    want, forbidden = _VARIABLE_ELEMENT_LISTS[key]
+    got = _overrides()[table][field]["type"]
+    assert got != forbidden, (
+        f"{table}.{field} is back to {forbidden}. That width only fits "
+        f"because every element string in the measured build was one "
+        f"length; the element is variable and this will mis-frame the "
+        f"record as soon as one string differs.")
+    assert got == want, (
+        f"{table}.{field} must be {want}, got {got}")
+
+
+@pytest.mark.parametrize("key", sorted(_VARIABLE_ELEMENT_LISTS))
+def test_the_corrected_element_structs_end_in_a_string(key):
+    """The correction is only meaningful if the struct really is variable.
+
+    A struct of fixed members would reintroduce the same bug wearing a
+    name, so this checks the last member is a string type rather than
+    trusting the descriptor's label.
+    """
+    from cdumm.semantic.pabgb_types import SUBSTRUCT_DEFS
+    want, _forbidden = _VARIABLE_ELEMENT_LISTS[key]
+    name = want[len("CArray<"):-1]
+    assert name in SUBSTRUCT_DEFS, f"{name} is not defined"
+    members = SUBSTRUCT_DEFS[name]
+    assert members, f"{name} has no members"
+    assert members[-1][1] in ("CString", "LocalizableString"), (
+        f"{name} must end in a variable-length string read; its last "
+        f"member is {members[-1]!r}. If it does not, the element has a "
+        f"constant width and the original CArray<[u8;N]> was right.")
+
+
+@pytest.mark.parametrize("key", sorted(_VARIABLE_ELEMENT_LISTS))
+def test_the_correction_is_documented_in_the_provenance(key):
+    table, _field = key
+    note = _overrides()[table].get("_meta_note", "")
+    assert "CORRECTION" in note, (
+        f"{table} was shipped with a wrong element width; its note must "
+        f"record the correction so the history is not lost")

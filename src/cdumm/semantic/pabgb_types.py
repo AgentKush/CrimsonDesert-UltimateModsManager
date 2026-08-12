@@ -372,6 +372,37 @@ SUBSTRUCT_DEFS: dict[str, list[tuple[str, str]]] = {
         ("domain_faction", "u32"),
         ("prison_stage", "u32"),
     ],
+    # ── Corrections to two derived tables shipped in v3.13 ─────────────────
+    # Both were shipped as CArray of a FIXED-width element, and both were
+    # wrong. Stage 2 of tools/derive_table_layout.py recovers a list's
+    # element width by fitting the table data, and its candidate space
+    # contains only fixed-width elements -- there is no variable-element list
+    # shape in it. So for a list whose element ends in a string, a constant
+    # width can fit, and "unique-or-nothing" then reports uniqueness inside a
+    # space that never held the competing hypothesis.
+    #
+    # It fit because every string in THIS build happens to be one length:
+    #   HouseInfo         all 7 element strings are 34 bytes -> 12+34 == 46
+    #   FailMessageInfo   all 18 element strings are 16 bytes -> 17+16 == 33
+    # Both the fixed and the variable model tile 100% of records exactly, so
+    # the data cannot distinguish them; the disassembly can, and does.
+    #
+    # Caveat that survives this fix: exact tiling constrains the element's
+    # TOTAL consumption, so a reordering of the two same-width u32s below
+    # would be invisible to it. The order is the loop body's call order.
+    "HouseInfo_RegionDataEntry": [
+        # sub_1412A8A50 element: sub_14129CD10 (4B) + sub_141297490 (4B)
+        # + sub_1411A31F0 (CString) = 12 + n
+        ("u32_a", "u32"),
+        ("u32_b", "u32"),
+        ("name", "CString"),
+    ],
+    "FailMessageInfo_Entry": [
+        # sub_1412AABF0 element: sub_141296000 (4B)
+        # + sub_141071DE0 (LocalizableString) = 17 + n
+        ("key", "u32"),
+        ("message", "LocalizableString"),
+    ],
 }
 
 

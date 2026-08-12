@@ -1323,7 +1323,7 @@
     }
   },
   "FailMessageInfo": {
-    "_meta_note": "Derived 2026-08-11 from game buildid 24613230 by tools/derive_table_layout.py. Field ORDER comes from the exe's reflection error strings ordered by the hot-path branch that reaches each error block (tools/extract_field_order_win.py). Field WIDTHS come from the sized reads in the deserializer, with count-prefixed list element widths solved against the table data under a unique-or-nothing rule. PROOF: the walk consumes every one of this table's 11 records to its exact last byte, and no other shape in the format's documented grammar does. _stringKey/_key are omitted because the entry header consumes them. _verified_fields is EMPTY on purpose: tiling proves the structure and each field's offset, NOT what any field means, so nothing here may be presented as a fact or written to until its values are cross-checked.",
+    "_meta_note": "Derived 2026-08-11 from game buildid 24613230 by tools/derive_table_layout.py. Field ORDER comes from the exe's reflection error strings ordered by the hot-path branch that reaches each error block (tools/extract_field_order_win.py). Field WIDTHS come from the sized reads in the deserializer, with count-prefixed list element widths solved against the table data under a unique-or-nothing rule. PROOF: the walk consumes every one of this table's 11 records to its exact last byte, and no other shape in the format's documented grammar does. _stringKey/_key are omitted because the entry header consumes them. _verified_fields is EMPTY on purpose: tiling proves the structure and each field's offset, NOT what any field means, so nothing here may be presented as a fact or written to until its values are cross-checked. CORRECTION 2026-08-12: _failMessageInfoList shipped as CArray<[u8;33]>, a FIXED element width, and that was WRONG. The element ends in a LocalizableString read, so it has no constant width; the fixed value only fitted because every element string in this build is 16 bytes (17+16==33). Stage 2's candidate space contains no variable-element list shape, so it could not see the competing hypothesis and reported uniqueness inside an incomplete space. Both models tile 100% of records exactly, so the DATA cannot separate them -- the reader's disassembly can, and does. Now CArray<FailMessageInfo_Entry> (u32+LocalizableString). Exact tiling still holds under the corrected model, verified through CDUMM's own _consume_field_bytes.",
     "_no_null_skip": true,
     "_ordered_fields": [
       "_isBlocked",
@@ -1334,7 +1334,7 @@
       "type": "u8"
     },
     "_failMessageInfoList": {
-      "type": "CArray<[u8;33]>"
+      "type": "CArray<FailMessageInfo_Entry>"
     }
   },
   "GameAdviceGroupInfo": {
@@ -1804,7 +1804,7 @@
     }
   },
   "HouseInfo": {
-    "_meta_note": "Derived 2026-08-11 from game buildid 24613230 by tools/derive_table_layout.py. Field ORDER comes from the exe's reflection error strings ordered by the hot-path branch that reaches each error block (tools/extract_field_order_win.py). Field WIDTHS come from the sized reads in the deserializer, with count-prefixed list element widths solved against the table data under a unique-or-nothing rule. PROOF: the walk consumes every one of this table's 4 records to its exact last byte, and no other shape in the format's documented grammar does. _stringKey/_key are omitted because the entry header consumes them. _verified_fields is EMPTY on purpose: tiling proves the structure and each field's offset, NOT what any field means, so nothing here may be presented as a fact or written to until its values are cross-checked.",
+    "_meta_note": "Derived 2026-08-11 from game buildid 24613230 by tools/derive_table_layout.py. Field ORDER comes from the exe's reflection error strings ordered by the hot-path branch that reaches each error block (tools/extract_field_order_win.py). Field WIDTHS come from the sized reads in the deserializer, with count-prefixed list element widths solved against the table data under a unique-or-nothing rule. PROOF: the walk consumes every one of this table's 4 records to its exact last byte, and no other shape in the format's documented grammar does. _stringKey/_key are omitted because the entry header consumes them. _verified_fields is EMPTY on purpose: tiling proves the structure and each field's offset, NOT what any field means, so nothing here may be presented as a fact or written to until its values are cross-checked. CORRECTION 2026-08-12: _houseRegionDataList shipped as CArray<[u8;46]>, a FIXED element width, and that was WRONG. The element ends in a CString read, so it has no constant width; the fixed value only fitted because every element string in this build is 34 bytes (12+34==46). Stage 2's candidate space contains no variable-element list shape, so it could not see the competing hypothesis and reported uniqueness inside an incomplete space. Both models tile 100% of records exactly, so the DATA cannot separate them -- the reader's disassembly can, and does. Now CArray<HouseInfo_RegionDataEntry> (u32+u32+CString). Exact tiling still holds under the corrected model, verified through CDUMM's own _consume_field_bytes.",
     "_no_null_skip": true,
     "_ordered_fields": [
       "_isBlocked",
@@ -1824,7 +1824,7 @@
       "type": "u32"
     },
     "_houseRegionDataList": {
-      "type": "CArray<[u8;46]>"
+      "type": "CArray<HouseInfo_RegionDataEntry>"
     },
     "_floorHeight": {
       "type": "u32"
