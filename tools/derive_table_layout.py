@@ -666,6 +666,25 @@ def load_table(game: Path, stem: str):
     return body, sorted(offsets.items(), key=lambda kv: kv[1]), key_size
 
 
+def _carries_table_list(p: Path) -> bool:
+    """Does this file actually carry the table list we need?
+
+    Checked by CONTENT rather than by name. Matching on the filename is
+    what broke here in the first place, and a candidate that opens as
+    SQLite but has no ``data_tables`` is no use to us either.
+    """
+    import sqlite3
+    try:
+        con = sqlite3.connect(f"file:{p}?mode=ro", uri=True)
+        try:
+            con.execute("SELECT 1 FROM data_tables LIMIT 1").fetchone()
+            return True
+        finally:
+            con.close()
+    except Exception:                                # noqa: BLE001
+        return False
+
+
 def find_index(explicit: Path | None = None) -> Path | None:
     """The game index CDUMM's Game Data tab builds, newest first.
 
@@ -673,6 +692,17 @@ def find_index(explicit: Path | None = None) -> Path | None:
     has re-indexed since a patch keeps the previous one and the table LIST
     barely changes between builds -- it is only used to enumerate
     candidates, never to read bytes.
+
+    The glob is ``game_index*``, not ``game_index*.sqlite*``. The live
+    index is ``game_index.sqlite``, but the rotated copy is
+    ``game_index.<timestamp>.bak`` -- the timestamp REPLACES the
+    extension rather than following it, so the narrower glob could never
+    match the very ``.bak`` files this docstring claimed to accept. The
+    symptom was "No game index found under %LOCALAPPDATA%/cdumm" on a
+    machine that had one sitting right there.
+
+    Widening the glob means candidates must be validated, so each is
+    opened and checked for the table it is wanted for.
     """
     import os
     if explicit:
@@ -683,9 +713,9 @@ def find_index(explicit: Path | None = None) -> Path | None:
     d = Path(local) / "cdumm"
     if not d.is_dir():
         return None
-    cands = sorted(d.glob("game_index*.sqlite*"),
+    cands = sorted((p for p in d.glob("game_index*") if p.is_file()),
                    key=lambda p: p.stat().st_mtime, reverse=True)
-    return cands[0] if cands else None
+    return next((p for p in cands if _carries_table_list(p)), None)
 
 
 def table_stems(index: Path) -> list[str]:
