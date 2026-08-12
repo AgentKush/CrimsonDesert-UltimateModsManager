@@ -135,6 +135,104 @@ def _cs():
     return md
 
 
+class Frame:
+    """Canonical stack-slot identity: an offset from the function's entry rsp.
+
+    Needed because the SAME slot is reached through different registers at
+    different points in a function. sub_1412A8A50 stores its element count
+    via ``lea rdx, [r11 + 8]`` and then bounds its loop with
+    ``cmp dword ptr [rsp + 0xa0], ...``. Those look unrelated until you
+    notice ``r11`` was set to rsp on entry and rsp has since moved by five
+    pushes (0x28) plus ``sub rsp, 0x70``: rsp+0xa0 == entry+8 == r11+8. One
+    slot, two spellings. Keying on (register, displacement) instead treats
+    them as two and loses the link between the count and the loop bound.
+
+    rsp is tracked only through the PROLOGUE and then frozen. These
+    functions set their frame up once and address locals at a constant
+    offset; the only later rsp moves are epilogues, and a linear sweep
+    cannot tell an epilogue from fall-through code. Applying
+    sub_14129A5F0's early-return ``add rsp, 0x38 / pop / pop`` to the main
+    path shifted every later slot by 0x48.
+    """
+
+    def __init__(self, md):
+        self.md = md
+        self.rsp = 0                      # rsp relative to function entry
+        self.base: dict[str, int] = {}    # reg -> entry-relative value
+        self.zero: set[str] = set()       # regs known to hold 0
+        self.frozen = False               # prologue over -> rsp is fixed
+
+    @staticmethod
+    def q(r: str) -> str:
+        """Normalise a 32-bit register name to its 64-bit counterpart."""
+        if r.startswith("e"):
+            return "r" + r[1:]
+        if r.startswith("r") and r.endswith("d"):
+            return r[:-1]
+        return r
+
+    def is_zero(self, reg: str) -> bool:
+        return self.q(reg) in {self.q(z) for z in self.zero}
+
+    def slot(self, op) -> int | None:
+        """Entry-relative offset of a stack memory operand, else None."""
+        m = op.mem
+        if m.index != 0:
+            return None                   # indexed: not a fixed slot
+        base = self.md.reg_name(m.base) if m.base else None
+        if base is None:
+            return None
+        if base == "rsp":
+            return self.rsp + m.disp
+        if base in self.base:
+            return self.base[base] + m.disp
+        return None
+
+    def step(self, i):
+        from capstone import CS_OP_IMM, CS_OP_MEM, CS_OP_REG
+        o = i.operands
+        m = i.mnemonic
+        dst = i.op_str.split(",")[0].strip()
+        if m == "call" or m.startswith("j"):
+            self.frozen = True
+            return
+        if m in ("push", "pop") or (
+                m in ("sub", "add") and len(o) == 2 and dst == "rsp"
+                and o[1].type == CS_OP_IMM):
+            if self.frozen:
+                return                    # epilogue noise
+            if m == "push":
+                self.rsp -= 8
+            elif m == "pop":
+                self.rsp += 8
+            else:
+                self.rsp += (-o[1].imm if m == "sub" else o[1].imm)
+            return
+        if m == "mov" and len(o) == 2 and o[0].type == CS_OP_REG:
+            src = i.op_str.split(",", 1)[1].strip()
+            if src == "rsp":
+                self.base[dst] = self.rsp
+            elif o[1].type == CS_OP_IMM and o[1].imm == 0:
+                self.zero.add(dst)
+                self.base.pop(dst, None)
+            else:
+                self.zero.discard(dst)
+                self.base.pop(dst, None)
+        elif m == "lea" and len(o) == 2 and o[0].type == CS_OP_REG:
+            s = self.slot(o[1]) if o[1].type == CS_OP_MEM else None
+            if s is None:
+                self.base.pop(dst, None)
+            else:
+                self.base[dst] = s
+            self.zero.discard(dst)
+        elif m == "xor" and len(o) == 2 and o[0].type == CS_OP_REG:
+            b = i.op_str.split(",", 1)[1].strip()
+            if self.q(dst) == self.q(b):
+                self.zero.add(dst)
+            else:
+                self.zero.discard(dst)
+
+
 class Deriver:
     def __init__(self, game_dir: Path):
         from extract_field_order_win import find_field_strings, find_lea_xrefs, open_image
@@ -419,6 +517,150 @@ class Deriver:
         self._memo[va] = got
         return got
 
+    def list_element(self, va: int):
+        """What ONE element of a count-prefixed list reader consumes.
+
+        ``('fixed', n)``    a constant n bytes per element
+        ``('variable', s)`` the element contains a CString /
+                            LocalizableString read, so it has NO constant
+                            width; ``s`` describes what was found
+        ``None``            not recognised as a dynamic-count list; no verdict
+
+        Why this exists. 163 of stage 1's 167 refusals are LOOP_UNPINNED,
+        and nearly all are CArray<T> readers: ``fixed_loops`` only pins a
+        loop whose trip count is an immediate, and here the count is READ
+        FROM THE STREAM, so the branch compares against a stack slot. The
+        count being dynamic does not make the ELEMENT dynamic, and the loop
+        body's own reads settle it without touching table data.
+
+        The ``variable`` verdict is the load-bearing one. HouseInfo and
+        FailMessageInfo shipped in v3.13 with a FIXED element width that
+        stage 2 had fitted from data, and both were wrong -- the element
+        ends in a string, and the constant only fitted because every string
+        in that build was one length (12+34 == 46, 17+16 == 33). Both the
+        fixed and the variable model tile 100% of records exactly, so the
+        data cannot separate them. ``candidates()`` uses this to stop
+        offering a fixed width for a reader whose element is variable,
+        which is what makes unique-or-nothing mean anything: uniqueness in
+        a candidate space that never held the right answer is not
+        uniqueness.
+
+        Validated against the eight readers stage 2 had already pinned from
+        table data -- a wholly separate line of evidence. It reproduces
+        five exactly, correctly reports the two above as variable, and
+        returns None for the last rather than guessing. It fires on none of
+        the four readers stage 2 proved are plain fixed-width.
+        """
+        from capstone import CS_OP_IMM, CS_OP_MEM, CS_OP_REG
+        ins = self.body(va)
+        if not ins:
+            return None
+        idx = {i.address: n for n, i in enumerate(ins)}
+
+        # Slot identity depends on the frame state AT that instruction, so
+        # record it per index in one pass.
+        fr = Frame(self.md)
+        slots: list[dict] = []
+        zeros: list[set] = []
+        for i in ins:
+            slots.append({k: fr.slot(op) for k, op in enumerate(i.operands)
+                          if op.type == CS_OP_MEM})
+            zeros.append(set(fr.zero))
+            fr.step(i)
+
+        # 1. the leading 4-byte read, and the slot it fills: that is the count
+        count_slot = count_at = None
+        pend = pend_dst = None
+        for n, i in enumerate(ins):
+            o = i.operands
+            dst = i.op_str.split(",")[0].strip()
+            if len(o) == 2 and o[0].type == CS_OP_REG and "r8" in dst:
+                if i.mnemonic == "mov" and o[1].type == CS_OP_IMM:
+                    pend = o[1].imm
+                elif (i.mnemonic == "lea" and o[1].type == CS_OP_MEM
+                      and o[1].mem.index == 0 and o[1].mem.disp >= 0):
+                    # `lea r8d, [r14 + 4]` is width 4, but only if r14 really
+                    # holds zero -- otherwise the width is whatever was in it.
+                    b = (self.md.reg_name(o[1].mem.base)
+                         if o[1].mem.base else None)
+                    pend = (o[1].mem.disp if b and Frame.q(b) in
+                            {Frame.q(z) for z in zeros[n]} else None)
+                else:
+                    pend = None
+            elif (i.mnemonic == "lea" and len(o) == 2 and dst == "rdx"
+                  and o[1].type == CS_OP_MEM):
+                pend_dst = slots[n].get(1)
+            elif (i.mnemonic == "call" and len(o) == 1
+                  and o[0].type == CS_OP_MEM):
+                if pend == 4 and pend_dst is not None:
+                    count_slot, count_at = pend_dst, n
+                    break
+                pend = pend_dst = None
+        if count_slot is None:
+            return None
+
+        # 2. a backward branch whose bound is that same slot
+        lo = hi = None
+        for n, i in enumerate(ins):
+            o = i.operands
+            if not (i.mnemonic in ("jb", "jl", "jbe", "jle", "jne")
+                    and len(o) == 1 and o[0].type == CS_OP_IMM
+                    and o[0].imm < i.address):
+                continue
+            ref = False
+            for k in range(n - 1, max(-1, n - 4), -1):
+                if ins[k].mnemonic != "cmp":
+                    continue
+                for ci, co in enumerate(ins[k].operands):
+                    if (co.type == CS_OP_MEM
+                            and slots[k].get(ci) == count_slot):
+                        ref = True
+                break
+            if not ref:
+                continue
+            t = o[0].imm
+            if t not in idx or idx[t] <= count_at:
+                return None               # loop precedes the count read
+            if lo is not None:
+                return None               # two dynamic loops: no verdict
+            lo, hi = idx[t], n
+        if lo is None:
+            return None
+
+        # 3. what the loop body consumes per iteration
+        total = 0
+        pend = None
+        for i in ins[lo:hi + 1]:
+            o = i.operands
+            dst = i.op_str.split(",")[0].strip()
+            if (i.mnemonic in ("mov", "lea") and len(o) == 2
+                    and o[0].type == CS_OP_REG and "r8" in dst):
+                # Clear a pending width, but do NOT call this an unsized
+                # read: r8 is general-purpose and the body uses it for other
+                # work (`mov r8, qword ptr [rcx + rdx*8]` in sub_14129A5F0
+                # is a hash-bucket pointer). A missing width only matters
+                # where a stream call actually happens, below.
+                pend = o[1].imm if o[1].type == CS_OP_IMM else None
+            elif i.mnemonic == "call" and len(o) == 1:
+                if o[0].type == CS_OP_MEM:
+                    if pend is None:
+                        return None       # unsized stream call: no verdict
+                    total += pend
+                elif o[0].type == CS_OP_IMM and self.reads_stream(o[0].imm):
+                    sub = self.solve_reader(o[0].imm)
+                    if sub is None:
+                        return None
+                    if sub[0] in ("str", "strplus"):
+                        return ("variable",
+                                (f"sub_{o[0].imm:X} is {sub[0]}({sub[1]}), "
+                                 f"so the element is "
+                                 f"{total + sub[1] + 4} + n"))
+                    total += sub[1]
+                pend = None
+        if total <= 0:
+            return None
+        return ("fixed", total)
+
     # ── field order + per-field read shape ───────────────────────────────
 
     def field_reads(self, cls: str):
@@ -597,7 +839,7 @@ class Deriver:
                 return False
         return True
 
-    def candidates(self):
+    def candidates(self, va: int | None = None):
         """Every reader shape stage 2 will try, in one flat list.
 
         Widened from list-only. A reader stage 1 refused is not necessarily
@@ -609,9 +851,31 @@ class Deriver:
         Unique-or-nothing now applies across the WHOLE space: if a fixed
         width and a list width both tile, the data cannot tell them apart
         and the answer is unknown.
+
+        ...with one correction that the space itself was hiding. Every
+        ``('list', n)`` here is a list of FIXED-width elements; there is no
+        variable-element list shape. For a reader whose element ends in a
+        string, the right answer was therefore never in the space, and
+        stage 2 fitted the nearest constant instead -- reporting it as
+        unique because nothing could contradict it. That is how HouseInfo
+        got CArray<[u8;46]> and FailMessageInfo CArray<[u8;33]> into a
+        shipped release: every element string in the measured build was one
+        length, so 12+34 and 17+16 landed exactly on 100% of records.
+
+        So when ``va`` is given and its element is statically variable, the
+        list shapes are withheld. Stage 2 then finds nothing tiles and
+        reports the reader unresolved, which is the correct outcome: the
+        shape it needs is one this walker cannot express, and saying
+        "unknown" is worth more than a constant that happens to fit today.
         """
         out = [("fixed", n) for n in range(MAX_ELEM + 1)]
-        out += [("list", n) for n in range(1, MAX_ELEM + 1)]
+        offer_lists = True
+        if va is not None:
+            el = self.list_element(va)
+            if el is not None and el[0] == "variable":
+                offer_lists = False
+        if offer_lists:
+            out += [("list", n) for n in range(1, MAX_ELEM + 1)]
         out += [("str", n) for n in range(33)]
         return out
 
@@ -626,10 +890,10 @@ class Deriver:
         n = len(ent)
         step = max(1, n // 24)
         probe = list(range(0, n, step))[:24] or [0]
-        cands = self.candidates()
 
         if len(unknown) == 1:
             c = unknown[0]
+            cands = self.candidates(c)
             cheap = [x for x in cands
                      if self.tiles(body, ent, key_size, fields,
                                    {**self.elem, c: x}, probe)]
@@ -638,17 +902,18 @@ class Deriver:
                                   {**self.elem, c: x})]
 
         a, b = unknown
+        cands_a, cands_b = self.candidates(a), self.candidates(b)
         # Two unknowns over the full space would be ~300^2 tilings per
         # table. Prune each slot alone first: a shape that cannot tile the
         # probe for ANY partner cannot be part of a full solution.
-        viable_a = [x for x in cands
+        viable_a = [x for x in cands_a
                     if any(self.tiles(body, ent, key_size, fields,
                                       {**self.elem, a: x, b: y}, probe[:4])
-                           for y in cands[::8])]
-        viable_b = [y for y in cands
+                           for y in cands_b[::8])]
+        viable_b = [y for y in cands_b
                     if any(self.tiles(body, ent, key_size, fields,
                                       {**self.elem, a: x, b: y}, probe[:4])
-                           for x in viable_a[::8] or cands[::8])]
+                           for x in viable_a[::8] or cands_a[::8])]
         cheap = [(x, y) for x in viable_a for y in viable_b
                  if self.tiles(body, ent, key_size, fields,
                                {**self.elem, a: x, b: y}, probe)]
@@ -812,8 +1077,36 @@ def main(argv: list[str] | None = None) -> int:
         if c in callees and c not in d.model:
             d.model[c] = m
             hand += 1
-    print(f"sub-readers: {auto} solved statically, {hand} hand-verified "
+
+    # stage 1b -- count-prefixed lists, from the loop BODY rather than from
+    # table data. Nearly every refusal above is LOOP_UNPINNED, and nearly
+    # every one of those is a CArray<T>: fixed_loops only pins a loop whose
+    # trip count is an immediate, and here the count is read from the stream.
+    # A dynamic count does not imply a dynamic element.
+    static_lists = 0
+    variable: dict[int, str] = {}
+    for c in sorted(set(callees) - set(d.model)):
+        el = d.list_element(c)
+        if el is None:
+            continue
+        if el[0] == "fixed":
+            d.elem[c] = ("list", el[1])
+            static_lists += 1
+        else:
+            variable[c] = el[1]
+    print(f"sub-readers: {auto} solved statically, {hand} hand-verified, "
+          f"{static_lists} count-prefixed lists pinned from the loop body "
           f"(of {len(callees)} used as field readers)")
+    if variable:
+        # Worth printing loudly. A fixed width fitted for one of these is
+        # exactly the HouseInfo / FailMessageInfo bug: it can tile 100% of
+        # records and still be wrong, because the strings in one build happen
+        # to share a length.
+        print(f"list elements that are VARIABLE-length ({len(variable)}) -- "
+              f"no constant width may be fitted for these; the shape is not "
+              f"in the walker's grammar, so the honest result is unresolved:")
+        for c, s in sorted(variable.items()):
+            print(f"   sub_{c:X}  {s}")
 
     loaded = {}
     for s in stems:
