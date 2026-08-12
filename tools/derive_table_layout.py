@@ -407,6 +407,62 @@ class Deriver:
             loops.append((by_addr[target], n, trip))
         return loops
 
+    def closes_cycle(self, ins: list, branch: int, target_addr: int) -> bool:
+        """Does this backward branch actually form a LOOP?
+
+        A branch to an earlier address is not automatically a loop. It is a
+        loop only if control can get from the target back to the branch --
+        i.e. it closes a cycle. A backward ``jmp`` into a shared tail or
+        error block goes backwards and never returns, and treating it as a
+        loop refused the whole reader.
+
+        sub_141280820 is the case: three separate backward ``jmp
+        0x141280847`` at 0x1412808A4/BD/D6 converge on a shared tail. None
+        of them can reach its own branch again, so none is a loop -- but the
+        old test saw three and gave up. Guarding on reachability takes stage
+        1 from 52 readers to 67 and gains materialmatchinfo.
+
+        Walks the function's own instruction list, so it costs nothing
+        beyond the body already disassembled.
+        """
+        from capstone import CS_OP_IMM
+        idx = {i.address: n for n, i in enumerate(ins)}
+        start = idx.get(target_addr)
+        if start is None:
+            return False                     # target outside this body
+
+        def succ(n: int):
+            i = ins[n]
+            o = i.operands
+            m = i.mnemonic
+            if m in ("ret", "int3", "ud2"):
+                return
+            if m == "jmp":
+                if len(o) == 1 and o[0].type == CS_OP_IMM:
+                    t = idx.get(o[0].imm)
+                    if t is not None:
+                        yield t
+                return                       # unconditional: no fallthrough
+            if (m.startswith("j") and len(o) == 1
+                    and o[0].type == CS_OP_IMM):
+                t = idx.get(o[0].imm)
+                if t is not None:
+                    yield t
+            if n + 1 < len(ins):
+                yield n + 1
+
+        seen = {start}
+        stack = [start]
+        while stack:
+            n = stack.pop()
+            if n == branch:
+                return True
+            for s in succ(n):
+                if s not in seen:
+                    seen.add(s)
+                    stack.append(s)
+        return False
+
     def solve_reader(self, va: int, depth: int = 0):
         """('fixed'|'str'|'strplus', base) or None when not derivable."""
         from capstone import CS_OP_IMM, CS_OP_MEM, CS_OP_REG
@@ -427,7 +483,8 @@ class Deriver:
         var_read = False
         has_loop = False
         rcx_is_stream = True          # rcx holds the stream on entry
-        for i in ins:
+        back: list[tuple[int, int]] = []   # (branch index, target address)
+        for n, i in enumerate(ins):
             o = i.operands
             _dst = i.op_str.split(",")[0].strip()
             if (i.mnemonic in ("mov", "lea") and len(o) == 2
@@ -458,7 +515,11 @@ class Deriver:
                 rcx_is_stream = False             # a call clobbers rcx
             if (i.mnemonic.startswith("j") and len(o) == 1
                     and o[0].type == CS_OP_IMM and va <= o[0].imm < i.address):
-                has_loop = True
+                back.append((n, o[0].imm))
+        # A backward branch is only a LOOP if control can return to it. A
+        # backward jmp into a shared tail or error block never does, and
+        # counting those refused readers that contain no loop at all.
+        has_loop = any(self.closes_cycle(ins, n, t) for n, t in back)
         # A loop is only undecidable when its trip count is unknown -- that
         # is a count-prefixed list, and stage 2 derives its element width.
         # A loop whose bound is an immediate is fully determined, and a loop

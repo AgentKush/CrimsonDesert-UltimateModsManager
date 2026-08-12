@@ -49,6 +49,7 @@ DERIVED = {
     "JobInfo": 209,
     "LocalStringInfo": 43863,
     "MaterialRelationInfo": 11,
+    "MaterialMatchInfo": 116,
     "VibratePatternInfo": 28,
     "CharacterAppearanceIndexInfo": 8344,
     "MercenaryInfo": 21,

@@ -2010,5 +2010,36 @@
     "_updateType": {
       "type": "u8"
     }
+  },
+  "MaterialMatchInfo": {
+    "_meta_note": "Derived 2026-08-12 from game buildid 24613230 by tools/derive_table_layout.py, reflection class MaterialMatchInfo. Field ORDER comes from the exe's reflection error strings ordered by the hot-path branch that reaches each error block. Field WIDTHS come from the sized reads in the deserializer; count-prefixed list ELEMENT widths come from the loop body via Deriver.list_element (validated against the 8 readers stage 2 had independently pinned from table data: 5 reproduced exactly, 2 correctly reported variable-length, 1 abstained, 0 contradictions). PROOF: the walk consumes every one of this table's 116 records to its exact last byte, and no other shape in the format's grammar does. KEYED BY FILE STEM 'materialmatchinfo' because that is what identify_table_from_path returns and what get_schema is asked for; the class name would resolve to a key the app never looks up on this table. _stringKey/_key are omitted because the entry header consumes them. _verified_fields is EMPTY on purpose: tiling proves the structure and each field's offset, NOT what any field means, so nothing here may be presented as fact or written to until its values are cross-checked.",
+    "_no_null_skip": true,
+    "_ordered_fields": [
+      "_isBlocked",
+      "_effectWeaponKeyHash",
+      "_effectArmorKeyHash",
+      "_soundWeaponKeyHash",
+      "_soundArmorKeyHash",
+      "_physicsMaterialName"
+    ],
+    "_verified_fields": [],
+    "_isBlocked": {
+      "type": "u8"
+    },
+    "_effectWeaponKeyHash": {
+      "type": "u32"
+    },
+    "_effectArmorKeyHash": {
+      "type": "u32"
+    },
+    "_soundWeaponKeyHash": {
+      "type": "u32"
+    },
+    "_soundArmorKeyHash": {
+      "type": "u32"
+    },
+    "_physicsMaterialName": {
+      "type": "CString"
+    }
   }
 }
