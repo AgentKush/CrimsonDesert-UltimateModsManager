@@ -83,7 +83,7 @@ import argparse
 import collections
 import struct
 import sys
-from bisect import bisect_left
+from bisect import bisect_left, bisect_right
 from pathlib import Path
 
 _REPO = Path(__file__).resolve().parents[1]
@@ -769,7 +769,15 @@ class Deriver:
         blocks = sorted(targets | {lo})
 
         def hot(lea: int):
-            j = bisect_left(blocks, lea) - 1
+            # bisect_RIGHT, matching Func.block_start_of in
+            # extract_field_order_win.py (the implementation whose ordering
+            # was validated against the hand-RE'd tables). An outlined error
+            # block starts AT its own lea, so bisect_left lands one block
+            # EARLIER and reads that block's inbound edges -- ranking the
+            # field by where some other block is branched from. It is why
+            # this function disagreed with the verified order on ItemInfo,
+            # the very table extract_field_order_win.py cites as its proof.
+            j = bisect_right(blocks, lea) - 1
             b = blocks[j] if j >= 0 else blocks[0]
             src = inbound.get(b)
             return (min(src), lea) if src else (lea, lea)
