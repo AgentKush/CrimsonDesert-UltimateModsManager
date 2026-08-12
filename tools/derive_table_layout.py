@@ -107,6 +107,16 @@ HEADER_FIELDS = ("_stringKey", "_key")
 #: Widest plausible list element for the constraint search.
 MAX_ELEM = 128
 
+#: A derived width beyond this is not a width. sub_1440A7CCC comes out of
+#: solve_reader as ('fixed', 11565661) -- 11 MB for one field -- because it
+#: is not a reader at all and a `mov r8d, <big imm>` in it got taken for a
+#: read size. It is inert today only because reads_stream() says False for
+#: it so it contributes nothing to any sum, but a model that absurd should
+#: never be produced, let alone returned to a caller that might use it. No
+#: single record in the install is remotely near this, so the bound costs
+#: nothing real and turns a silent nonsense value into a refusal.
+MAX_READER_BYTES = 1 << 20
+
 #: An escape hatch for readers stage 1 genuinely cannot derive: a model
 #: read off the disassembly by hand, kept SEPARATE from the automatic ones
 #: so it is always visible which is which. An unmarked hand constant is how
@@ -481,10 +491,14 @@ class Deriver:
         reads: list[int] = []
         subs: list[int] = []
         pend = None
-        var_read = False
+        pend_var = False
+        var_read = False      # STRICT: an unsized read at an actual call site
+        var_seen = False      # PERMISSIVE: any non-immediate r8 write
         has_loop = False
         rcx_is_stream = True          # rcx holds the stream on entry
         back: list[tuple[int, int]] = []   # (branch index, target address)
+        read_pos: list[int] = []           # instruction index of each read
+        sub_pos: list[tuple[int, int]] = []   # (index, callee) of each subcall
         for n, i in enumerate(ins):
             o = i.operands
             _dst = i.op_str.split(",")[0].strip()
@@ -499,20 +513,37 @@ class Deriver:
                     and o[0].type == CS_OP_REG
                     and "r8" in i.op_str.split(",")[0]):
                 if o[1].type == CS_OP_IMM:
-                    pend = o[1].imm
+                    pend, pend_var = o[1].imm, False
                 elif (i.mnemonic == "lea" and o[1].type == CS_OP_MEM
                       and o[1].mem.disp >= 0):
-                    pend = o[1].mem.disp            # lea r8d,[rsi+4], rsi=0
+                    pend, pend_var = o[1].mem.disp, False   # lea r8d,[rsi+4]
                 else:
-                    pend, var_read = None, True     # width from a slot
+                    # A width from a slot -- but only if a stream read
+                    # actually follows. r8 is general-purpose and these
+                    # functions use it for other work: `mov r8, qword ptr
+                    # [rax + rcx*8]` in sub_141296960 is a hash-bucket
+                    # pointer, and treating it as an unsized read refused
+                    # that reader and blocked actionpointinfo's 28,958
+                    # records. Decided at the call site below, which is the
+                    # only place a missing width can matter.
+                    pend, pend_var = None, True
+                    var_seen = True
             if i.mnemonic == "call":
                 if len(o) == 1 and o[0].type == CS_OP_MEM:
                     if pend is not None:
                         reads.append(pend)
-                    pend = None
+                        read_pos.append(n)
+                    elif pend_var:
+                        # An unsized stream read: the width came from a slot.
+                        # This is the CString shape (read 4, then read that
+                        # many), which the ('str', 0) rule below depends on.
+                        var_read = True
+                        read_pos.append(n)
+                    pend, pend_var = None, False
                 elif len(o) == 1 and o[0].type == CS_OP_IMM:
                     if rcx_is_stream:
                         subs.append(o[0].imm)
+                        sub_pos.append((n, o[0].imm))
                 rcx_is_stream = False             # a call clobbers rcx
             if (i.mnemonic.startswith("j") and len(o) == 1
                     and o[0].type == CS_OP_IMM and va <= o[0].imm < i.address):
@@ -520,13 +551,28 @@ class Deriver:
         # A backward branch is only a LOOP if control can return to it. A
         # backward jmp into a shared tail or error block never does, and
         # counting those refused readers that contain no loop at all.
-        has_loop = any(self.closes_cycle(ins, n, t) for n, t in back)
+        addr_i = {x.address: k for k, x in enumerate(ins)}
+        ranges = [(addr_i[t], n) for n, t in back
+                  if t in addr_i and self.closes_cycle(ins, n, t)]
+
+        def _in_loop(p: int) -> bool:
+            return any(lo <= p <= hi for lo, hi in ranges)
+
+        # ...and a loop only matters if a STREAM READ IS INSIDE IT. The old
+        # test asked whether the function had a loop and whether it read
+        # anywhere, which refused readers whose loop touches no stream at
+        # all. sub_141296960 is one: a single 2-byte read, then a loop that
+        # does a lookup and reads nothing. It consumes 2 bytes, and refusing
+        # it blocked actionpointinfo -- 28,958 records, the largest table in
+        # the install.
+        has_loop = (any(_in_loop(p) for p in read_pos)
+                    or any(_in_loop(p) for p, c in sub_pos
+                           if self.reads_stream(c)))
         # A loop is only undecidable when its trip count is unknown -- that
         # is a count-prefixed list, and stage 2 derives its element width.
         # A loop whose bound is an immediate is fully determined, and a loop
         # in a helper that reads nothing consumes nothing either way.
-        if has_loop and (reads or var_read
-                         or any(self.reads_stream(s) for s in subs)):
+        if has_loop:
             loops = self.fixed_loops(ins)
             if not loops:
                 return None
@@ -556,12 +602,21 @@ class Deriver:
                         # `call r9` -- an indirect sized read inside a loop
                         total += pend2 * in_loop.get(idx, 1)
                     pend2 = None
-            if not total:
+            if not total or total > MAX_READER_BYTES:
                 return None
             got = ("fixed", total)
             self._memo[va] = got
             return got
-        if var_read and reads[:1] == [4]:
+        # CString detection deliberately uses the PERMISSIVE flag. The
+        # strict call-site rule misses sub_1411A33C0, which reads its u32
+        # length and then reads the bytes through `call qword ptr [rax+0x20]`
+        # and `call r8` rather than the usual `call [rax+8]` -- so no
+        # unsized read is visible at a recognised call site. The permissive
+        # flag is safe HERE because the rule also requires the reader's
+        # first read to be exactly 4 bytes, which is the length prefix; it
+        # is not safe for the loop veto above, where it counted a
+        # hash-bucket pointer load as a read.
+        if (var_read or var_seen) and reads[:1] == [4]:
             self._memo[va] = ("str", 0)
             return self._memo[va]
         extra, kind = 0, "fixed"
@@ -574,8 +629,10 @@ class Deriver:
             if r[0] in ("str", "strplus"):
                 kind = "strplus"
             extra += r[1]
-        got = (("fixed", 0) if (not reads and extra == 0)
-               else (kind, sum(reads) + extra))
+        total = sum(reads) + extra
+        if total > MAX_READER_BYTES:
+            return None                   # not a width; see MAX_READER_BYTES
+        got = ("fixed", 0) if (not reads and extra == 0) else (kind, total)
         self._memo[va] = got
         return got
 
