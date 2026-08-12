@@ -28443,5 +28443,79 @@
   {
    "f": "_isBlocked"
   }
+ ],
+ "factiongroup": [
+  {
+   "f": "_isBlocked"
+  },
+  {
+   "f": "_factionGroupName"
+  },
+  {
+   "f": "_factionInfoList"
+  },
+  {
+   "f": "_knowledgeInfo"
+  },
+  {
+   "f": "_uiIconPath"
+  },
+  {
+   "f": "_uiDailyQuestImagePath"
+  }
+ ],
+ "uisocialaction": [
+  {
+   "f": "_isBlocked"
+  },
+  {
+   "f": "_name"
+  },
+  {
+   "f": "_description"
+  },
+  {
+   "f": "_quickSlotUiTabIndex"
+  },
+  {
+   "f": "_quickSlotUiIndex"
+  }
+ ],
+ "factionreblockadinginfo": [
+  {
+   "f": "_isBlocked"
+  },
+  {
+   "f": "_reoccupationQuestDataList"
+  },
+  {
+   "f": "_factionNodeList"
+  },
+  {
+   "f": "_delayTime"
+  },
+  {
+   "f": "_protectCombatPower"
+  }
+ ],
+ "globalgameeventgroup": [
+  {
+   "f": "_isBlocked"
+  },
+  {
+   "f": "_defaultOption"
+  },
+  {
+   "f": "_globalGameEventUpdateOption"
+  },
+  {
+   "f": "_globalGameEventInfoList"
+  },
+  {
+   "f": "_fieldInfo"
+  },
+  {
+   "f": "_updateType"
+  }
  ]
 }

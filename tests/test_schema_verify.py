@@ -56,13 +56,22 @@ DERIVED = {"AIDialogTypeInfo", "BreakableObjectInfo", "CategoryGroupInfo",
            "SocketInfo", "TerrainRegionNaviInfo",
            "AIMemoryInfo", "ContentsPhaseInfo",
            "FactionOperationGroupInfo", "HouseInfo",
-           "ZoneInfo"}
+           "ZoneInfo",
+           # Added 2026-08-12. The lowercase names are deliberate: an
+           # override key must match the base schema key exactly, and its
+           # lowercase must equal the table's FILE STEM, which for these
+           # drops the `Info` the reflection class keeps
+           # (factiongroup.pabgb <-> FactionGroupInfo). Renaming them to
+           # the class name makes CDUMM stop finding the table.
+           "CraftToolInfo", "CraftToolGroupInfo",
+           "factiongroup", "uisocialaction",
+           "factionreblockadinginfo", "globalgameeventgroup"}
 
 
 def test_the_verified_order_set_is_exactly_what_we_expect():
     """A change here must be deliberate, not accidental.
 
-    It grew from 7 to 29 deliberately: the 22 in DERIVED have an
+    It grew from 7 to 35 deliberately: the 28 in DERIVED have an
     `_ordered_fields` proven by exact tiling on 100% of their records, so a
     candidate order source now has to reproduce them too. That is a real
     strengthening of the gate, and the reason it is spelled out rather than
@@ -71,7 +80,7 @@ def test_the_verified_order_set_is_exactly_what_we_expect():
     tabs = tables_with_verified_order()
     assert ITEM in tabs
     assert set(tabs) == HAND_RE | DERIVED
-    assert len(tabs) == 29
+    assert len(tabs) == 35
 
 
 def test_ground_truth_passes_itself():

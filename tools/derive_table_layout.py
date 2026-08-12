@@ -517,7 +517,7 @@ class Deriver:
         self._memo[va] = got
         return got
 
-    def list_element(self, va: int):
+    def list_element(self, va: int, seen: frozenset | None = None):
         """What ONE element of a count-prefixed list reader consumes.
 
         ``('fixed', n)``    a constant n bytes per element
@@ -552,6 +552,9 @@ class Deriver:
         the four readers stage 2 proved are plain fixed-width.
         """
         from capstone import CS_OP_IMM, CS_OP_MEM, CS_OP_REG
+        seen = frozenset() if seen is None else seen
+        if va in seen or len(seen) > 4:
+            return None                   # recursion guard
         ins = self.body(va)
         if not ins:
             return None
@@ -649,6 +652,24 @@ class Deriver:
                 elif o[0].type == CS_OP_IMM and self.reads_stream(o[0].imm):
                     sub = self.solve_reader(o[0].imm)
                     if sub is None:
+                        # Before abstaining: a sub-reader that is ITSELF a
+                        # count-prefixed list makes THIS element
+                        # variable-length, because the inner count is read
+                        # per element. Abstaining instead would leave
+                        # candidates() free to offer a constant width, which
+                        # is how royalsupply fitted ('list', 28): its element
+                        # calls sub_1412A11E0, itself 4 + count*20, so 28
+                        # only holds while every inner count is 1. That is
+                        # the HouseInfo coincidence one level down.
+                        if va not in seen:
+                            inner = self.list_element(o[0].imm,
+                                                      seen | {va})
+                            if inner is not None:
+                                return ("variable",
+                                        (f"sub_{o[0].imm:X} is itself a "
+                                         f"count-prefixed list "
+                                         f"({inner[0]}), so this element "
+                                         f"varies with the inner count"))
                         return None
                     if sub[0] in ("str", "strplus"):
                         return ("variable",

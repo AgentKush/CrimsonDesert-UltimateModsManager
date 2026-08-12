@@ -59,6 +59,22 @@ DERIVED = {
     "FactionOperationGroupInfo": 9,
     "HouseInfo": 4,
     "ZoneInfo": 6,
+    # ── added 2026-08-12 ──────────────────────────────────────────────────
+    # The KEY is the base schema's key, and its lowercase must equal the
+    # table's FILE STEM, because _load_schemas iterates the base file and
+    # the app asks get_schema() for the stem that
+    # identify_table_from_path returns. So the casing here is not sloppy
+    # and must not be "tidied": CraftToolInfo reuses the base schema's
+    # existing key, while the five lowercase ones are new base entries
+    # keyed by a stem that drops the `Info` the class name carries
+    # (factiongroup.pabgb <-> FactionGroupInfo). Rename any of them to the
+    # class name and CDUMM silently stops finding that table.
+    "CraftToolInfo": 19,
+    "CraftToolGroupInfo": 12,
+    "factiongroup": 7,
+    "uisocialaction": 2,
+    "factionreblockadinginfo": 108,
+    "globalgameeventgroup": 12,
 }
 
 
