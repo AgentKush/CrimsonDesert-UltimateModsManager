@@ -1140,10 +1140,10 @@
     }
   },
   "WantedInfo": {
-    "_meta_note": "Verified-only pass 2026-07-03. Only _increasePrice is validated: read as u64 at payload offset 0 (the default entry header consumes exactly key(2)+name_len(4, always 0)+null(1) = 7 bytes on every record, landing on the price). Values track the wanted tier — 30/50/100/500/1500 gold, consistent across all 5 key groups. _isBlocked/_useTargetPrice are all-zero in shipped data except one toggling flag byte whose name mapping can't be proven from the files alone (the field defs live only in the exe), so they are listed but gated as unverified rather than guessed. _stringKey (untyped in the base schema) stays dropped.",
+    "_meta_note": "Verified-only pass 2026-07-03. Only _increasePrice is validated: read as u64 at payload offset 0 (the default entry header consumes exactly key(2)+name_len(4, always 0)+null(1) = 7 bytes on every record, landing on the price). Values track the wanted tier — 30/50/100/500/1500 gold, consistent across all 5 key groups. _isBlocked/_useTargetPrice are all-zero in shipped data except one toggling flag byte whose name mapping can't be proven from the files alone (the field defs live only in the exe), so they are listed but gated as unverified rather than guessed. _stringKey (untyped in the base schema) stays dropped. CORRECTION 2026-08-13: the field ORDER was wrong and the entry header was mis-measured, and the two errors cancelled on the one field that mattered. There is no trailing NUL -- the name is EMPTY on every record, so there is nothing to terminate, and the byte read as a NUL at payload offset 6 is _isBlocked. Order is now _isBlocked, _increasePrice, _useTargetPrice with _no_null_skip, which accounts for all 16 bytes of every record: header 6, _isBlocked at 6, _increasePrice at 7..14, _useTargetPrice at 15. The previous model tiled 0 of 35 records (it ran _useTargetPrice to offset 16, one past the record) while still placing _increasePrice at 7, which is why the verified-only pass read the right values. _increasePrice's offset is UNCHANGED at 7, so no mod that edits it behaves differently; the note's own 30/50/100/500/1500 are exactly what the corrected walk reads. Found by the field_reads order oracle (hot-path branch order), which had WantedInfo as one of 3 tables out of 40 disagreeing with its shipped order; exact tiling could not see it because 1+8+1 and 8+1+1 both consume 10 bytes.",
     "_ordered_fields": [
-      "_increasePrice",
       "_isBlocked",
+      "_increasePrice",
       "_useTargetPrice"
     ],
     "_verified_fields": [
@@ -1157,7 +1157,8 @@
     },
     "_useTargetPrice": {
       "type": "u8"
-    }
+    },
+    "_no_null_skip": true
   },
   "AIDialogTypeInfo": {
     "_meta_note": "Derived 2026-08-11 from game buildid 24613230 by tools/derive_table_layout.py. Field ORDER comes from the exe's reflection error strings ordered by the hot-path branch that reaches each error block (tools/extract_field_order_win.py). Field WIDTHS come from the sized reads in the deserializer, with count-prefixed list element widths solved against the table data under a unique-or-nothing rule. PROOF: the walk consumes every one of this table's 108 records to its exact last byte, and no other shape in the format's documented grammar does. _stringKey/_key are omitted because the entry header consumes them. _verified_fields is EMPTY on purpose: tiling proves the structure and each field's offset, NOT what any field means, so nothing here may be presented as a fact or written to until its values are cross-checked.",

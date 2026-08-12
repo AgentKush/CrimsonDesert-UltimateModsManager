@@ -237,3 +237,57 @@ def test_the_correction_is_documented_in_the_provenance(key):
     assert "CORRECTION" in note, (
         f"{table} was shipped with a wrong element width; its note must "
         f"record the correction so the history is not lost")
+
+
+# ── WantedInfo: the phantom trailing NUL ─────────────────────────────────
+#
+# WantedInfo shipped with `_ordered_fields` starting at `_increasePrice` and
+# with the default (NUL-skipping) entry header. That model tiles 0 of 35
+# records: it places _useTargetPrice at offset 16, one byte past the end of a
+# 16-byte record. It nonetheless read the right prices, because the wrong
+# order and the mis-measured header cancelled on the one field that mattered
+# -- _increasePrice sat at offset 7 either way, which is why the
+# verified-only pass recorded 30/50/100/500/1500 correctly.
+#
+# There is no trailing NUL. The name is EMPTY on every record, so there is
+# nothing to terminate; the byte at payload offset 6 is _isBlocked, which is
+# the first field of essentially every table in this format. With
+# _no_null_skip and _isBlocked first, all 16 bytes are accounted for on all
+# 35 records: header 6, _isBlocked at 6, _increasePrice at 7..14,
+# _useTargetPrice at 15.
+#
+# Exact tiling could NOT catch this: 1+8+1 and 8+1+1 both consume 10 bytes.
+# The order oracle caught it -- field_reads' hot-path branch order had
+# WantedInfo as one of 3 tables out of 40 disagreeing with its shipped order.
+
+def test_wantedinfo_puts_isblocked_first_and_skips_no_null():
+    w = _overrides()["WantedInfo"]
+    assert w["_ordered_fields"] == [
+        "_isBlocked", "_increasePrice", "_useTargetPrice"], (
+        "WantedInfo's order regressed; _increasePrice-first tiles 0 of 35 "
+        "records because _useTargetPrice then lands past the record end")
+    assert w.get("_no_null_skip") is True, (
+        "WantedInfo has no trailing NUL to skip -- its names are empty, and "
+        "the byte previously skipped as one is _isBlocked")
+
+
+def test_wantedinfo_price_offset_is_unchanged_by_the_correction():
+    """The correction must not move the one writable field.
+
+    `_increasePrice` is the only entry in `_verified_fields`, so it is the
+    only field a mod can edit here. Under both the old and the corrected
+    model it sits at offset 7 (old: 7-byte header + field 0; new: 6-byte
+    header + 1-byte _isBlocked). If that ever stops being true, existing
+    mods start writing somewhere else.
+    """
+    w = _overrides()["WantedInfo"]
+    assert w["_verified_fields"] == ["_increasePrice"]
+    header = 2 + 4                      # key_size 2, name_len u32, name empty
+    order = w["_ordered_fields"]
+    widths = {"u8": 1, "u16": 2, "u32": 4, "u64": 8}
+    off = header
+    for name in order:
+        if name == "_increasePrice":
+            break
+        off += widths[w[name]["type"]]
+    assert off == 7, f"_increasePrice moved to offset {off}, must stay at 7"
