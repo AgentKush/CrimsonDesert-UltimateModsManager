@@ -113,6 +113,11 @@ DERIVED = {
     # 0x15F90 (89,999), so it cannot be right. See its _meta_note.
     "LevelActionPointInfo": 60,
     "MaterialBloodDecalInfo": 13,
+    # Unlocked by resolving register-carried read widths: MSVC hoists a
+    # literal into a callee-saved register when a deserialiser does many
+    # reads of the same size, so the width is `mov r8d, r15d` rather than an
+    # immediate. Resolved by UNIQUE DEFINITION over the function.
+    "uitalktreeinfo": 175,
     # ── added 2026-08-13: a struct-shaped FIELD reader ────────────────────
     # _wayPointData is a single struct, not a list element, whose width is
     # not constant because it ends in a counted list. Decomposed by

@@ -73,13 +73,13 @@ DERIVED = {"AIDialogTypeInfo", "BreakableObjectInfo", "CategoryGroupInfo",
            # Unlocked by the .pdata function-bounds sweep (2026-08-13).
            "AIEventTableInfo", "UIMapTextureInfo", "KnowledgeGroupInfo", "QuestGaugeInfo", "GameAdviceInfo", "CategoryInfo", "GimmickGateInfo", "gimmickgateconnection", "EquipTypeInfo", "QuestGroupInfo", "AIActionAttributeInfo",
            "factionwaypoint", "LevelActionPointInfo",
-           "MaterialBloodDecalInfo"}
+           "MaterialBloodDecalInfo", "uitalktreeinfo"}
 
 
 def test_the_verified_order_set_is_exactly_what_we_expect():
     """A change here must be deliberate, not accidental.
 
-    It grew from 7 to 54 deliberately: the 47 in DERIVED have an
+    It grew from 7 to 55 deliberately: the 48 in DERIVED have an
     `_ordered_fields` proven by exact tiling on 100% of their records, so a
     candidate order source now has to reproduce them too. That is a real
     strengthening of the gate, and the reason it is spelled out rather than
@@ -88,7 +88,7 @@ def test_the_verified_order_set_is_exactly_what_we_expect():
     tabs = tables_with_verified_order()
     assert ITEM in tabs
     assert set(tabs) == HAND_RE | DERIVED
-    assert len(tabs) == 54
+    assert len(tabs) == 55
 
 
 def test_ground_truth_passes_itself():
