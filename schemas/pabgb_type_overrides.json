@@ -1140,10 +1140,10 @@
     }
   },
   "WantedInfo": {
-    "_meta_note": "Verified-only pass 2026-07-03. Only _increasePrice is validated: read as u64 at payload offset 0 (the default entry header consumes exactly key(2)+name_len(4, always 0)+null(1) = 7 bytes on every record, landing on the price). Values track the wanted tier — 30/50/100/500/1500 gold, consistent across all 5 key groups. _isBlocked/_useTargetPrice are all-zero in shipped data except one toggling flag byte whose name mapping can't be proven from the files alone (the field defs live only in the exe), so they are listed but gated as unverified rather than guessed. _stringKey (untyped in the base schema) stays dropped.",
+    "_meta_note": "Verified-only pass 2026-07-03. Only _increasePrice is validated: read as u64 at payload offset 0 (the default entry header consumes exactly key(2)+name_len(4, always 0)+null(1) = 7 bytes on every record, landing on the price). Values track the wanted tier — 30/50/100/500/1500 gold, consistent across all 5 key groups. _isBlocked/_useTargetPrice are all-zero in shipped data except one toggling flag byte whose name mapping can't be proven from the files alone (the field defs live only in the exe), so they are listed but gated as unverified rather than guessed. _stringKey (untyped in the base schema) stays dropped. CORRECTION 2026-08-13: the field ORDER was wrong and the entry header was mis-measured, and the two errors cancelled on the one field that mattered. There is no trailing NUL -- the name is EMPTY on every record, so there is nothing to terminate, and the byte read as a NUL at payload offset 6 is _isBlocked. Order is now _isBlocked, _increasePrice, _useTargetPrice with _no_null_skip, which accounts for all 16 bytes of every record: header 6, _isBlocked at 6, _increasePrice at 7..14, _useTargetPrice at 15. The previous model tiled 0 of 35 records (it ran _useTargetPrice to offset 16, one past the record) while still placing _increasePrice at 7, which is why the verified-only pass read the right values. _increasePrice's offset is UNCHANGED at 7, so no mod that edits it behaves differently; the note's own 30/50/100/500/1500 are exactly what the corrected walk reads. Found by the field_reads order oracle (hot-path branch order), which had WantedInfo as one of 3 tables out of 40 disagreeing with its shipped order; exact tiling could not see it because 1+8+1 and 8+1+1 both consume 10 bytes.",
     "_ordered_fields": [
-      "_increasePrice",
       "_isBlocked",
+      "_increasePrice",
       "_useTargetPrice"
     ],
     "_verified_fields": [
@@ -1157,7 +1157,8 @@
     },
     "_useTargetPrice": {
       "type": "u8"
-    }
+    },
+    "_no_null_skip": true
   },
   "AIDialogTypeInfo": {
     "_meta_note": "Derived 2026-08-11 from game buildid 24613230 by tools/derive_table_layout.py. Field ORDER comes from the exe's reflection error strings ordered by the hot-path branch that reaches each error block (tools/extract_field_order_win.py). Field WIDTHS come from the sized reads in the deserializer, with count-prefixed list element widths solved against the table data under a unique-or-nothing rule. PROOF: the walk consumes every one of this table's 108 records to its exact last byte, and no other shape in the format's documented grammar does. _stringKey/_key are omitted because the entry header consumes them. _verified_fields is EMPTY on purpose: tiling proves the structure and each field's offset, NOT what any field means, so nothing here may be presented as a fact or written to until its values are cross-checked.",
@@ -1323,7 +1324,7 @@
     }
   },
   "FailMessageInfo": {
-    "_meta_note": "Derived 2026-08-11 from game buildid 24613230 by tools/derive_table_layout.py. Field ORDER comes from the exe's reflection error strings ordered by the hot-path branch that reaches each error block (tools/extract_field_order_win.py). Field WIDTHS come from the sized reads in the deserializer, with count-prefixed list element widths solved against the table data under a unique-or-nothing rule. PROOF: the walk consumes every one of this table's 11 records to its exact last byte, and no other shape in the format's documented grammar does. _stringKey/_key are omitted because the entry header consumes them. _verified_fields is EMPTY on purpose: tiling proves the structure and each field's offset, NOT what any field means, so nothing here may be presented as a fact or written to until its values are cross-checked.",
+    "_meta_note": "Derived 2026-08-11 from game buildid 24613230 by tools/derive_table_layout.py. Field ORDER comes from the exe's reflection error strings ordered by the hot-path branch that reaches each error block (tools/extract_field_order_win.py). Field WIDTHS come from the sized reads in the deserializer, with count-prefixed list element widths solved against the table data under a unique-or-nothing rule. PROOF: the walk consumes every one of this table's 11 records to its exact last byte, and no other shape in the format's documented grammar does. _stringKey/_key are omitted because the entry header consumes them. _verified_fields is EMPTY on purpose: tiling proves the structure and each field's offset, NOT what any field means, so nothing here may be presented as a fact or written to until its values are cross-checked. CORRECTION 2026-08-12: _failMessageInfoList shipped as CArray<[u8;33]>, a FIXED element width, and that was WRONG. The element ends in a LocalizableString read, so it has no constant width; the fixed value only fitted because every element string in this build is 16 bytes (17+16==33). Stage 2's candidate space contains no variable-element list shape, so it could not see the competing hypothesis and reported uniqueness inside an incomplete space. Both models tile 100% of records exactly, so the DATA cannot separate them -- the reader's disassembly can, and does. Now CArray<FailMessageInfo_Entry> (u32+LocalizableString). Exact tiling still holds under the corrected model, verified through CDUMM's own _consume_field_bytes.",
     "_no_null_skip": true,
     "_ordered_fields": [
       "_isBlocked",
@@ -1334,7 +1335,7 @@
       "type": "u8"
     },
     "_failMessageInfoList": {
-      "type": "CArray<[u8;33]>"
+      "type": "CArray<FailMessageInfo_Entry>"
     }
   },
   "GameAdviceGroupInfo": {
@@ -1804,7 +1805,7 @@
     }
   },
   "HouseInfo": {
-    "_meta_note": "Derived 2026-08-11 from game buildid 24613230 by tools/derive_table_layout.py. Field ORDER comes from the exe's reflection error strings ordered by the hot-path branch that reaches each error block (tools/extract_field_order_win.py). Field WIDTHS come from the sized reads in the deserializer, with count-prefixed list element widths solved against the table data under a unique-or-nothing rule. PROOF: the walk consumes every one of this table's 4 records to its exact last byte, and no other shape in the format's documented grammar does. _stringKey/_key are omitted because the entry header consumes them. _verified_fields is EMPTY on purpose: tiling proves the structure and each field's offset, NOT what any field means, so nothing here may be presented as a fact or written to until its values are cross-checked.",
+    "_meta_note": "Derived 2026-08-11 from game buildid 24613230 by tools/derive_table_layout.py. Field ORDER comes from the exe's reflection error strings ordered by the hot-path branch that reaches each error block (tools/extract_field_order_win.py). Field WIDTHS come from the sized reads in the deserializer, with count-prefixed list element widths solved against the table data under a unique-or-nothing rule. PROOF: the walk consumes every one of this table's 4 records to its exact last byte, and no other shape in the format's documented grammar does. _stringKey/_key are omitted because the entry header consumes them. _verified_fields is EMPTY on purpose: tiling proves the structure and each field's offset, NOT what any field means, so nothing here may be presented as a fact or written to until its values are cross-checked. CORRECTION 2026-08-12: _houseRegionDataList shipped as CArray<[u8;46]>, a FIXED element width, and that was WRONG. The element ends in a CString read, so it has no constant width; the fixed value only fitted because every element string in this build is 34 bytes (12+34==46). Stage 2's candidate space contains no variable-element list shape, so it could not see the competing hypothesis and reported uniqueness inside an incomplete space. Both models tile 100% of records exactly, so the DATA cannot separate them -- the reader's disassembly can, and does. Now CArray<HouseInfo_RegionDataEntry> (u32+u32+CString). Exact tiling still holds under the corrected model, verified through CDUMM's own _consume_field_bytes.",
     "_no_null_skip": true,
     "_ordered_fields": [
       "_isBlocked",
@@ -1824,7 +1825,7 @@
       "type": "u32"
     },
     "_houseRegionDataList": {
-      "type": "CArray<[u8;46]>"
+      "type": "CArray<HouseInfo_RegionDataEntry>"
     },
     "_floorHeight": {
       "type": "u32"
@@ -1843,6 +1844,991 @@
     },
     "_prefabPath": {
       "type": "CString"
+    }
+  },
+  "factiongroup": {
+    "_meta_note": "Derived 2026-08-12 from game buildid 24613230 by tools/derive_table_layout.py, reflection class FactionGroupInfo. Field ORDER comes from the exe's reflection error strings ordered by the hot-path branch that reaches each error block. Field WIDTHS come from the sized reads in the deserializer; count-prefixed list ELEMENT widths come from the loop body via Deriver.list_element (validated against the 8 readers stage 2 had independently pinned from table data: 5 reproduced exactly, 2 correctly reported variable-length, 1 abstained, 0 contradictions). PROOF: the walk consumes every one of this table's 7 records to its exact last byte, and no other shape in the format's grammar does. KEYED BY FILE STEM 'factiongroup' because that is what identify_table_from_path returns and what get_schema is asked for; the class name would resolve to a key the app never looks up on this table. _stringKey/_key are omitted because the entry header consumes them. _verified_fields is EMPTY on purpose: tiling proves the structure and each field's offset, NOT what any field means, so nothing here may be presented as fact or written to until its values are cross-checked.",
+    "_no_null_skip": true,
+    "_ordered_fields": [
+      "_isBlocked",
+      "_factionGroupName",
+      "_factionInfoList",
+      "_knowledgeInfo",
+      "_uiIconPath",
+      "_uiDailyQuestImagePath"
+    ],
+    "_verified_fields": [],
+    "_isBlocked": {
+      "type": "u8"
+    },
+    "_factionGroupName": {
+      "type": "LocalizableString"
+    },
+    "_factionInfoList": {
+      "type": "CArray<u32>"
+    },
+    "_knowledgeInfo": {
+      "type": "u32"
+    },
+    "_uiIconPath": {
+      "type": "u32"
+    },
+    "_uiDailyQuestImagePath": {
+      "type": "u32"
+    }
+  },
+  "uisocialaction": {
+    "_meta_note": "Derived 2026-08-12 from game buildid 24613230 by tools/derive_table_layout.py, reflection class UISocialActionInfo. Field ORDER comes from the exe's reflection error strings ordered by the hot-path branch that reaches each error block. Field WIDTHS come from the sized reads in the deserializer; count-prefixed list ELEMENT widths come from the loop body via Deriver.list_element (validated against the 8 readers stage 2 had independently pinned from table data: 5 reproduced exactly, 2 correctly reported variable-length, 1 abstained, 0 contradictions). PROOF: the walk consumes every one of this table's 2 records to its exact last byte, and no other shape in the format's grammar does. KEYED BY FILE STEM 'uisocialaction' because that is what identify_table_from_path returns and what get_schema is asked for; the class name would resolve to a key the app never looks up on this table. _stringKey/_key are omitted because the entry header consumes them. _verified_fields is EMPTY on purpose: tiling proves the structure and each field's offset, NOT what any field means, so nothing here may be presented as fact or written to until its values are cross-checked.",
+    "_no_null_skip": true,
+    "_ordered_fields": [
+      "_isBlocked",
+      "_name",
+      "_description",
+      "_quickSlotUiTabIndex",
+      "_quickSlotUiIndex"
+    ],
+    "_verified_fields": [],
+    "_isBlocked": {
+      "type": "u8"
+    },
+    "_name": {
+      "type": "LocalizableString"
+    },
+    "_description": {
+      "type": "LocalizableString"
+    },
+    "_quickSlotUiTabIndex": {
+      "type": "u8"
+    },
+    "_quickSlotUiIndex": {
+      "type": "u8"
+    }
+  },
+  "CraftToolInfo": {
+    "_meta_note": "Derived 2026-08-12 from game buildid 24613230 by tools/derive_table_layout.py, reflection class CraftToolInfo. Field ORDER comes from the exe's reflection error strings ordered by the hot-path branch that reaches each error block. Field WIDTHS come from the sized reads in the deserializer; count-prefixed list ELEMENT widths come from the loop body via Deriver.list_element (validated against the 8 readers stage 2 had independently pinned from table data: 5 reproduced exactly, 2 correctly reported variable-length, 1 abstained, 0 contradictions). PROOF: the walk consumes every one of this table's 19 records to its exact last byte, and no other shape in the format's grammar does. KEYED BY FILE STEM 'crafttoolinfo' because that is what identify_table_from_path returns and what get_schema is asked for; the class name would resolve to a key the app never looks up on this table. _stringKey/_key are omitted because the entry header consumes them. _verified_fields is EMPTY on purpose: tiling proves the structure and each field's offset, NOT what any field means, so nothing here may be presented as fact or written to until its values are cross-checked.",
+    "_no_null_skip": true,
+    "_ordered_fields": [
+      "_isBlocked",
+      "_craftToolGroupInfo",
+      "_failItem",
+      "_ingredientsItemGroupInfo"
+    ],
+    "_verified_fields": [],
+    "_isBlocked": {
+      "type": "u8"
+    },
+    "_craftToolGroupInfo": {
+      "type": "u16"
+    },
+    "_failItem": {
+      "type": "u32"
+    },
+    "_ingredientsItemGroupInfo": {
+      "type": "CArray<u16>"
+    }
+  },
+  "CraftToolGroupInfo": {
+    "_meta_note": "Derived 2026-08-12 from game buildid 24613230 by tools/derive_table_layout.py, reflection class CraftToolGroupInfo. Field ORDER comes from the exe's reflection error strings ordered by the hot-path branch that reaches each error block. Field WIDTHS come from the sized reads in the deserializer; count-prefixed list ELEMENT widths come from the loop body via Deriver.list_element (validated against the 8 readers stage 2 had independently pinned from table data: 5 reproduced exactly, 2 correctly reported variable-length, 1 abstained, 0 contradictions). PROOF: the walk consumes every one of this table's 12 records to its exact last byte, and no other shape in the format's grammar does. KEYED BY FILE STEM 'crafttoolgroupinfo' because that is what identify_table_from_path returns and what get_schema is asked for; the class name would resolve to a key the app never looks up on this table. _stringKey/_key are omitted because the entry header consumes them. _verified_fields is EMPTY on purpose: tiling proves the structure and each field's offset, NOT what any field means, so nothing here may be presented as fact or written to until its values are cross-checked.",
+    "_no_null_skip": true,
+    "_ordered_fields": [
+      "_isBlocked",
+      "_craftToolInfoList",
+      "_craftToolType",
+      "_ignoreReduceMaterialCountBuff",
+      "_materialInventoryInfoList"
+    ],
+    "_verified_fields": [],
+    "_isBlocked": {
+      "type": "u8"
+    },
+    "_craftToolInfoList": {
+      "type": "CArray<u16>"
+    },
+    "_craftToolType": {
+      "type": "u8"
+    },
+    "_ignoreReduceMaterialCountBuff": {
+      "type": "u8"
+    },
+    "_materialInventoryInfoList": {
+      "type": "CArray<u16>"
+    }
+  },
+  "factionreblockadinginfo": {
+    "_meta_note": "Derived 2026-08-12 from game buildid 24613230 by tools/derive_table_layout.py, reflection class FactionReblockadingInfo. Field ORDER comes from the exe's reflection error strings ordered by the hot-path branch that reaches each error block. Field WIDTHS come from the sized reads in the deserializer; count-prefixed list ELEMENT widths come from the loop body via Deriver.list_element (validated against the 8 readers stage 2 had independently pinned from table data: 5 reproduced exactly, 2 correctly reported variable-length, 1 abstained, 0 contradictions). PROOF: the walk consumes every one of this table's 108 records to its exact last byte, and no other shape in the format's grammar does. KEYED BY FILE STEM 'factionreblockadinginfo' because that is what identify_table_from_path returns and what get_schema is asked for; the class name would resolve to a key the app never looks up on this table. _stringKey/_key are omitted because the entry header consumes them. _verified_fields is EMPTY on purpose: tiling proves the structure and each field's offset, NOT what any field means, so nothing here may be presented as fact or written to until its values are cross-checked.",
+    "_no_null_skip": true,
+    "_ordered_fields": [
+      "_isBlocked",
+      "_reoccupationQuestDataList",
+      "_factionNodeList",
+      "_delayTime",
+      "_protectCombatPower"
+    ],
+    "_verified_fields": [],
+    "_isBlocked": {
+      "type": "u8"
+    },
+    "_reoccupationQuestDataList": {
+      "type": "CArray<[u8;20]>"
+    },
+    "_factionNodeList": {
+      "type": "CArray<u32>"
+    },
+    "_delayTime": {
+      "type": "u32"
+    },
+    "_protectCombatPower": {
+      "type": "u32"
+    }
+  },
+  "globalgameeventgroup": {
+    "_meta_note": "Derived 2026-08-12 from game buildid 24613230 by tools/derive_table_layout.py, reflection class GlobalGameEventGroupInfo. Field ORDER comes from the exe's reflection error strings ordered by the hot-path branch that reaches each error block. Field WIDTHS come from the sized reads in the deserializer; count-prefixed list ELEMENT widths come from the loop body via Deriver.list_element (validated against the 8 readers stage 2 had independently pinned from table data: 5 reproduced exactly, 2 correctly reported variable-length, 1 abstained, 0 contradictions). PROOF: the walk consumes every one of this table's 12 records to its exact last byte, and no other shape in the format's grammar does. KEYED BY FILE STEM 'globalgameeventgroup' because that is what identify_table_from_path returns and what get_schema is asked for; the class name would resolve to a key the app never looks up on this table. _stringKey/_key are omitted because the entry header consumes them. _verified_fields is EMPTY on purpose: tiling proves the structure and each field's offset, NOT what any field means, so nothing here may be presented as fact or written to until its values are cross-checked.",
+    "_no_null_skip": true,
+    "_ordered_fields": [
+      "_isBlocked",
+      "_defaultOption",
+      "_globalGameEventUpdateOption",
+      "_globalGameEventInfoList",
+      "_fieldInfo",
+      "_updateType"
+    ],
+    "_verified_fields": [],
+    "_isBlocked": {
+      "type": "u8"
+    },
+    "_defaultOption": {
+      "type": "[u8;24]"
+    },
+    "_globalGameEventUpdateOption": {
+      "type": "CArray<[u8;24]>"
+    },
+    "_globalGameEventInfoList": {
+      "type": "CArray<u16>"
+    },
+    "_fieldInfo": {
+      "type": "u32"
+    },
+    "_updateType": {
+      "type": "u8"
+    }
+  },
+  "MaterialMatchInfo": {
+    "_meta_note": "Derived 2026-08-12 from game buildid 24613230 by tools/derive_table_layout.py, reflection class MaterialMatchInfo. Field ORDER comes from the exe's reflection error strings ordered by the hot-path branch that reaches each error block. Field WIDTHS come from the sized reads in the deserializer; count-prefixed list ELEMENT widths come from the loop body via Deriver.list_element (validated against the 8 readers stage 2 had independently pinned from table data: 5 reproduced exactly, 2 correctly reported variable-length, 1 abstained, 0 contradictions). PROOF: the walk consumes every one of this table's 116 records to its exact last byte, and no other shape in the format's grammar does. KEYED BY FILE STEM 'materialmatchinfo' because that is what identify_table_from_path returns and what get_schema is asked for; the class name would resolve to a key the app never looks up on this table. _stringKey/_key are omitted because the entry header consumes them. _verified_fields is EMPTY on purpose: tiling proves the structure and each field's offset, NOT what any field means, so nothing here may be presented as fact or written to until its values are cross-checked.",
+    "_no_null_skip": true,
+    "_ordered_fields": [
+      "_isBlocked",
+      "_effectWeaponKeyHash",
+      "_effectArmorKeyHash",
+      "_soundWeaponKeyHash",
+      "_soundArmorKeyHash",
+      "_physicsMaterialName"
+    ],
+    "_verified_fields": [],
+    "_isBlocked": {
+      "type": "u8"
+    },
+    "_effectWeaponKeyHash": {
+      "type": "u32"
+    },
+    "_effectArmorKeyHash": {
+      "type": "u32"
+    },
+    "_soundWeaponKeyHash": {
+      "type": "u32"
+    },
+    "_soundArmorKeyHash": {
+      "type": "u32"
+    },
+    "_physicsMaterialName": {
+      "type": "CString"
+    }
+  },
+  "FieldLevelNameTableInfo": {
+    "_meta_note": "Derived 2026-08-12 from game buildid 24613230 by tools/derive_table_layout.py, reflection class FieldLevelNameTableInfo. Field ORDER from the exe's reflection error strings ordered by the hot-path branch that reaches each error block. Field WIDTHS from the sized reads in the deserializer; count-prefixed list element widths from the loop body via Deriver.list_element. PROOF: the walk consumes every one of this table's 2 records to its exact last byte. KEYED BY FILE STEM 'fieldlevelnametableinfo' because that is what identify_table_from_path returns and what get_schema is asked for. _stringKey/_key are omitted because the entry header consumes them. _verified_fields is EMPTY on purpose: tiling proves the structure and each field's offset, NOT what any field means. _levelNameInfoDataList is a list whose ELEMENT has no constant width, so it is CArray<FieldLevelNameTableInfo_KeyEntry> rather than CArray<[u8;N]>. The element's members come from the loop body's own read sequence via Deriver.element_parts, which independently reproduces the two substructs written by hand for HouseInfo and FailMessageInfo. Member names are anonymous on purpose: the parts give structure and say nothing about meaning.",
+    "_no_null_skip": true,
+    "_ordered_fields": [
+      "_isBlocked",
+      "_fieldLevelName",
+      "_levelNameInfoDataList"
+    ],
+    "_verified_fields": [],
+    "_isBlocked": {
+      "type": "u8"
+    },
+    "_fieldLevelName": {
+      "type": "CString"
+    },
+    "_levelNameInfoDataList": {
+      "type": "CArray<FieldLevelNameTableInfo_KeyEntry>"
+    }
+  },
+  "PartPrefabDyeTexturePalleteInfo": {
+    "_meta_note": "Derived 2026-08-12 from game buildid 24613230 by tools/derive_table_layout.py, reflection class PartPrefabDyeTexturePalleteInfo. Field ORDER from the exe's reflection error strings ordered by the hot-path branch that reaches each error block. Field WIDTHS from the sized reads in the deserializer; count-prefixed list element widths from the loop body via Deriver.list_element. PROOF: the walk consumes every one of this table's 11 records to its exact last byte. KEYED BY FILE STEM 'partprefabdyetexturepalleteinfo' because that is what identify_table_from_path returns and what get_schema is asked for. _stringKey/_key are omitted because the entry header consumes them. _verified_fields is EMPTY on purpose: tiling proves the structure and each field's offset, NOT what any field means. _textureSetArray is a list whose ELEMENT has no constant width, so it is CArray<PartPrefabDyeTexturePalleteInfo_KeyEntry> rather than CArray<[u8;N]>. The element's members come from the loop body's own read sequence via Deriver.element_parts, which independently reproduces the two substructs written by hand for HouseInfo and FailMessageInfo. Member names are anonymous on purpose: the parts give structure and say nothing about meaning.",
+    "_no_null_skip": true,
+    "_ordered_fields": [
+      "_isBlocked",
+      "_textureSetIndex",
+      "_textureSetArray"
+    ],
+    "_verified_fields": [],
+    "_isBlocked": {
+      "type": "u8"
+    },
+    "_textureSetIndex": {
+      "type": "u32"
+    },
+    "_textureSetArray": {
+      "type": "CArray<PartPrefabDyeTexturePalleteInfo_KeyEntry>"
+    }
+  },
+  "RelationInfo": {
+    "_meta_note": "Derived 2026-08-12 from game buildid 24613230 by tools/derive_table_layout.py, reflection class RelationInfo. Field ORDER from the exe's reflection error strings ordered by the hot-path branch that reaches each error block. Field WIDTHS from the sized reads in the deserializer; count-prefixed list element widths from the loop body via Deriver.list_element. PROOF: the walk consumes every one of this table's 52 records to its exact last byte. KEYED BY FILE STEM 'relationinfo' because that is what identify_table_from_path returns and what get_schema is asked for. _stringKey/_key are omitted because the entry header consumes them. _verified_fields is EMPTY on purpose: tiling proves the structure and each field's offset, NOT what any field means. _gimmickTagDataList is a list whose ELEMENT has no constant width, so it is CArray<RelationInfo_KeyEntry> rather than CArray<[u8;N]>. The element's members come from the loop body's own read sequence via Deriver.element_parts, which independently reproduces the two substructs written by hand for HouseInfo and FailMessageInfo. Member names are anonymous on purpose: the parts give structure and say nothing about meaning.",
+    "_no_null_skip": true,
+    "_ordered_fields": [
+      "_isBlocked",
+      "_relationReactionType",
+      "_order",
+      "_detectRestrictCount",
+      "_detectMemorizeTime",
+      "_doCompleteNotPriorityActor",
+      "_detectValueRatio",
+      "_isDetectEventOnly",
+      "_gimmickTagDataList"
+    ],
+    "_verified_fields": [],
+    "_isBlocked": {
+      "type": "u8"
+    },
+    "_relationReactionType": {
+      "type": "u8"
+    },
+    "_order": {
+      "type": "u8"
+    },
+    "_detectRestrictCount": {
+      "type": "u8"
+    },
+    "_detectMemorizeTime": {
+      "type": "u64"
+    },
+    "_doCompleteNotPriorityActor": {
+      "type": "u8"
+    },
+    "_detectValueRatio": {
+      "type": "u32"
+    },
+    "_isDetectEventOnly": {
+      "type": "u8"
+    },
+    "_gimmickTagDataList": {
+      "type": "CArray<RelationInfo_KeyEntry>"
+    }
+  },
+  "royalsupply": {
+    "_meta_note": "Derived 2026-08-12 from game buildid 24613230 by tools/derive_table_layout.py, reflection class RoyalSupplyInfo. Field ORDER from the exe's reflection error strings ordered by the hot-path branch that reaches each error block. Field WIDTHS from the sized reads in the deserializer; count-prefixed list element widths from the loop body via Deriver.list_element. PROOF: the walk consumes every one of this table's 4 records to its exact last byte. KEYED BY FILE STEM 'royalsupply' because that is what identify_table_from_path returns and what get_schema is asked for. _stringKey/_key are omitted because the entry header consumes them. _verified_fields is EMPTY on purpose: tiling proves the structure and each field's offset, NOT what any field means. _Quest is a list whose ELEMENT has no constant width, so it is CArray<RoyalSupplyInfo_QuestEntry> rather than CArray<[u8;N]>. The element's members come from the loop body's own read sequence via Deriver.element_parts, which independently reproduces the two substructs written by hand for HouseInfo and FailMessageInfo. Member names are anonymous on purpose: the parts give structure and say nothing about meaning. _Mission is a list whose ELEMENT has no constant width, so it is CArray<RoyalSupplyInfo_QuestEntry> rather than CArray<[u8;N]>. The element's members come from the loop body's own read sequence via Deriver.element_parts, which independently reproduces the two substructs written by hand for HouseInfo and FailMessageInfo. Member names are anonymous on purpose: the parts give structure and say nothing about meaning.",
+    "_no_null_skip": true,
+    "_ordered_fields": [
+      "_isBlocked",
+      "_Quest",
+      "_Mission",
+      "_defaultRandomList",
+      "_stageInfo"
+    ],
+    "_verified_fields": [],
+    "_isBlocked": {
+      "type": "u8"
+    },
+    "_Quest": {
+      "type": "CArray<RoyalSupplyInfo_QuestEntry>"
+    },
+    "_Mission": {
+      "type": "CArray<RoyalSupplyInfo_QuestEntry>"
+    },
+    "_defaultRandomList": {
+      "type": "CArray<[u8;20]>"
+    },
+    "_stageInfo": {
+      "type": "u32"
+    }
+  },
+  "AIEventTableInfo": {
+    "_meta_note": "Derived 2026-08-13 from game buildid 24613230 by tools/derive_table_layout.py, reflection class AIEventTableInfo. Field ORDER comes from the exe's reflection error strings ordered by the hot-path branch that reaches each error block. Field WIDTHS come from the sized reads in the deserializer; count-prefixed list ELEMENT widths come from the loop body via Deriver.list_element (validated against the 8 readers stage 2 had independently pinned from table data: 5 reproduced exactly, 2 correctly reported variable-length, 1 abstained, 0 contradictions). PROOF: the walk consumes every one of this table's 988 records to its exact last byte, and no other shape in the format's grammar does. KEYED BY FILE STEM 'aieventtableinfo' because that is what identify_table_from_path returns and what get_schema is asked for; the class name would resolve to a key the app never looks up on this table. _stringKey/_key are omitted because the entry header consumes them. _verified_fields is EMPTY on purpose: tiling proves the structure and each field's offset, NOT what any field means, so nothing here may be presented as fact or written to until its values are cross-checked.",
+    "_no_null_skip": true,
+    "_ordered_fields": [
+      "_isBlocked",
+      "_showName",
+      "_delegateEventHandler",
+      "_reactionLevel",
+      "_allowTypeFlag",
+      "_eventType",
+      "_isSequencerInterruptEvent",
+      "_eventDelayType",
+      "_isTargetMustExist",
+      "_isMustHandled"
+    ],
+    "_verified_fields": [],
+    "_isBlocked": {
+      "type": "u8"
+    },
+    "_showName": {
+      "type": "CString"
+    },
+    "_delegateEventHandler": {
+      "type": "u32"
+    },
+    "_reactionLevel": {
+      "type": "u32"
+    },
+    "_allowTypeFlag": {
+      "type": "u32"
+    },
+    "_eventType": {
+      "type": "u32"
+    },
+    "_isSequencerInterruptEvent": {
+      "type": "u8"
+    },
+    "_eventDelayType": {
+      "type": "u64"
+    },
+    "_isTargetMustExist": {
+      "type": "u8"
+    },
+    "_isMustHandled": {
+      "type": "u8"
+    }
+  },
+  "UIMapTextureInfo": {
+    "_meta_note": "Derived 2026-08-13 from game buildid 24613230 by tools/derive_table_layout.py, reflection class UIMapTextureInfo. Field ORDER comes from the exe's reflection error strings ordered by the hot-path branch that reaches each error block. Field WIDTHS come from the sized reads in the deserializer; count-prefixed list ELEMENT widths come from the loop body via Deriver.list_element (validated against the 8 readers stage 2 had independently pinned from table data: 5 reproduced exactly, 2 correctly reported variable-length, 1 abstained, 0 contradictions). PROOF: the walk consumes every one of this table's 2025 records to its exact last byte, and no other shape in the format's grammar does. KEYED BY FILE STEM 'uimaptextureinfo' because that is what identify_table_from_path returns and what get_schema is asked for; the class name would resolve to a key the app never looks up on this table. _stringKey/_key are omitted because the entry header consumes them. _verified_fields is EMPTY on purpose: tiling proves the structure and each field's offset, NOT what any field means, so nothing here may be presented as fact or written to until its values are cross-checked.",
+    "_no_null_skip": true,
+    "_ordered_fields": [
+      "_isBlocked",
+      "_worldPosition",
+      "_uiTemplateName",
+      "_uiTextureName",
+      "_uiSmallTextureName",
+      "_uiFilterGroupComponentName",
+      "_uiFilterTextureName",
+      "_uiMapLayerType",
+      "_mapIconType",
+      "_knowledgeInfo",
+      "_gameplayTriggerInfo",
+      "_filterGroupName",
+      "_filterGroupParentInfo",
+      "_zIndex",
+      "_isFlexibleSize",
+      "_isFlexibleIcon",
+      "_isSimpleMaterial",
+      "_tooltipText",
+      "_autoRemoveDistance",
+      "_maxScale",
+      "_minScale",
+      "_lerpIconMinSize",
+      "_lerpMinZoom",
+      "_lerpMaxZoom",
+      "_lerpSize",
+      "_changeScaleRatio",
+      "_filterType",
+      "_isShowTooltip",
+      "_isRegionKnowledgeIcon",
+      "_isUIMapQuestType",
+      "_isUIMapDebugQuestType",
+      "_isUIMapDebugQuestAreaType",
+      "_isUIMapNPCType",
+      "_isUIMapMissionType",
+      "_isActorType",
+      "_isPerspectiveIcon",
+      "_isAlwayShowMinimap",
+      "_checkHasOwnerActorIcon",
+      "_isFixScaleIconImage",
+      "_useChangeScale",
+      "_useChangeScaleWhenZoomOut",
+      "_useAutoAbyssLayer",
+      "_minimapForceUpdateIcon",
+      "_indoorStateForceShow",
+      "_otherSpaceForceShow",
+      "_isKeepShowByCharacterInfo",
+      "_isDiscoverGimmickIcon",
+      "_uiFilterGroupByInfo"
+    ],
+    "_verified_fields": [],
+    "_isBlocked": {
+      "type": "u8"
+    },
+    "_worldPosition": {
+      "type": "[u8;12]"
+    },
+    "_uiTemplateName": {
+      "type": "u32"
+    },
+    "_uiTextureName": {
+      "type": "u32"
+    },
+    "_uiSmallTextureName": {
+      "type": "u32"
+    },
+    "_uiFilterGroupComponentName": {
+      "type": "u32"
+    },
+    "_uiFilterTextureName": {
+      "type": "u32"
+    },
+    "_uiMapLayerType": {
+      "type": "u8"
+    },
+    "_mapIconType": {
+      "type": "u32"
+    },
+    "_knowledgeInfo": {
+      "type": "u32"
+    },
+    "_gameplayTriggerInfo": {
+      "type": "u32"
+    },
+    "_filterGroupName": {
+      "type": "LocalizableString"
+    },
+    "_filterGroupParentInfo": {
+      "type": "u32"
+    },
+    "_zIndex": {
+      "type": "u32"
+    },
+    "_isFlexibleSize": {
+      "type": "u8"
+    },
+    "_isFlexibleIcon": {
+      "type": "u8"
+    },
+    "_isSimpleMaterial": {
+      "type": "u8"
+    },
+    "_tooltipText": {
+      "type": "LocalizableString"
+    },
+    "_autoRemoveDistance": {
+      "type": "u32"
+    },
+    "_maxScale": {
+      "type": "u32"
+    },
+    "_minScale": {
+      "type": "u32"
+    },
+    "_lerpIconMinSize": {
+      "type": "u32"
+    },
+    "_lerpMinZoom": {
+      "type": "u32"
+    },
+    "_lerpMaxZoom": {
+      "type": "u32"
+    },
+    "_lerpSize": {
+      "type": "u32"
+    },
+    "_changeScaleRatio": {
+      "type": "u32"
+    },
+    "_filterType": {
+      "type": "u8"
+    },
+    "_isShowTooltip": {
+      "type": "u8"
+    },
+    "_isRegionKnowledgeIcon": {
+      "type": "u8"
+    },
+    "_isUIMapQuestType": {
+      "type": "u8"
+    },
+    "_isUIMapDebugQuestType": {
+      "type": "u8"
+    },
+    "_isUIMapDebugQuestAreaType": {
+      "type": "u8"
+    },
+    "_isUIMapNPCType": {
+      "type": "u8"
+    },
+    "_isUIMapMissionType": {
+      "type": "u8"
+    },
+    "_isActorType": {
+      "type": "u8"
+    },
+    "_isPerspectiveIcon": {
+      "type": "u8"
+    },
+    "_isAlwayShowMinimap": {
+      "type": "u8"
+    },
+    "_checkHasOwnerActorIcon": {
+      "type": "u8"
+    },
+    "_isFixScaleIconImage": {
+      "type": "u8"
+    },
+    "_useChangeScale": {
+      "type": "u8"
+    },
+    "_useChangeScaleWhenZoomOut": {
+      "type": "u8"
+    },
+    "_useAutoAbyssLayer": {
+      "type": "u8"
+    },
+    "_minimapForceUpdateIcon": {
+      "type": "u8"
+    },
+    "_indoorStateForceShow": {
+      "type": "u8"
+    },
+    "_otherSpaceForceShow": {
+      "type": "u8"
+    },
+    "_isKeepShowByCharacterInfo": {
+      "type": "u8"
+    },
+    "_isDiscoverGimmickIcon": {
+      "type": "u8"
+    },
+    "_uiFilterGroupByInfo": {
+      "type": "u8"
+    }
+  },
+  "KnowledgeGroupInfo": {
+    "_meta_note": "Derived 2026-08-13 from game buildid 24613230 by tools/derive_table_layout.py, reflection class KnowledgeGroupInfo. Field ORDER comes from the exe's reflection error strings ordered by the hot-path branch that reaches each error block. Field WIDTHS come from the sized reads in the deserializer; count-prefixed list ELEMENT widths come from the loop body via Deriver.list_element (validated against the 8 readers stage 2 had independently pinned from table data: 5 reproduced exactly, 2 correctly reported variable-length, 1 abstained, 0 contradictions). PROOF: the walk consumes every one of this table's 600 records to its exact last byte, and no other shape in the format's grammar does. KEYED BY FILE STEM 'knowledgegroupinfo' because that is what identify_table_from_path returns and what get_schema is asked for; the class name would resolve to a key the app never looks up on this table. _stringKey/_key are omitted because the entry header consumes them. _verified_fields is EMPTY on purpose: tiling proves the structure and each field's offset, NOT what any field means, so nothing here may be presented as fact or written to until its values are cross-checked.",
+    "_no_null_skip": true,
+    "_ordered_fields": [
+      "_isBlocked",
+      "_knowledgeGroupName",
+      "_knowledgeGroupUnknownName",
+      "_knowledgeGroupDesc",
+      "_uiTextureName",
+      "_knowledgeGroupIconPath",
+      "_uiComponentName",
+      "_knowledgeInfoList",
+      "_childKnowledgeGroupInfoList",
+      "_parentKnowledgeGroupInfo",
+      "_isShowUI",
+      "_isShowUIAlert",
+      "_isMeditationLearnable"
+    ],
+    "_verified_fields": [],
+    "_isBlocked": {
+      "type": "u8"
+    },
+    "_knowledgeGroupName": {
+      "type": "LocalizableString"
+    },
+    "_knowledgeGroupUnknownName": {
+      "type": "LocalizableString"
+    },
+    "_knowledgeGroupDesc": {
+      "type": "LocalizableString"
+    },
+    "_uiTextureName": {
+      "type": "u32"
+    },
+    "_knowledgeGroupIconPath": {
+      "type": "u32"
+    },
+    "_uiComponentName": {
+      "type": "u32"
+    },
+    "_knowledgeInfoList": {
+      "type": "CArray<u32>"
+    },
+    "_childKnowledgeGroupInfoList": {
+      "type": "CArray<u32>"
+    },
+    "_parentKnowledgeGroupInfo": {
+      "type": "u32"
+    },
+    "_isShowUI": {
+      "type": "u8"
+    },
+    "_isShowUIAlert": {
+      "type": "u8"
+    },
+    "_isMeditationLearnable": {
+      "type": "u8"
+    }
+  },
+  "QuestGaugeInfo": {
+    "_meta_note": "Derived 2026-08-13 from game buildid 24613230 by tools/derive_table_layout.py, reflection class QuestGaugeInfo. Field ORDER comes from the exe's reflection error strings ordered by the hot-path branch that reaches each error block. Field WIDTHS come from the sized reads in the deserializer; count-prefixed list ELEMENT widths come from the loop body via Deriver.list_element (validated against the 8 readers stage 2 had independently pinned from table data: 5 reproduced exactly, 2 correctly reported variable-length, 1 abstained, 0 contradictions). PROOF: the walk consumes every one of this table's 509 records to its exact last byte, and no other shape in the format's grammar does. KEYED BY FILE STEM 'questgaugeinfo' because that is what identify_table_from_path returns and what get_schema is asked for; the class name would resolve to a key the app never looks up on this table. _stringKey/_key are omitted because the entry header consumes them. _verified_fields is EMPTY on purpose: tiling proves the structure and each field's offset, NOT what any field means, so nothing here may be presented as fact or written to until its values are cross-checked.",
+    "_no_null_skip": true,
+    "_ordered_fields": [
+      "_isBlocked",
+      "_parentQuest",
+      "_startEventData",
+      "_completeEventData",
+      "_questInfoList",
+      "_targetMissionInfoList",
+      "_excludeStageInfoList",
+      "_factionInfoList",
+      "_factionNodeInfoList",
+      "_gaugeTime",
+      "_percent",
+      "_gaugeType",
+      "_progressDataList"
+    ],
+    "_verified_fields": [],
+    "_isBlocked": {
+      "type": "u8"
+    },
+    "_parentQuest": {
+      "type": "u32"
+    },
+    "_startEventData": {
+      "type": "[u8;13]"
+    },
+    "_completeEventData": {
+      "type": "[u8;13]"
+    },
+    "_questInfoList": {
+      "type": "CArray<u32>"
+    },
+    "_targetMissionInfoList": {
+      "type": "CArray<u32>"
+    },
+    "_excludeStageInfoList": {
+      "type": "CArray<u32>"
+    },
+    "_factionInfoList": {
+      "type": "CArray<u32>"
+    },
+    "_factionNodeInfoList": {
+      "type": "CArray<u32>"
+    },
+    "_gaugeTime": {
+      "type": "u32"
+    },
+    "_percent": {
+      "type": "u64"
+    },
+    "_gaugeType": {
+      "type": "u8"
+    },
+    "_progressDataList": {
+      "type": "CArray<[u8;21]>"
+    }
+  },
+  "GameAdviceInfo": {
+    "_meta_note": "Derived 2026-08-13 from game buildid 24613230 by tools/derive_table_layout.py, reflection class GameAdviceInfo. Field ORDER comes from the exe's reflection error strings ordered by the hot-path branch that reaches each error block. Field WIDTHS come from the sized reads in the deserializer; count-prefixed list ELEMENT widths come from the loop body via Deriver.list_element (validated against the 8 readers stage 2 had independently pinned from table data: 5 reproduced exactly, 2 correctly reported variable-length, 1 abstained, 0 contradictions). PROOF: the walk consumes every one of this table's 472 records to its exact last byte, and no other shape in the format's grammar does. KEYED BY FILE STEM 'gameadviceinfo' because that is what identify_table_from_path returns and what get_schema is asked for; the class name would resolve to a key the app never looks up on this table. _stringKey/_key are omitted because the entry header consumes them. _verified_fields is EMPTY on purpose: tiling proves the structure and each field's offset, NOT what any field means, so nothing here may be presented as fact or written to until its values are cross-checked.",
+    "_no_null_skip": true,
+    "_ordered_fields": [
+      "_isBlocked",
+      "_titleLocalStringInfo",
+      "_descLocalStringInfo",
+      "_keyMouseInputDescLocalStringInfo",
+      "_gameAdviceUnknownName",
+      "_uiTextureNameStringInfo",
+      "_uiVideoPathStringInfo",
+      "_narrationAudioPathStringInfo",
+      "_widgetIdStringInfo",
+      "_groupRelativeIndex",
+      "_isOnce",
+      "_isShowGuideList",
+      "_gameAdviceGroupInfo",
+      "_isDefault",
+      "_isUseLoadingView"
+    ],
+    "_verified_fields": [],
+    "_isBlocked": {
+      "type": "u8"
+    },
+    "_titleLocalStringInfo": {
+      "type": "LocalizableString"
+    },
+    "_descLocalStringInfo": {
+      "type": "LocalizableString"
+    },
+    "_keyMouseInputDescLocalStringInfo": {
+      "type": "LocalizableString"
+    },
+    "_gameAdviceUnknownName": {
+      "type": "LocalizableString"
+    },
+    "_uiTextureNameStringInfo": {
+      "type": "u32"
+    },
+    "_uiVideoPathStringInfo": {
+      "type": "u32"
+    },
+    "_narrationAudioPathStringInfo": {
+      "type": "u32"
+    },
+    "_widgetIdStringInfo": {
+      "type": "u32"
+    },
+    "_groupRelativeIndex": {
+      "type": "u32"
+    },
+    "_isOnce": {
+      "type": "u8"
+    },
+    "_isShowGuideList": {
+      "type": "u8"
+    },
+    "_gameAdviceGroupInfo": {
+      "type": "u32"
+    },
+    "_isDefault": {
+      "type": "u8"
+    },
+    "_isUseLoadingView": {
+      "type": "u8"
+    }
+  },
+  "CategoryInfo": {
+    "_meta_note": "Derived 2026-08-13 from game buildid 24613230 by tools/derive_table_layout.py, reflection class CategoryInfo. Field ORDER comes from the exe's reflection error strings ordered by the hot-path branch that reaches each error block. Field WIDTHS come from the sized reads in the deserializer; count-prefixed list ELEMENT widths come from the loop body via Deriver.list_element (validated against the 8 readers stage 2 had independently pinned from table data: 5 reproduced exactly, 2 correctly reported variable-length, 1 abstained, 0 contradictions). PROOF: the walk consumes every one of this table's 432 records to its exact last byte, and no other shape in the format's grammar does. KEYED BY FILE STEM 'categoryinfo' because that is what identify_table_from_path returns and what get_schema is asked for; the class name would resolve to a key the app never looks up on this table. _stringKey/_key are omitted because the entry header consumes them. _verified_fields is EMPTY on purpose: tiling proves the structure and each field's offset, NOT what any field means, so nothing here may be presented as fact or written to until its values are cross-checked.",
+    "_no_null_skip": true,
+    "_ordered_fields": [
+      "_isBlocked",
+      "_mainCategoryIndex",
+      "_middleCategoryIndex",
+      "_subCategoryIndex"
+    ],
+    "_verified_fields": [],
+    "_isBlocked": {
+      "type": "u8"
+    },
+    "_mainCategoryIndex": {
+      "type": "u16"
+    },
+    "_middleCategoryIndex": {
+      "type": "u16"
+    },
+    "_subCategoryIndex": {
+      "type": "u16"
+    }
+  },
+  "GimmickGateInfo": {
+    "_meta_note": "Derived 2026-08-13 from game buildid 24613230 by tools/derive_table_layout.py, reflection class GimmickGateInfo. Field ORDER comes from the exe's reflection error strings ordered by the hot-path branch that reaches each error block. Field WIDTHS come from the sized reads in the deserializer; count-prefixed list ELEMENT widths come from the loop body via Deriver.list_element (validated against the 8 readers stage 2 had independently pinned from table data: 5 reproduced exactly, 2 correctly reported variable-length, 1 abstained, 0 contradictions). PROOF: the walk consumes every one of this table's 396 records to its exact last byte, and no other shape in the format's grammar does. KEYED BY FILE STEM 'gimmickgateinfo' because that is what identify_table_from_path returns and what get_schema is asked for; the class name would resolve to a key the app never looks up on this table. _stringKey/_key are omitted because the entry header consumes them. _verified_fields is EMPTY on purpose: tiling proves the structure and each field's offset, NOT what any field means, so nothing here may be presented as fact or written to until its values are cross-checked.",
+    "_no_null_skip": true,
+    "_ordered_fields": [
+      "_isBlocked",
+      "_position",
+      "_rotation",
+      "_fieldInfo"
+    ],
+    "_verified_fields": [],
+    "_isBlocked": {
+      "type": "u8"
+    },
+    "_position": {
+      "type": "[u8;12]"
+    },
+    "_rotation": {
+      "type": "u32"
+    },
+    "_fieldInfo": {
+      "type": "u32"
+    }
+  },
+  "gimmickgateconnection": {
+    "_meta_note": "Derived 2026-08-13 from game buildid 24613230 by tools/derive_table_layout.py, reflection class GimmickGateConnectionInfo. Field ORDER comes from the exe's reflection error strings ordered by the hot-path branch that reaches each error block. Field WIDTHS come from the sized reads in the deserializer; count-prefixed list ELEMENT widths come from the loop body via Deriver.list_element (validated against the 8 readers stage 2 had independently pinned from table data: 5 reproduced exactly, 2 correctly reported variable-length, 1 abstained, 0 contradictions). PROOF: the walk consumes every one of this table's 242 records to its exact last byte, and no other shape in the format's grammar does. KEYED BY FILE STEM 'gimmickgateconnection' because that is what identify_table_from_path returns and what get_schema is asked for; the class name would resolve to a key the app never looks up on this table. _stringKey/_key are omitted because the entry header consumes them. _verified_fields is EMPTY on purpose: tiling proves the structure and each field's offset, NOT what any field means, so nothing here may be presented as fact or written to until its values are cross-checked.",
+    "_no_null_skip": true,
+    "_ordered_fields": [
+      "_isBlocked",
+      "_materialItemInfo",
+      "_resultItemInfo",
+      "_knowledgeInfo",
+      "_srcGateInfo",
+      "_destGateInfo",
+      "_pushKnowledgeToGimmick"
+    ],
+    "_verified_fields": [],
+    "_isBlocked": {
+      "type": "u8"
+    },
+    "_materialItemInfo": {
+      "type": "u32"
+    },
+    "_resultItemInfo": {
+      "type": "u32"
+    },
+    "_knowledgeInfo": {
+      "type": "u32"
+    },
+    "_srcGateInfo": {
+      "type": "u32"
+    },
+    "_destGateInfo": {
+      "type": "u32"
+    },
+    "_pushKnowledgeToGimmick": {
+      "type": "u8"
+    }
+  },
+  "EquipTypeInfo": {
+    "_meta_note": "Derived 2026-08-13 from game buildid 24613230 by tools/derive_table_layout.py, reflection class EquipTypeInfo. Field ORDER comes from the exe's reflection error strings ordered by the hot-path branch that reaches each error block. Field WIDTHS come from the sized reads in the deserializer; count-prefixed list ELEMENT widths come from the loop body via Deriver.list_element (validated against the 8 readers stage 2 had independently pinned from table data: 5 reproduced exactly, 2 correctly reported variable-length, 1 abstained, 0 contradictions). PROOF: the walk consumes every one of this table's 112 records to its exact last byte, and no other shape in the format's grammar does. KEYED BY FILE STEM 'equiptypeinfo' because that is what identify_table_from_path returns and what get_schema is asked for; the class name would resolve to a key the app never looks up on this table. _stringKey/_key are omitted because the entry header consumes them. _verified_fields is EMPTY on purpose: tiling proves the structure and each field's offset, NOT what any field means, so nothing here may be presented as fact or written to until its values are cross-checked.",
+    "_no_null_skip": true,
+    "_ordered_fields": [
+      "_isBlocked",
+      "_destroyedAiEvent",
+      "_useResourceItemType",
+      "_applyStatusGroupInfoOnActivate",
+      "_applyPassiveSkillOnActivate",
+      "_isShowStamina",
+      "_decreaseEndurancePercent",
+      "_onGuardDamageReductionPercent",
+      "_isCriticalCollidable",
+      "_enableTransfer",
+      "_enableEnchant",
+      "_useActionOnQuickSlot",
+      "_cameraPresetHash",
+      "_dyeRotationValue",
+      "_equipAbleHashList",
+      "_equipTypeName",
+      "_showHelmOnBattleStance"
+    ],
+    "_verified_fields": [],
+    "_isBlocked": {
+      "type": "u8"
+    },
+    "_destroyedAiEvent": {
+      "type": "[u8;12]"
+    },
+    "_useResourceItemType": {
+      "type": "u32"
+    },
+    "_applyStatusGroupInfoOnActivate": {
+      "type": "u32"
+    },
+    "_applyPassiveSkillOnActivate": {
+      "type": "u8"
+    },
+    "_isShowStamina": {
+      "type": "u8"
+    },
+    "_decreaseEndurancePercent": {
+      "type": "u64"
+    },
+    "_onGuardDamageReductionPercent": {
+      "type": "u64"
+    },
+    "_isCriticalCollidable": {
+      "type": "u8"
+    },
+    "_enableTransfer": {
+      "type": "u8"
+    },
+    "_enableEnchant": {
+      "type": "u8"
+    },
+    "_useActionOnQuickSlot": {
+      "type": "u8"
+    },
+    "_cameraPresetHash": {
+      "type": "u32"
+    },
+    "_dyeRotationValue": {
+      "type": "u32"
+    },
+    "_equipAbleHashList": {
+      "type": "CArray<u32>"
+    },
+    "_equipTypeName": {
+      "type": "LocalizableString"
+    },
+    "_showHelmOnBattleStance": {
+      "type": "u8"
+    }
+  },
+  "QuestGroupInfo": {
+    "_meta_note": "Derived 2026-08-13 from game buildid 24613230 by tools/derive_table_layout.py, reflection class QuestGroupInfo. Field ORDER comes from the exe's reflection error strings ordered by the hot-path branch that reaches each error block. Field WIDTHS come from the sized reads in the deserializer; count-prefixed list ELEMENT widths come from the loop body via Deriver.list_element (validated against the 8 readers stage 2 had independently pinned from table data: 5 reproduced exactly, 2 correctly reported variable-length, 1 abstained, 0 contradictions). PROOF: the walk consumes every one of this table's 42 records to its exact last byte, and no other shape in the format's grammar does. KEYED BY FILE STEM 'questgroupinfo' because that is what identify_table_from_path returns and what get_schema is asked for; the class name would resolve to a key the app never looks up on this table. _stringKey/_key are omitted because the entry header consumes them. _verified_fields is EMPTY on purpose: tiling proves the structure and each field's offset, NOT what any field means, so nothing here may be presented as fact or written to until its values are cross-checked.",
+    "_no_null_skip": true,
+    "_ordered_fields": [
+      "_isBlocked",
+      "_questType",
+      "_name",
+      "_questGroupDesc",
+      "_questList",
+      "_debugColor",
+      "_stageIconPath",
+      "_stageTextIconPath",
+      "_stageImagePath",
+      "_factionGroupInfo",
+      "_isSave",
+      "_isDev",
+      "_isAutoSave",
+      "_isCompletable"
+    ],
+    "_verified_fields": [],
+    "_isBlocked": {
+      "type": "u8"
+    },
+    "_questType": {
+      "type": "u8"
+    },
+    "_name": {
+      "type": "LocalizableString"
+    },
+    "_questGroupDesc": {
+      "type": "LocalizableString"
+    },
+    "_questList": {
+      "type": "CArray<u32>"
+    },
+    "_debugColor": {
+      "type": "u32"
+    },
+    "_stageIconPath": {
+      "type": "u32"
+    },
+    "_stageTextIconPath": {
+      "type": "u32"
+    },
+    "_stageImagePath": {
+      "type": "u32"
+    },
+    "_factionGroupInfo": {
+      "type": "u16"
+    },
+    "_isSave": {
+      "type": "u8"
+    },
+    "_isDev": {
+      "type": "u8"
+    },
+    "_isAutoSave": {
+      "type": "u8"
+    },
+    "_isCompletable": {
+      "type": "u8"
+    }
+  },
+  "AIActionAttributeInfo": {
+    "_meta_note": "Derived 2026-08-13 from game buildid 24613230 by tools/derive_table_layout.py, reflection class AIActionAttributeInfo. Field ORDER comes from the exe's reflection error strings ordered by the hot-path branch that reaches each error block. Field WIDTHS come from the sized reads in the deserializer; count-prefixed list ELEMENT widths come from the loop body via Deriver.list_element (validated against the 8 readers stage 2 had independently pinned from table data: 5 reproduced exactly, 2 correctly reported variable-length, 1 abstained, 0 contradictions). PROOF: the walk consumes every one of this table's 2 records to its exact last byte, and no other shape in the format's grammar does. KEYED BY FILE STEM 'aiactionattributeinfo' because that is what identify_table_from_path returns and what get_schema is asked for; the class name would resolve to a key the app never looks up on this table. _stringKey/_key are omitted because the entry header consumes them. _verified_fields is EMPTY on purpose: tiling proves the structure and each field's offset, NOT what any field means, so nothing here may be presented as fact or written to until its values are cross-checked.",
+    "_no_null_skip": true,
+    "_ordered_fields": [
+      "_isBlocked",
+      "_passiveSkillKeyList"
+    ],
+    "_verified_fields": [],
+    "_isBlocked": {
+      "type": "u8"
+    },
+    "_passiveSkillKeyList": {
+      "type": "CArray<u64>"
+    }
+  },
+  "factionwaypoint": {
+    "_meta_note": "Derived 2026-08-13 from game buildid 24613230 by tools/derive_table_layout.py, reflection class FactionWayPointInfo. Field ORDER from the exe's reflection error strings ordered by the hot-path branch that reaches each error block, with function bounds taken from .pdata unwind chains. Struct- and list-shaped fields whose width is NOT constant are described as substructs built from the reader's own read sequence (Deriver.reader_parts / element_parts), which independently reproduces the two substructs written by hand for HouseInfo and FailMessageInfo. PROOF: the walk consumes every one of this table's 475 records to its exact last byte. KEYED BY FILE STEM 'factionwaypoint' because that is what identify_table_from_path returns. Substruct member names are ANONYMOUS on purpose: the parts give structure and say nothing about meaning. _verified_fields is EMPTY.",
+    "_no_null_skip": true,
+    "_ordered_fields": [
+      "_isBlocked",
+      "_wayPointData"
+    ],
+    "_verified_fields": [],
+    "_isBlocked": {
+      "type": "u8"
+    },
+    "_wayPointData": {
+      "type": "FactionWayPointInfo_wayPointData"
     }
   }
 }

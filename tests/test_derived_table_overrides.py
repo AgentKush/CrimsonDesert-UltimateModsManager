@@ -49,6 +49,7 @@ DERIVED = {
     "JobInfo": 209,
     "LocalStringInfo": 43863,
     "MaterialRelationInfo": 11,
+    "MaterialMatchInfo": 116,
     "VibratePatternInfo": 28,
     "CharacterAppearanceIndexInfo": 8344,
     "MercenaryInfo": 21,
@@ -59,6 +60,56 @@ DERIVED = {
     "FactionOperationGroupInfo": 9,
     "HouseInfo": 4,
     "ZoneInfo": 6,
+    # ── added 2026-08-12 ──────────────────────────────────────────────────
+    # The KEY is the base schema's key, and its lowercase must equal the
+    # table's FILE STEM, because _load_schemas iterates the base file and
+    # the app asks get_schema() for the stem that
+    # identify_table_from_path returns. So the casing here is not sloppy
+    # and must not be "tidied": CraftToolInfo reuses the base schema's
+    # existing key, while the five lowercase ones are new base entries
+    # keyed by a stem that drops the `Info` the class name carries
+    # (factiongroup.pabgb <-> FactionGroupInfo). Rename any of them to the
+    # class name and CDUMM silently stops finding that table.
+    "CraftToolInfo": 19,
+    "CraftToolGroupInfo": 12,
+    "factiongroup": 7,
+    "uisocialaction": 2,
+    "factionreblockadinginfo": 108,
+    "globalgameeventgroup": 12,
+    # ── added 2026-08-12: variable-length list elements ──────────────────
+    # Each of these has a CArray whose ELEMENT has no constant width, so it
+    # is CArray<Substruct>, with the members taken from the reader's own
+    # loop body. All four are FULLY STATIC -- no width came from a data
+    # search -- which is what makes a 2-record or 4-record table acceptable
+    # here: the data confirmed the layout, it did not referee it.
+    "FieldLevelNameTableInfo": 2,
+    "PartPrefabDyeTexturePalleteInfo": 11,
+    "RelationInfo": 52,
+    "royalsupply": 4,
+    # ── added 2026-08-13: the .pdata function-bounds sweep ───────────────
+    # These became derivable when field_reads stopped sweeping from an
+    # arbitrary byte. capstone's disasm is a generator that STOPS at the
+    # first undecodable byte, so the old sweep truncated -- on these tables
+    # it died before the first field. All eleven are FULLY STATIC: no width
+    # came from a data search.
+    "AIEventTableInfo": 988,
+    "UIMapTextureInfo": 2025,
+    "KnowledgeGroupInfo": 600,
+    "QuestGaugeInfo": 509,
+    "GameAdviceInfo": 472,
+    "CategoryInfo": 432,
+    "GimmickGateInfo": 396,
+    "gimmickgateconnection": 242,
+    "EquipTypeInfo": 112,
+    "QuestGroupInfo": 42,
+    "AIActionAttributeInfo": 2,
+    # ── added 2026-08-13: a struct-shaped FIELD reader ────────────────────
+    # _wayPointData is a single struct, not a list element, whose width is
+    # not constant because it ends in a counted list. Decomposed by
+    # Deriver.reader_parts. Two sibling tables were built the same way and
+    # ROLLED BACK for tiling 0 records, which is the distinction that
+    # matters: decomposable is not the same as correct.
+    "factionwaypoint": 475,
 }
 
 
@@ -138,3 +189,129 @@ def test_the_derivation_provenance_is_recorded():
             f"against")
         assert "_verified_fields is EMPTY" in note, (
             f"{table} note must state why it is gated")
+
+
+# ── the fixed-vs-variable list element trap ──────────────────────────────
+#
+# Two entries shipped in v3.13 described a list element as a FIXED width when
+# the element actually ends in a string. Stage 2 recovers an element width by
+# fitting the table data, and `Deriver.candidates()` offers only fixed-width
+# elements -- there is no variable-element list shape in that space. So for
+# these two the search could not see the competing hypothesis, and
+# "unique-or-nothing" reported uniqueness inside an incomplete space.
+#
+# It fitted because every string in this build happens to be one length:
+#   HouseInfo        7 element strings, all 34 bytes -> 12 + 34 == 46
+#   FailMessageInfo 18 element strings, all 16 bytes -> 17 + 16 == 33
+# Both the fixed and the variable model tile 100% of records EXACTLY, so no
+# amount of data from this build separates them. The reader's disassembly
+# does: the element makes a CString / LocalizableString read.
+#
+# These pin the corrected shape so the wrong one cannot come back. A future
+# derivation re-running stage 2 on a build where the strings are still
+# uniform would fit the fixed width again and look perfectly proven.
+
+#: field -> (struct descriptor it must use, the fixed width it must NOT use)
+_VARIABLE_ELEMENT_LISTS = {
+    ("HouseInfo", "_houseRegionDataList"):
+        ("CArray<HouseInfo_RegionDataEntry>", "CArray<[u8;46]>"),
+    ("FailMessageInfo", "_failMessageInfoList"):
+        ("CArray<FailMessageInfo_Entry>", "CArray<[u8;33]>"),
+}
+
+
+@pytest.mark.parametrize("key", sorted(_VARIABLE_ELEMENT_LISTS))
+def test_variable_length_list_elements_are_not_modelled_as_fixed(key):
+    table, field = key
+    want, forbidden = _VARIABLE_ELEMENT_LISTS[key]
+    got = _overrides()[table][field]["type"]
+    assert got != forbidden, (
+        f"{table}.{field} is back to {forbidden}. That width only fits "
+        f"because every element string in the measured build was one "
+        f"length; the element is variable and this will mis-frame the "
+        f"record as soon as one string differs.")
+    assert got == want, (
+        f"{table}.{field} must be {want}, got {got}")
+
+
+@pytest.mark.parametrize("key", sorted(_VARIABLE_ELEMENT_LISTS))
+def test_the_corrected_element_structs_end_in_a_string(key):
+    """The correction is only meaningful if the struct really is variable.
+
+    A struct of fixed members would reintroduce the same bug wearing a
+    name, so this checks the last member is a string type rather than
+    trusting the descriptor's label.
+    """
+    from cdumm.semantic.pabgb_types import SUBSTRUCT_DEFS
+    want, _forbidden = _VARIABLE_ELEMENT_LISTS[key]
+    name = want[len("CArray<"):-1]
+    assert name in SUBSTRUCT_DEFS, f"{name} is not defined"
+    members = SUBSTRUCT_DEFS[name]
+    assert members, f"{name} has no members"
+    assert members[-1][1] in ("CString", "LocalizableString"), (
+        f"{name} must end in a variable-length string read; its last "
+        f"member is {members[-1]!r}. If it does not, the element has a "
+        f"constant width and the original CArray<[u8;N]> was right.")
+
+
+@pytest.mark.parametrize("key", sorted(_VARIABLE_ELEMENT_LISTS))
+def test_the_correction_is_documented_in_the_provenance(key):
+    table, _field = key
+    note = _overrides()[table].get("_meta_note", "")
+    assert "CORRECTION" in note, (
+        f"{table} was shipped with a wrong element width; its note must "
+        f"record the correction so the history is not lost")
+
+
+# ── WantedInfo: the phantom trailing NUL ─────────────────────────────────
+#
+# WantedInfo shipped with `_ordered_fields` starting at `_increasePrice` and
+# with the default (NUL-skipping) entry header. That model tiles 0 of 35
+# records: it places _useTargetPrice at offset 16, one byte past the end of a
+# 16-byte record. It nonetheless read the right prices, because the wrong
+# order and the mis-measured header cancelled on the one field that mattered
+# -- _increasePrice sat at offset 7 either way, which is why the
+# verified-only pass recorded 30/50/100/500/1500 correctly.
+#
+# There is no trailing NUL. The name is EMPTY on every record, so there is
+# nothing to terminate; the byte at payload offset 6 is _isBlocked, which is
+# the first field of essentially every table in this format. With
+# _no_null_skip and _isBlocked first, all 16 bytes are accounted for on all
+# 35 records: header 6, _isBlocked at 6, _increasePrice at 7..14,
+# _useTargetPrice at 15.
+#
+# Exact tiling could NOT catch this: 1+8+1 and 8+1+1 both consume 10 bytes.
+# The order oracle caught it -- field_reads' hot-path branch order had
+# WantedInfo as one of 3 tables out of 40 disagreeing with its shipped order.
+
+def test_wantedinfo_puts_isblocked_first_and_skips_no_null():
+    w = _overrides()["WantedInfo"]
+    assert w["_ordered_fields"] == [
+        "_isBlocked", "_increasePrice", "_useTargetPrice"], (
+        "WantedInfo's order regressed; _increasePrice-first tiles 0 of 35 "
+        "records because _useTargetPrice then lands past the record end")
+    assert w.get("_no_null_skip") is True, (
+        "WantedInfo has no trailing NUL to skip -- its names are empty, and "
+        "the byte previously skipped as one is _isBlocked")
+
+
+def test_wantedinfo_price_offset_is_unchanged_by_the_correction():
+    """The correction must not move the one writable field.
+
+    `_increasePrice` is the only entry in `_verified_fields`, so it is the
+    only field a mod can edit here. Under both the old and the corrected
+    model it sits at offset 7 (old: 7-byte header + field 0; new: 6-byte
+    header + 1-byte _isBlocked). If that ever stops being true, existing
+    mods start writing somewhere else.
+    """
+    w = _overrides()["WantedInfo"]
+    assert w["_verified_fields"] == ["_increasePrice"]
+    header = 2 + 4                      # key_size 2, name_len u32, name empty
+    order = w["_ordered_fields"]
+    widths = {"u8": 1, "u16": 2, "u32": 4, "u64": 8}
+    off = header
+    for name in order:
+        if name == "_increasePrice":
+            break
+        off += widths[w[name]["type"]]
+    assert off == 7, f"_increasePrice moved to offset {off}, must stay at 7"
