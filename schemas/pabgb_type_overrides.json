@@ -2815,5 +2815,20 @@
     "_passiveSkillKeyList": {
       "type": "CArray<u64>"
     }
+  },
+  "factionwaypoint": {
+    "_meta_note": "Derived 2026-08-13 from game buildid 24613230 by tools/derive_table_layout.py, reflection class FactionWayPointInfo. Field ORDER from the exe's reflection error strings ordered by the hot-path branch that reaches each error block, with function bounds taken from .pdata unwind chains. Struct- and list-shaped fields whose width is NOT constant are described as substructs built from the reader's own read sequence (Deriver.reader_parts / element_parts), which independently reproduces the two substructs written by hand for HouseInfo and FailMessageInfo. PROOF: the walk consumes every one of this table's 475 records to its exact last byte. KEYED BY FILE STEM 'factionwaypoint' because that is what identify_table_from_path returns. Substruct member names are ANONYMOUS on purpose: the parts give structure and say nothing about meaning. _verified_fields is EMPTY.",
+    "_no_null_skip": true,
+    "_ordered_fields": [
+      "_isBlocked",
+      "_wayPointData"
+    ],
+    "_verified_fields": [],
+    "_isBlocked": {
+      "type": "u8"
+    },
+    "_wayPointData": {
+      "type": "FactionWayPointInfo_wayPointData"
+    }
   }
 }

@@ -403,6 +403,18 @@ SUBSTRUCT_DEFS: dict[str, list[tuple[str, str]]] = {
         ("key", "u32"),
         ("message", "LocalizableString"),
     ],
+
+    # ── A struct-shaped FIELD reader (2026-08-13) ──────────────────────────
+    # Not a list element: _wayPointData is a single struct whose width is not
+    # constant, because it ends in a counted list. Members come from
+    # sub_1412C1A50's own read sequence via Deriver.reader_parts, the
+    # whole-function analogue of element_parts. Names are anonymous:
+    # structure is derived, meaning is not.
+    "FactionWayPointInfo_wayPointData": [
+        ("u32", "u32"),
+        ("u32_2", "u32"),
+        ("list", "CArray<[u8;12]>"),
+    ],
     # ── Derived variable-length list elements (2026-08-12) ──────────────
     # Members come from each reader's own loop body via
     # Deriver.element_parts. Names are anonymous: structure is

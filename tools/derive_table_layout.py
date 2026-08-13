@@ -955,6 +955,101 @@ class Deriver:
                    f"{fixed_before + bad[1] + 4} + n")
         return ("variable", why)
 
+    def reader_parts(self, va: int, seen: frozenset | None = None):
+        """A whole FIELD reader's members in program order, or None.
+
+        The function-body analogue of ``element_parts``, for a field whose
+        reader is a struct rather than a list. Same idea and the same
+        acceptance rule: keep the sequence rather than only a sum, so a
+        reader with no constant width is still describable as a substruct.
+
+        Refuses, rather than guessing, on:
+          * RECURSION -- actionpointinfo's ``_actionPoint`` (sub_141271150)
+            and sub_1412B1220 call each other, so the field is a TREE. That
+            is not expressible as a flat substruct at all, and it is the
+            honest ceiling for that table's 28,958 records on this route.
+          * an UNSIZED read that is not part of a length-prefixed pair.
+          * any sub-reader that cannot itself be modelled or decomposed.
+
+        The one pattern it does resolve beyond the obvious: a 4-byte read
+        IMMEDIATELY followed by an unsized read is a length prefix and its
+        bytes -- i.e. a CString. solve_reader only recognises that when the
+        4-byte read is the reader's FIRST, which is why a struct with
+        several fields before its string was refused. Measured: this rule
+        takes decomposable tables from 17 to 20.
+
+        Structure only. Nothing here says what a member MEANS.
+        """
+        from capstone import CS_OP_IMM, CS_OP_MEM, CS_OP_REG
+        seen = frozenset() if seen is None else seen
+        if va in seen or len(seen) > 6:
+            return None
+        ins = self.body(va)
+        if not ins:
+            return None
+        # A loop that encloses a read makes this a list or worse; leave those
+        # to list_element rather than flattening them here.
+        addr_i = {x.address: k for k, x in enumerate(ins)}
+        ranges = []
+        for n, i in enumerate(ins):
+            o = i.operands
+            if (i.mnemonic.startswith("j") and len(o) == 1
+                    and o[0].type == CS_OP_IMM and o[0].imm < i.address
+                    and o[0].imm in addr_i
+                    and self.closes_cycle(ins, n, o[0].imm)):
+                ranges.append((addr_i[o[0].imm], n))
+
+        out: list = []
+        pend = None
+        pend_var = False
+        last_was_4 = False
+        for n, i in enumerate(ins):
+            o = i.operands
+            dst = i.op_str.split(",")[0].strip()
+            if (i.mnemonic in ("mov", "lea") and len(o) == 2
+                    and o[0].type == CS_OP_REG and "r8" in dst):
+                if o[1].type == CS_OP_IMM:
+                    pend, pend_var = o[1].imm, False
+                elif (i.mnemonic == "lea" and o[1].type == CS_OP_MEM
+                      and o[1].mem.index == 0 and o[1].mem.disp >= 0):
+                    pend, pend_var = o[1].mem.disp, False
+                else:
+                    pend, pend_var = None, True
+                continue
+            if i.mnemonic != "call" or len(o) != 1:
+                continue
+            in_loop = any(lo <= n <= hi for lo, hi in ranges)
+            if o[0].type == CS_OP_MEM:
+                if in_loop:
+                    return None            # a read inside a loop: not flat
+                if pend is not None:
+                    out.append(("fixed", pend))
+                    last_was_4 = (pend == 4)
+                elif pend_var and last_was_4 and out:
+                    out[-1] = ("str", 0)   # u32 length + that many bytes
+                    last_was_4 = False
+                else:
+                    return None            # unsized read we cannot size
+            elif o[0].type == CS_OP_IMM and self.reads_stream(o[0].imm):
+                if in_loop:
+                    return None
+                sub = o[0].imm
+                m = self.solve_reader(sub)
+                if m is not None:
+                    out.append(m)
+                else:
+                    el = self.list_element(sub)
+                    if el is not None and el[0] == "fixed":
+                        out.append(("list", el[1]))
+                    else:
+                        inner = self.reader_parts(sub, seen | {va})
+                        if inner is None:
+                            return None
+                        out.append(("nest", tuple(inner)))
+                last_was_4 = False
+            pend, pend_var = None, False
+        return out or None
+
     def element_parts(self, va: int):
         """The element's members in program order, or None.
 

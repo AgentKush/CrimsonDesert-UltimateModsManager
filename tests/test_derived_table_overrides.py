@@ -103,6 +103,13 @@ DERIVED = {
     "EquipTypeInfo": 112,
     "QuestGroupInfo": 42,
     "AIActionAttributeInfo": 2,
+    # ── added 2026-08-13: a struct-shaped FIELD reader ────────────────────
+    # _wayPointData is a single struct, not a list element, whose width is
+    # not constant because it ends in a counted list. Decomposed by
+    # Deriver.reader_parts. Two sibling tables were built the same way and
+    # ROLLED BACK for tiling 0 records, which is the distinction that
+    # matters: decomposable is not the same as correct.
+    "factionwaypoint": 475,
 }
 
 

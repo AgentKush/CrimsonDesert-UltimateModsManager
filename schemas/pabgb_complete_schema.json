@@ -28557,5 +28557,13 @@
   {
    "f": "_pushKnowledgeToGimmick"
   }
+ ],
+ "factionwaypoint": [
+  {
+   "f": "_isBlocked"
+  },
+  {
+   "f": "_wayPointData"
+  }
  ]
 }
