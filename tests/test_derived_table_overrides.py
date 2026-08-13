@@ -103,6 +103,16 @@ DERIVED = {
     "EquipTypeInfo": 112,
     "QuestGroupInfo": 42,
     "AIActionAttributeInfo": 2,
+    # ── added 2026-08-13 ─────────────────────────────────────────────────
+    # LevelActionPointInfo came from re-running the substruct wiring after
+    # the .pdata sweep resolved 124 more fields.
+    #
+    # MaterialBloodDecalInfo is the one table on this branch whose ORDER was
+    # corrected against the bytes. The hot-path ranking put the list before
+    # _skillKey and tiled 0 of 13; that reading needs an element count of
+    # 0x15F90 (89,999), so it cannot be right. See its _meta_note.
+    "LevelActionPointInfo": 60,
+    "MaterialBloodDecalInfo": 13,
     # ── added 2026-08-13: a struct-shaped FIELD reader ────────────────────
     # _wayPointData is a single struct, not a list element, whose width is
     # not constant because it ends in a counted list. Decomposed by

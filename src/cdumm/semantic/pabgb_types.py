@@ -403,6 +403,31 @@ SUBSTRUCT_DEFS: dict[str, list[tuple[str, str]]] = {
         ("key", "u32"),
         ("message", "LocalizableString"),
     ],
+    # ── Derived variable-length list elements (2026-08-12) ──────────────
+    # Members come from each reader's own loop body via
+    # Deriver.element_parts. Names are anonymous: structure is
+    # derived, meaning is not, so nothing here may be gated to
+    # _verified_fields on the strength of a name.
+    "RoyalSupplyInfo_QuestEntry": [  # sub_1412A1370 element
+        ("u32", "u32"),
+        ("list", "CArray<[u8;20]>"),
+    ],
+    "PartPrefabDyeTexturePalleteInfo_TextureSetArrayEntry": [  # sub_1412A3630 element
+        ("name", "CString"),
+        ("name_2", "CString"),
+        ("name_3", "CString"),
+        ("name_4", "CString"),
+        ("u32", "u32"),
+    ],
+    "MaterialBloodDecalInfo_BloodDecalVariationEntry": [  # sub_1412A4290 element
+        ("name", "CString"),
+        ("u32", "u32"),
+        ("blob", "[u8;12]"),
+    ],
+    "LevelActionPointInfo_LevelActionPointGroupEntry": [  # sub_1412A4450 element
+        ("u32", "u32"),
+        ("list", "CArray<[u8;12]>"),
+    ],
 
     # ── A struct-shaped FIELD reader (2026-08-13) ──────────────────────────
     # Not a list element: _wayPointData is a single struct whose width is not
@@ -420,10 +445,6 @@ SUBSTRUCT_DEFS: dict[str, list[tuple[str, str]]] = {
     # Deriver.element_parts. Names are anonymous: structure is
     # derived, meaning is not, so nothing here may be gated to
     # _verified_fields on the strength of a name.
-    "RoyalSupplyInfo_QuestEntry": [  # sub_1412A1370 element
-        ("u32", "u32"),
-        ("list", "CArray<[u8;20]>"),
-    ],
     "RelationInfo_KeyEntry": [  # sub_1412A1970 element
         ("u32", "u32"),
         ("list", "CArray<u32>"),
