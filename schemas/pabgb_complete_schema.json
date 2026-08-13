@@ -28534,5 +28534,28 @@
   {
    "f": "_stageInfo"
   }
+ ],
+ "gimmickgateconnection": [
+  {
+   "f": "_isBlocked"
+  },
+  {
+   "f": "_materialItemInfo"
+  },
+  {
+   "f": "_resultItemInfo"
+  },
+  {
+   "f": "_knowledgeInfo"
+  },
+  {
+   "f": "_srcGateInfo"
+  },
+  {
+   "f": "_destGateInfo"
+  },
+  {
+   "f": "_pushKnowledgeToGimmick"
+  }
  ]
 }

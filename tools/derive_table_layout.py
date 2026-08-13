@@ -117,6 +117,12 @@ MAX_ELEM = 128
 #: nothing real and turns a silent nonsense value into a refusal.
 MAX_READER_BYTES = 1 << 20
 
+#: Instructions after which control does not fall through. Used both to
+#: delimit basic blocks and to REFUSE to attribute a stream read to a field
+#: across one: when a field's error block is OUTLINED, what physically
+#: precedes it is some other block's tail, usually an epilogue.
+_UNCOND_END = frozenset({"ret", "jmp", "int3", "ud2"})
+
 #: An escape hatch for readers stage 1 genuinely cannot derive: a model
 #: read off the disassembly by hand, kept SEPARATE from the automatic ones
 #: so it is always visible which is which. An unmarked hand constant is how
@@ -260,6 +266,7 @@ class Deriver:
         self._memo: dict[int, tuple[str, int] | None] = {}
         self._reads: dict[int, bool] = {}
         self._parts: dict[int, list] = {}
+        self._pd = None                   # .pdata function extents, lazy
 
     # ── stage 1: static reader models ────────────────────────────────────
 
@@ -417,6 +424,142 @@ class Deriver:
                 return None
             loops.append((by_addr[target], n, trip))
         return loops
+
+    # ── true function bounds, from .pdata unwind chains ──────────────────
+
+    def _pdata(self):
+        """Merged function extents from .pdata, following unwind chains.
+
+        This replaces sweeping from ``leas[0] - SWEEP_PAD``, which was not
+        merely imprecise. ``capstone.Cs.disasm`` is a GENERATOR that stops at
+        the first byte sequence it cannot decode, so a sweep starting at an
+        arbitrary byte desyncs into garbage, hits an invalid opcode, and
+        TRUNCATES. On 15 tables it ended before the first field lea -- so no
+        field could be found, and with ``ins`` near-empty the block map was
+        empty too and field ORDER silently degraded to naive lea-address
+        order, which is exactly what the hot-path ranking exists to avoid.
+
+        .pdata does NOT enumerate functions, it enumerates UNWIND ranges. A
+        function with outlined blocks has a primary RUNTIME_FUNCTION plus
+        continuations flagged UNW_FLAG_CHAININFO (0x4), each carrying a
+        trailing RUNTIME_FUNCTION pointing at its parent. Anchoring on the
+        nearest BeginAddress bounds a FRAGMENT: measured on this build, 27 of
+        112 candidate tables have their field leas spread across more than
+        one fragment (up to 6, for QuestInfo). Following the chain to its
+        ROOT and merging brings all of them under one function -- 0 tables
+        left spanning multiple roots, 0 leas outside .pdata, and decoding the
+        merged extents reaches EVERY field lea in 112 of 112 tables.
+
+        UNWIND_INFO: byte0 = Version(3) | Flags(5), Flags & 4 == CHAININFO;
+        byte2 = CountOfCodes; the chained RUNTIME_FUNCTION follows the
+        unwind-code array, padded to an even count.
+        """
+        if self._pd is not None:
+            return self._pd
+        import pefile
+        pe = pefile.PE(str(self.game / "bin64" / "CrimsonDesert.exe"),
+                       fast_load=True)
+        d = pe.OPTIONAL_HEADER.DATA_DIRECTORY[3]        # ENTRY_EXCEPTION
+        rva, size = d.VirtualAddress, d.Size
+        base = pe.OPTIONAL_HEADER.ImageBase
+        pe.close()
+        rf = []
+        off = self.img.va_to_off(base + rva) if rva else None
+        if off is not None:
+            blob = self.img.data[off:off + size]
+            for p in range(0, len(blob) - 11, 12):
+                b, e, u = struct.unpack_from("<III", blob, p)
+                if b and e > b:
+                    rf.append((base + b, base + e, base + u if u else 0))
+        rf.sort()
+        by_begin = {b: (b, e, u) for b, e, u in rf}
+
+        def parent(u):
+            if not u:
+                return None
+            o = self.img.va_to_off(u)
+            if o is None or o + 4 > len(self.img.data):
+                return None
+            if not ((self.img.data[o] >> 3) & 0x4):
+                return None                   # not a chained fragment
+            n = self.img.data[o + 2]          # CountOfCodes
+            c = o + 4 + 2 * ((n + 1) & ~1)
+            if c + 12 > len(self.img.data):
+                return None
+            pb, _pe, _pu = struct.unpack_from("<III", self.img.data, c)
+            return base + pb
+
+        root: dict[int, int] = {}
+
+        def resolve(b, seen=frozenset()):
+            if b in root:
+                return root[b]
+            if b in seen:
+                return b                      # cycle guard
+            ent = by_begin.get(b)
+            p = parent(ent[2]) if ent else None
+            r = (resolve(p, seen | {b})
+                 if p is not None and p in by_begin else b)
+            root[b] = r
+            return r
+
+        for b, _e, _u in rf:
+            resolve(b)
+        ext: dict[int, list[int]] = {}
+        for b, e, _u in rf:
+            r = root[b]
+            cur = ext.setdefault(r, [b, e])
+            cur[0] = min(cur[0], b)
+            cur[1] = max(cur[1], e)
+        self._pd = (rf, [b for b, _e, _u in rf], by_begin, root, ext)
+        return self._pd
+
+    def function_extent(self, va: int):
+        """(lo, hi) of the whole function containing ``va``, or None."""
+        _rf, starts, by_begin, root, ext = self._pdata()
+        i = bisect_right(starts, va) - 1
+        if i < 0:
+            return None
+        b, e, _u = by_begin[starts[i]]
+        if not (b <= va < e):
+            return None
+        lo, hi = ext[root[starts[i]]]
+        return (lo, hi)
+
+    def sweep(self, leas: list[int]):
+        """(instructions, addresses) covering every lea, boundary-true.
+
+        Decodes each distinct enclosing FUNCTION once, from its real start,
+        so every instruction boundary is genuine. Falls back to the old
+        padded window only for a lea outside .pdata entirely (none on this
+        build), because a missing field is worse than an imprecise one.
+        """
+        from extract_field_order_win import SWEEP_PAD
+        spans, orphans = set(), []
+        for a in leas:
+            x = self.function_extent(a)
+            if x is None:
+                orphans.append(a)
+            else:
+                spans.add(x)
+        ins = []
+        for lo, hi in sorted(spans):
+            off = self.img.va_to_off(lo)
+            if off is not None:
+                ins += list(self.md.disasm(
+                    self.img.data[off:off + (hi - lo)], lo))
+        for a in orphans:
+            off = self.img.va_to_off(a - SWEEP_PAD)
+            if off is not None:
+                ins += list(self.md.disasm(
+                    self.img.data[off:off + 2 * SWEEP_PAD], a - SWEEP_PAD))
+        ins.sort(key=lambda i: i.address)
+        out, seen = [], set()
+        for i in ins:
+            if i.address not in seen:
+                seen.add(i.address)
+                out.append(i)
+        return out, [i.address for i in out]
 
     def closes_cycle(self, ins: list, branch: int, target_addr: int) -> bool:
         """Does this backward branch actually form a LOOP?
@@ -836,14 +979,14 @@ class Deriver:
     def field_reads(self, cls: str):
         """[(name, 'fixed'|'call'|'?', width_or_callee)] in hot-path order."""
         from capstone import CS_OP_IMM, CS_OP_REG
-        from extract_field_order_win import SWEEP_PAD
         pairs = self.by_cls[cls]
         leas = sorted(a for _f, a in pairs)
-        lo = leas[0] - SWEEP_PAD
-        off = self.img.va_to_off(lo)
-        span = (leas[-1] + SWEEP_PAD) - lo
-        ins = list(self.md.disasm(self.img.data[off:off + span], lo))
-        addrs = [i.address for i in ins]
+        # Decode each enclosing FUNCTION from its real .pdata start rather
+        # than a padded window, so every instruction boundary is genuine and
+        # the decode cannot truncate before the fields. See sweep()/_pdata().
+        ins, addrs = self.sweep(leas)
+        if not addrs:
+            return [(f, "?", None) for f, _a in pairs]
         inbound = collections.defaultdict(list)
         targets: set[int] = set()
         for i in ins:
@@ -852,9 +995,10 @@ class Deriver:
                     and o[0].type == CS_OP_IMM):
                 targets.add(o[0].imm)
                 inbound[o[0].imm].append(i.address)
-            if i.mnemonic in ("ret", "jmp", "int3", "ud2"):
+            if i.mnemonic in _UNCOND_END:
                 targets.add(i.address + i.size)
-        blocks = sorted(targets | {lo})
+        blocks = sorted(targets | {addrs[0]})
+        set_addrs = set(addrs)
 
         def hot(lea: int):
             # bisect_RIGHT, matching Func.block_start_of in
@@ -870,14 +1014,43 @@ class Deriver:
             src = inbound.get(b)
             return (min(src), lea) if src else (lea, lea)
 
+        def guard_index(lea: int) -> int | None:
+            """Where to look back from for the read that guards this field.
+
+            For a FALL-THROUGH field, that is the lea itself. For an OUTLINED
+            error block it is NOT: the instructions physically before such a
+            block belong to some other block, usually an epilogue, so walking
+            back from the lea crosses a `ret` and picks up an unrelated
+            read. AIEventTableInfo `_eventDelayType` is the case -- the
+            lookback stepped over `ret` at 0x141271922 into
+            `_isMustHandled`'s `mov r8d, 1` and reported width 1, where the
+            sole branch into the block carries `mov r8d, 8`. Refereed by
+            tiling: 8 tiles aieventtableinfo 988/988, 1 does not tile at all.
+
+            So when the lea starts a block with inbound edges, look back from
+            the EARLIEST branch into it -- the same hot-path source the
+            ordering uses.
+            """
+            b = blocks[bisect_right(blocks, lea) - 1] if blocks else lea
+            src = inbound.get(b)
+            anchor = min(src) if (src and b == lea) else lea
+            k = bisect_left(addrs, anchor)
+            return k if k < len(addrs) and addrs[k] == anchor else None
+
         out = []
         for fld, lea in sorted(pairs, key=lambda p: hot(p[1])):
-            i = bisect_left(addrs, lea)
-            if i >= len(addrs) or addrs[i] != lea:
+            if lea not in set_addrs:
+                out.append((fld, "?", None))
+                continue
+            i = guard_index(lea)
+            if i is None:
                 out.append((fld, "?", None))
                 continue
             j, call = i - 1, None
             while j >= 0 and i - j < 24:
+                if ins[j].mnemonic in _UNCOND_END:
+                    break            # a different block; refuse rather than
+                    #                  borrow its read
                 if ins[j].mnemonic == "call":
                     call = ins[j]
                     break
@@ -891,6 +1064,9 @@ class Deriver:
                 continue
             k, start = j - 1, max(0, j - 24)
             while k >= 0 and j - k < 24:
+                if ins[k].mnemonic in _UNCOND_END:
+                    start = k + 1     # do not take a width from another block
+                    break
                 if ins[k].mnemonic == "call":
                     start = k + 1
                     break

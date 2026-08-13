@@ -86,6 +86,23 @@ DERIVED = {
     "PartPrefabDyeTexturePalleteInfo": 11,
     "RelationInfo": 52,
     "royalsupply": 4,
+    # ── added 2026-08-13: the .pdata function-bounds sweep ───────────────
+    # These became derivable when field_reads stopped sweeping from an
+    # arbitrary byte. capstone's disasm is a generator that STOPS at the
+    # first undecodable byte, so the old sweep truncated -- on these tables
+    # it died before the first field. All eleven are FULLY STATIC: no width
+    # came from a data search.
+    "AIEventTableInfo": 988,
+    "UIMapTextureInfo": 2025,
+    "KnowledgeGroupInfo": 600,
+    "QuestGaugeInfo": 509,
+    "GameAdviceInfo": 472,
+    "CategoryInfo": 432,
+    "GimmickGateInfo": 396,
+    "gimmickgateconnection": 242,
+    "EquipTypeInfo": 112,
+    "QuestGroupInfo": 42,
+    "AIActionAttributeInfo": 2,
 }
 
 
