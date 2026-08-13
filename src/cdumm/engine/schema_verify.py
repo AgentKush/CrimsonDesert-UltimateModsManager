@@ -718,3 +718,136 @@ def verify_order_source_relative(candidate: dict[str, list[str]]
             continue
         out.append(relative_order_matches(table, cand))
     return out
+
+
+# ── does the shipped schema actually FRAME this table's records? ──────────
+#
+# Distinct from everything above, and needed for a different reason. The
+# checks above ask whether a candidate ORDER is trustworthy. This asks a
+# blunter question about a table the app is about to display: does the
+# schema account for every byte of a record, on the build in front of us?
+#
+# It matters because the answer is often no. Measured on game buildid
+# 24613230, walking all 135 tables in the install through get_schema() and
+# _consume_field_bytes: 49 tile exactly, 4 partially, and 38 tables whose
+# ONLY decoder is the generic schema frame no record correctly at all --
+# 61,795 records' worth. Those are pre-existing base-schema entries whose
+# widths do not add up on this build.
+#
+# Nothing there is editable: _editable_columns refuses every field when
+# `verified_fields is None`, which is the case for a base-only table. So it
+# is not dangerous. But the grid still renders, and a grid built from a
+# layout that is known-wrong the moment anyone checks reads as data. That is
+# what this exists to label.
+
+@dataclass(frozen=True)
+class LayoutFit:
+    """How much of a table the schema the GRID USES actually accounts for.
+
+    Two different properties, and conflating them is a trap I walked into
+    while writing this. ``exact`` is byte-exact tiling -- the walk consumed
+    the record to its last byte. That is the right gate for DERIVING and
+    SHIPPING a layout, and it is what the whole derivation pipeline is held
+    to. It is the WRONG test for "should the user trust this grid",
+    because a schema that models the first N fields correctly and leaves
+    unmodelled tail bytes shows N correct columns and still fails it.
+    Measured: iteminfo, characterinfo, stageinfo, regioninfo and storeinfo
+    all tile 0 of 200 sampled records while displaying perfectly useful
+    columns.
+
+    ``complete`` is the display-relevant one: did the walk get through the
+    schema's whole field list without a field failing to consume? If it
+    dies at field 2 of 15, every column after that is meaningless, and THAT
+    is what deserves a warning.
+    """
+
+    records: int          # records in the table
+    checked: int          # how many were sampled
+    complete: int         # of those, how many walked the entire field list
+    exact: int            # of those, how many ALSO ended on the last byte
+    schema_fields: int
+    median_fields: int    # typical number of fields the walk gets through
+
+    @property
+    def ratio(self) -> float:
+        return (self.complete / self.checked) if self.checked else 0.0
+
+    @property
+    def usable(self) -> bool:
+        """The walk finishes the field list on every sampled record."""
+        return self.checked > 0 and self.complete == self.checked
+
+    @property
+    def broken(self) -> bool:
+        """The walk finishes on NO sampled record.
+
+        The strong signal: the schema cannot frame this build's data at all,
+        so any column past the failure point is noise. Deliberately not
+        "some records failed" -- a layout that works on most records and
+        stumbles on an edge case still shows a useful grid.
+        """
+        return self.checked > 0 and self.complete == 0
+
+
+def layout_fit(table: str, body: bytes, header: bytes,
+               max_samples: int = 200) -> LayoutFit | None:
+    """Sample records and report how far the display schema actually gets.
+
+    Sampled rather than exhaustive so this is cheap enough for the display
+    path: actionpointinfo has 28,958 records and the answer does not get
+    more true after the two-hundredth. Samples are spread evenly rather than
+    taken from the front, because the first records of a table are the least
+    representative -- a layout that is wrong about a variable-length field
+    often survives the short early ones.
+
+    Returns None when the question cannot be asked (no schema, no index),
+    which the caller must treat as "unknown", not as "broken".
+    """
+    try:
+        # schema_for_table, NOT get_schema. This must measure the schema the
+        # GRID ACTUALLY USES: parse_records_display calls schema_for_table,
+        # which picks the field-order variant that fits this build.
+        schema = schema_for_table(table, body, header)
+        if schema is None or not schema.fields:
+            return None
+        key_size, offsets = parse_pabgh_index(header, table)
+    except Exception:                                       # noqa: BLE001
+        return None
+    if not offsets:
+        return None
+    ent = sorted(offsets.items(), key=lambda kv: kv[1])
+    n = len(ent)
+    step = max(1, n // max_samples)
+    idxs = list(range(0, n, step))[:max_samples]
+    complete = exact = 0
+    depths: list[int] = []
+    for i in idxs:
+        off = ent[i][1]
+        end = ent[i + 1][1] if i + 1 < n else len(body)
+        try:
+            p = _payload_offset(body, off, key_size,
+                                no_null_skip=schema.no_null_skip,
+                                no_entry_header=schema.no_entry_header)
+        except Exception:                                   # noqa: BLE001
+            p = None
+        if p is None:
+            depths.append(0)
+            continue
+        walked = 0
+        for f in schema.fields:
+            try:
+                c = _consume_field_bytes(body, p, f, end)
+            except Exception:                               # noqa: BLE001
+                c = None
+            if c is None:
+                break
+            p += c
+            walked += 1
+        depths.append(walked)
+        if walked == len(schema.fields):
+            complete += 1
+            if p == end:
+                exact += 1
+    return LayoutFit(records=n, checked=len(idxs), complete=complete,
+                     exact=exact, schema_fields=len(schema.fields),
+                     median_fields=int(median(depths)) if depths else 0)
