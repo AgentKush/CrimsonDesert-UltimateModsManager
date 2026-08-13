@@ -21,6 +21,16 @@ _UNRELEASED_NOTES: list[str] = [
 
 CHANGELOG = [
     {
+        "version": "3.14.0",
+        "date": "2026-08-13",
+        "notes": [
+            "<b>CDUMM reads 53 of the game's data tables, up from 29.</b> The layouts were recovered from the game's own code and each is held to the same rule as before: the walk has to account for every byte of every record in the table, and if any other layout the format allows fits it equally well, the table is left alone rather than guessed at. These are readable, not editable. Only one table in the app accepts edits today, and that has not changed.",
+            "<b>Two table layouts shipped in 3.13.0 were wrong and have been withdrawn.</b> Both described a repeating element as a fixed size when it is not. They fitted the data perfectly, but only because every piece of text inside them happens to be the same length in the current game build, so no amount of checking against the game's files could have told the difference. Reading the game's code could, and did. Nothing was ever shown or written from either table, so this changed nothing you could see; it is recorded here because a wrong layout that nobody noticed is still worth saying out loud.",
+            "One more field of the wanted-list table is read, taking it to all three.",
+            "Thanks to AgentKush, who did the derivation work, and who found and withdrew the two wrong layouts rather than leaving them sitting behind a gate where they happened to be harmless.",
+        ],
+    },
+    {
         "version": "3.13.0",
         "date": "2026-08-12",
         "notes": [

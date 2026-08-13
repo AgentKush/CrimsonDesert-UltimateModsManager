@@ -176,7 +176,10 @@ _ORDER_BASELINE: dict[str, tuple[str, float]] = {
     "StageInfo": ("base", 25),
     "VehicleInfo": ("base", 20),
     "FieldInfo": ("base", 19),
-    "WantedInfo": ("base", 2),
+    # Was 2. #362's derived layouts took it to 3/3 on 100% of 35 records,
+    # so the floor moves up with it -- a baseline left below the current
+    # depth stops detecting the next regression above it.
+    "WantedInfo": ("base", 3),
 }
 
 
