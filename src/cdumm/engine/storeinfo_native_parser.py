@@ -419,11 +419,24 @@ class StoreListNotFound(StoreinfoParseError):
     one record at any offset -- i.e. the store really has no stock, and
     the failure to locate a list is the correct answer rather than a
     gap in our understanding.
+
+    ``ambiguous`` is True when the opposite happened: two or more spans
+    each satisfied all four acceptance conditions, so the entry was
+    refused for having too many answers rather than none. Callers must
+    be able to tell these apart without reading the message, because
+    they mean opposite things about the layout. Nothing is wrong with
+    the record shape when a scan comes out ambiguous -- the shape parsed
+    and round-tripped, twice -- so the fix is to narrow the search,
+    whereas a plain not-found means the shape itself is wrong and needs
+    re-deriving. Upstream #365 reports 78 entries in one bucket labelled
+    "not-found"; which of these two it is decides the entire fix.
     """
 
-    def __init__(self, msg: str, *, provably_empty: bool = False) -> None:
+    def __init__(self, msg: str, *, provably_empty: bool = False,
+                 ambiguous: bool = False) -> None:
         super().__init__(msg)
         self.provably_empty = provably_empty
+        self.ambiguous = ambiguous
 
 
 def _min_list_bytes(layout: StoreLayout) -> int:
@@ -501,7 +514,7 @@ def locate_stock_list(body: bytes, payload: int, entry_end: int, key: int,
         raise StoreListNotFound(
             f"store {key}: {len(found)} distinct spans each parse as a "
             f"byte-exact stock list ({[f[1] - payload for f in found]}); "
-            f"ambiguous, refusing")
+            f"ambiguous, refusing", ambiguous=True)
     return found[0]
 
 

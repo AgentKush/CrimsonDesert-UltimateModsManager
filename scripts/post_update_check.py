@@ -107,15 +107,25 @@ def check_storeinfo(body: bytes, header: bytes) -> tuple[bool, str]:
     # Takes the ENTRY OFFSETS, not the header bytes. Passing the header
     # here silently picks a wrong layout instead of raising.
     layout = detect_storeinfo_layout(body, starts)
-    located = records = empty = not_found = bad_rt = 0
+    located = records = empty = not_found = ambiguous = bad_rt = 0
+    # Widest and narrowest failing entries, to say whether the failures
+    # track list size -- the difference between "a few odd stores" and
+    # "every store past N records".
+    amb_span: list[int] = []
     for key, off in offs.items():
         end = spans[spans.index(off) + 1]
         try:
             recs, s, e = locate_stock_list(
                 body, _entry_payload(body, off), end, key, layout)
         except StoreListNotFound as exc:
-            if "too" in str(exc) or "provably" in str(exc):
+            # Read the flags, never the message. Substring-matching the
+            # text bucketed "ambiguous, refusing" as not-found, which
+            # hid the one distinction that decides what the fix is.
+            if exc.provably_empty:
                 empty += 1
+            elif exc.ambiguous:
+                ambiguous += 1
+                amb_span.append(end - _entry_payload(body, off))
             else:
                 not_found += 1
             continue
@@ -126,11 +136,17 @@ def check_storeinfo(body: bytes, header: bytes) -> tuple[bool, str]:
         records += len(recs)
         if serialize_stock_list(recs, layout) != body[s:e]:
             bad_rt += 1
-    ok = not_found == 0 and bad_rt == 0 and located + empty == len(offs)
-    return ok, (f"layout {layout.label!r}: {located} located + {empty} "
-                f"provably empty = {located + empty}/{len(offs)}, "
-                f"{records} stock records, {not_found} not-found, "
-                f"{bad_rt} mis-round-tripped")
+    ok = (not_found == 0 and ambiguous == 0 and bad_rt == 0
+          and located + empty == len(offs))
+    msg = (f"layout {layout.label!r}: {located} located + {empty} "
+           f"provably empty = {located + empty}/{len(offs)}, "
+           f"{records} stock records, {not_found} not-found, "
+           f"{ambiguous} ambiguous, {bad_rt} mis-round-tripped")
+    if ambiguous:
+        msg += (f" [ambiguous entries span {min(amb_span)}-{max(amb_span)} "
+                f"payload bytes; the shape parses and round-trips, so "
+                f"narrow the scan rather than re-derive the record]")
+    return ok, msg
 
 
 def check_statusgroupinfo(body: bytes, header: bytes) -> tuple[bool, str]:
