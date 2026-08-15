@@ -170,6 +170,33 @@ def worker_command(extra_args: list[str]) -> tuple[str, list[str]]:
     return sys.executable, ["-m", "cdumm.main", *extra_args]
 
 
+def python_script_command() -> list[str] | None:
+    """Return the argv prefix that runs a mod's ``.py`` script, or None
+    when no interpreter can be found.
+
+    Script-import used a hardcoded ``["py", "-3"]``. ``py`` is the
+    Windows Python Launcher and ships with the Windows installer only,
+    so on the native macOS / Linux path (LINUX.md's recommended mode)
+    the spawn raised FileNotFoundError, the handler swallowed it as
+    "Script execution failed", and every ``.py`` mod imported as a
+    no-op diff. Same class of bug as :func:`worker_command`, and the
+    frozen-build caveat is the same: under PyInstaller
+    ``sys.executable`` is CDUMM itself, not an interpreter, so handing
+    it a script path would re-launch the app.
+
+    Windows keeps the launcher -- it picks a real Python 3 even when
+    none is on PATH, which is the case on most players' machines.
+    Everywhere else: the running interpreter when CDUMM is run from
+    source, otherwise whatever ``python3`` the system has.
+    """
+    if IS_WINDOWS:
+        return ["py", "-3"]
+    if not getattr(sys, "frozen", False):
+        return [sys.executable]
+    found = shutil.which("python3") or shutil.which("python")
+    return [found] if found else None
+
+
 def subprocess_no_window_kwargs() -> dict:
     """Return ``subprocess.Popen``/``subprocess.run`` kwargs that
     suppress the brief console window flash on Windows.

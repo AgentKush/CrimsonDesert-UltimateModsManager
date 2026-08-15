@@ -4427,7 +4427,15 @@ def import_from_script(
         if suffix == ".bat":
             cmd = ["cmd.exe", "/c", script_path.name]
         elif suffix == ".py":
-            cmd = ["py", "-3", script_path.name]
+            from cdumm.platform import python_script_command
+            interp = python_script_command()
+            if interp is None:
+                result.error = (
+                    "No Python 3 interpreter found to run this mod's "
+                    "script. Install python3 and make sure it is on PATH."
+                )
+                return result
+            cmd = [*interp, script_path.name]
         else:
             result.error = f"Unsupported script type: {suffix}"
             return result
@@ -5943,7 +5951,15 @@ def import_script_live(
         # Never pass this through ``shell=True`` as well -- see the Popen call.
         cmd = ["cmd", "/c", f'"{script_path}" & pause']
     elif suffix == ".py":
-        cmd = ["py", "-3", str(script_path)]
+        from cdumm.platform import python_script_command
+        interp = python_script_command()
+        if interp is None:
+            result.error = (
+                "No Python 3 interpreter found to run this mod's script. "
+                "Install python3 and make sure it is on PATH."
+            )
+            return result
+        cmd = [*interp, str(script_path)]
     else:
         result.error = f"Unsupported script type: {suffix}"
         return result
