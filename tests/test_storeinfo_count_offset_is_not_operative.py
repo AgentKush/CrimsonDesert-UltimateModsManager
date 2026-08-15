@@ -103,17 +103,61 @@ def test_a_real_shape_change_does_move_the_score(table, cd116):
     assert entries < EXPECTED_ENTRIES
 
 
+def _operative_shape(lay: StoreLayout) -> tuple:
+    """What the reader actually keys on.
+
+    ``StoreLayout``'s own docstring: "the offsets are descriptive, not
+    operative: the reader consumes fields sequentially, so what actually
+    selects a shape is which of ``order_index_off`` / ``is_restore_off``
+    / ``low_price_threshold`` are set, not the numbers." So presence, not
+    position, is the identity of a layout.
+    """
+    return (lay.order_index_off is None,
+            lay.is_restore_off is None,
+            lay.low_price_threshold)
+
+
 def test_no_two_layouts_share_a_shape():
     """Two candidates identical in every operative field score
     identically, and detect_storeinfo_layout breaks the tie on LAYOUTS
     order alone -- so whichever was listed first would silently own
     DEFAULT_LAYOUT. Adding a build that only renames an existing shape
-    is how that happens; this refuses it at import time."""
-    shapes = [
-        (lay.order_index_off, lay.flags_off, lay.is_restore_off,
-         lay.const_off, lay.low_price_threshold)
-        for lay in LAYOUTS
-    ]
+    is how that happens; this refuses it at import time.
+
+    Compare presence, NOT the descriptive numbers. Comparing the numbers
+    is the trap: the 15 Aug patch (#365) removed the u32 CD 1.16 added,
+    and the obvious fix -- a new layout carrying 1.16's offsets with
+    low_price_threshold=False -- is byte-for-byte the same reader as
+    CD 1.13 while its offset tuple (34,38,41,42) differs from CD 1.13's
+    (30,34,37,38). A number-keyed check waves that duplicate through.
+    Measured on the committed table both score (3, 3); measured on the
+    live 15 Aug table the issue reports both at 320 located / 39 empty /
+    78 not-found. Identical, because they are one shape.
+    """
+    shapes = [_operative_shape(lay) for lay in LAYOUTS]
     assert len(shapes) == len(set(shapes)), (
         "two LAYOUTS entries describe the same record shape; detection "
         "cannot tell them apart and the tie falls to list order")
+
+
+def test_dropping_the_1_16_u32_reproduces_the_cd113_reader(table, cd116):
+    """The 15 Aug patch's shape is not new -- it is CD 1.13's.
+
+    Guards the fix for #365 from the wrong shape of fix: the 4-byte drop
+    needs no new layout at all, because CD 1.13 already describes a
+    record with order_index and is_restore present and no low-price u32.
+    Adding one anyway buys a label and an ambiguous tie.
+    """
+    body, offs = table
+    dropped = StoreLayout(
+        "CD 1.16-minus-lowprice",
+        cd116.count_payload_offset,
+        cd116.order_index_off,
+        cd116.flags_off,
+        cd116.is_restore_off,
+        cd116.const_off,
+        low_price_threshold=False,
+    )
+    cd113 = next(lay for lay in LAYOUTS if lay.label == "CD 1.13")
+    assert _operative_shape(dropped) == _operative_shape(cd113)
+    assert _score_layout(body, offs, dropped) == _score_layout(body, offs, cd113)
