@@ -1167,16 +1167,67 @@ class Deriver:
                     break
                 k -= 1
             w = None
+            src_reg = None
             for x in ins[start:j]:
                 oo = x.operands
-                if (x.mnemonic == "mov" and len(oo) == 2
+                if not (x.mnemonic == "mov" and len(oo) == 2
                         and oo[0].type == CS_OP_REG
-                        and oo[1].type == CS_OP_IMM
                         and "r8" in x.op_str.split(",")[0]):
-                    w = oo[1].imm
+                    continue
+                if oo[1].type == CS_OP_IMM:
+                    w, src_reg = oo[1].imm, None
+                elif oo[1].type == CS_OP_REG:
+                    # `mov r8d, r15d` -- the width is in a register. MSVC
+                    # hoists a literal into a callee-saved register when a
+                    # deserialiser performs many reads of the same size, so
+                    # the constant is defined once and reused. After the
+                    # .pdata sweep this accounts for EVERY remaining '?':
+                    # 86 fields, all `mov r8d, <reg>` (r15d 41, r12d 30,
+                    # r13d 12, r14d 2, ebp 1), and zero misalignments.
+                    w, src_reg = None, self.md.reg_name(oo[1].reg)
+            if w is None and src_reg:
+                w = self._const_reg(ins, j, src_reg)
             out.append((fld, "fixed", w) if w is not None
                        else (fld, "?", None))
         return out
+
+    def _const_reg(self, ins: list, before: int, reg: str):
+        """The constant in ``reg`` at instruction ``before``, or None.
+
+        Resolved by UNIQUE DEFINITION: every write to the register anywhere
+        in the function is collected, and a value is returned only when
+        there is exactly one and it is `mov <reg>, <imm>`. Two definitions
+        mean the value depends on a path this scan does not follow, and the
+        honest answer is then "unknown" -- the same unique-or-nothing rule
+        the widths and list elements are held to.
+
+        Deliberately not a backward walk to the nearest assignment: the
+        nearest one in ADDRESS order is not necessarily the one that
+        reaches, and picking it would be exactly the kind of plausible
+        guess this pipeline exists to refuse.
+        """
+        from capstone import CS_OP_IMM, CS_OP_REG
+        q = Frame.q(reg)
+        vals = set()
+        for x in ins[:before]:
+            o = x.operands
+            if len(o) < 1 or o[0].type != CS_OP_REG:
+                continue
+            dst = x.op_str.split(",")[0].strip()
+            if Frame.q(dst) != q:
+                continue
+            if (x.mnemonic == "mov" and len(o) == 2
+                    and o[1].type == CS_OP_IMM):
+                vals.add(o[1].imm)
+            elif x.mnemonic == "xor" and len(o) == 2:
+                b = x.op_str.split(",", 1)[1].strip()
+                vals.add(0 if Frame.q(b) == q else None)
+            else:
+                vals.add(None)              # some other write: not a constant
+        if len(vals) != 1:
+            return None
+        v = next(iter(vals))
+        return v if isinstance(v, int) and 0 < v <= MAX_ELEM else None
 
     # ── the gate ─────────────────────────────────────────────────────────
 

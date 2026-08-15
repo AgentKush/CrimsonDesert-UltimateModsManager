@@ -2830,5 +2830,94 @@
     "_wayPointData": {
       "type": "FactionWayPointInfo_wayPointData"
     }
+  },
+  "LevelActionPointInfo": {
+    "_meta_note": "Derived 2026-08-12 from game buildid 24613230 by tools/derive_table_layout.py, reflection class LevelActionPointInfo. Field ORDER from the exe's reflection error strings ordered by the hot-path branch that reaches each error block. Field WIDTHS from the sized reads in the deserializer; count-prefixed list element widths from the loop body via Deriver.list_element. PROOF: the walk consumes every one of this table's 60 records to its exact last byte. KEYED BY FILE STEM 'levelactionpointinfo' because that is what identify_table_from_path returns and what get_schema is asked for. _stringKey/_key are omitted because the entry header consumes them. _verified_fields is EMPTY on purpose: tiling proves the structure and each field's offset, NOT what any field means. _levelActionPointGroupList is a list whose ELEMENT has no constant width, so it is CArray<LevelActionPointInfo_LevelActionPointGroupEntry> rather than CArray<[u8;N]>. The element's members come from the loop body's own read sequence via Deriver.element_parts, which independently reproduces the two substructs written by hand for HouseInfo and FailMessageInfo. Member names are anonymous on purpose: the parts give structure and say nothing about meaning.",
+    "_no_null_skip": true,
+    "_ordered_fields": [
+      "_isBlocked",
+      "_accessType",
+      "_levelActionPointGroupList"
+    ],
+    "_verified_fields": [],
+    "_isBlocked": {
+      "type": "u8"
+    },
+    "_accessType": {
+      "type": "u8"
+    },
+    "_levelActionPointGroupList": {
+      "type": "CArray<LevelActionPointInfo_LevelActionPointGroupEntry>"
+    }
+  },
+  "MaterialBloodDecalInfo": {
+    "_meta_note": "Derived 2026-08-13 from game buildid 24613230 by tools/derive_table_layout.py. Widths are static: _isBlocked u8 and _skillKey u32 from sized reads, and _bloodDecalVariationData from Deriver.list_element, which gives a variable element of 20 + n (a CString plus 16 fixed bytes). ORDER WAS CORRECTED AGAINST THE BYTES. The hot-path branch ranking put _bloodDecalVariationData BEFORE _skillKey, because the list's guard branch sits at 0x14128893F and _skillKey's at 0x141288960, and that order tiles 0 of 13 records. It cannot be right: reading the list first takes the 4 bytes at payload offset 1 as its element count, i.e. 0x00015F90 = 89,999 elements. With the list last, record 0 accounts exactly -- 1 + 4 + 4 + 4*25 = 109 -- and so do all 13. The remaining ambiguity is that _isBlocked and _skillKey are 1 and 4 bytes before a variable field, so swapping them preserves the total and BOTH orders tile 13/13; the data cannot separate them. Two independent things settle it: the hot-path ranking, which is reliable for these two (_isBlocked 0x14128891F precedes _skillKey 0x141288960 and was only wrong about the list), and the format-wide convention that _isBlocked is the first field of very nearly every table. _verified_fields is EMPTY: this proves structure, not meaning.",
+    "_no_null_skip": true,
+    "_ordered_fields": [
+      "_isBlocked",
+      "_skillKey",
+      "_bloodDecalVariationData"
+    ],
+    "_verified_fields": [],
+    "_isBlocked": {
+      "type": "u8"
+    },
+    "_skillKey": {
+      "type": "u32"
+    },
+    "_bloodDecalVariationData": {
+      "type": "CArray<MaterialBloodDecalInfo_BloodDecalVariationEntry>"
+    }
+  },
+  "uitalktreeinfo": {
+    "_meta_note": "Derived 2026-08-13 from game buildid 24613230 by tools/derive_table_layout.py, reflection class UITalkTreeInfo. Field ORDER comes from the exe's reflection error strings ordered by the hot-path branch that reaches each error block. Field WIDTHS come from the sized reads in the deserializer; count-prefixed list ELEMENT widths come from the loop body via Deriver.list_element (validated against the 8 readers stage 2 had independently pinned from table data: 5 reproduced exactly, 2 correctly reported variable-length, 1 abstained, 0 contradictions). PROOF: the walk consumes every one of this table's 175 records to its exact last byte, and no other shape in the format's grammar does. KEYED BY FILE STEM 'uitalktreeinfo' because that is what identify_table_from_path returns and what get_schema is asked for; the class name would resolve to a key the app never looks up on this table. _stringKey/_key are omitted because the entry header consumes them. _verified_fields is EMPTY on purpose: tiling proves the structure and each field's offset, NOT what any field means, so nothing here may be presented as fact or written to until its values are cross-checked.",
+    "_no_null_skip": true,
+    "_ordered_fields": [
+      "_isBlocked",
+      "_rootTalkTreeInfo",
+      "_parentTalkTreeInfo",
+      "_childTalkTreeInfoList",
+      "_conditionInfo",
+      "_targetConditionInfo",
+      "_buttonText",
+      "_npcActivityInfo",
+      "_interactionInfo",
+      "_effectInfo",
+      "_resultDataList"
+    ],
+    "_verified_fields": [],
+    "_isBlocked": {
+      "type": "u8"
+    },
+    "_rootTalkTreeInfo": {
+      "type": "u16"
+    },
+    "_parentTalkTreeInfo": {
+      "type": "u16"
+    },
+    "_childTalkTreeInfoList": {
+      "type": "CArray<u16>"
+    },
+    "_conditionInfo": {
+      "type": "u32"
+    },
+    "_targetConditionInfo": {
+      "type": "u32"
+    },
+    "_buttonText": {
+      "type": "LocalizableString"
+    },
+    "_npcActivityInfo": {
+      "type": "u32"
+    },
+    "_interactionInfo": {
+      "type": "u32"
+    },
+    "_effectInfo": {
+      "type": "u32"
+    },
+    "_resultDataList": {
+      "type": "u32"
+    }
   }
 }

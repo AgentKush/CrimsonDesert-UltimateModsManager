@@ -28565,5 +28565,40 @@
   {
    "f": "_wayPointData"
   }
+ ],
+ "uitalktreeinfo": [
+  {
+   "f": "_isBlocked"
+  },
+  {
+   "f": "_rootTalkTreeInfo"
+  },
+  {
+   "f": "_parentTalkTreeInfo"
+  },
+  {
+   "f": "_childTalkTreeInfoList"
+  },
+  {
+   "f": "_conditionInfo"
+  },
+  {
+   "f": "_targetConditionInfo"
+  },
+  {
+   "f": "_buttonText"
+  },
+  {
+   "f": "_npcActivityInfo"
+  },
+  {
+   "f": "_interactionInfo"
+  },
+  {
+   "f": "_effectInfo"
+  },
+  {
+   "f": "_resultDataList"
+  }
  ]
 }

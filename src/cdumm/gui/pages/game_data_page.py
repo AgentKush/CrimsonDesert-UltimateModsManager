@@ -496,8 +496,18 @@ class _PreviewWorker(QObject):
                         table, body, header)
                     cols, rows, total, health = _shape_records(
                         recs, sem.get_schema(table), positions)
+                    # Structural check, separate from `health`. `health` is
+                    # a heuristic about VALUES looking unusable; this asks
+                    # whether the schema can frame the record at all on
+                    # this build. Sampled, so it stays cheap even on
+                    # stageinfo's 51,595 records.
+                    try:
+                        from cdumm.engine.schema_verify import layout_fit
+                        fit = layout_fit(table, body, header)
+                    except Exception:  # noqa: BLE001 - never block the view
+                        fit = None
                     res.update(kind="table", table=table, cols=cols,
-                               rows=rows, total=total, health=health,
+                               rows=rows, total=total, health=health, layout=fit,
                                has_pos=bool(positions),
                                gear_stats=_locate_gear_stats(
                                    table, body, header))
@@ -1619,12 +1629,37 @@ class GameDataPage(ToolPageBase):
             total = res.get("total", 0)
             shown = len(res.get("rows", []))
             more = f" (showing first {shown:,})" if shown < total else ""
-            if res.get("health", 0.0) >= 0.9:
-                note = ("\n⚠ field columns didn't parse cleanly for this "
-                        "table on this build — trust _key and _name only")
+            # Structural verdict first: it is measured rather than
+            # heuristic, and it answers something `health` cannot -- whether
+            # the schema can frame this build's records at all.
+            fit = res.get("layout")
+            if fit is not None and fit.broken:
+                note = (f"\n\u26a0 CDUMM cannot read this table's layout on "
+                        f"this game build \u2014 the walk stops after about "
+                        f"{fit.median_fields} of {fit.schema_fields} fields "
+                        f"on every record sampled. Columns past that point "
+                        f"are meaningless; trust _key and _name only")
+            elif res.get("health", 0.0) >= 0.9:
+                note = ("\n\u26a0 field columns didn't parse cleanly for "
+                        "this table on this build \u2014 trust _key and "
+                        "_name only")
+            elif fit is not None and fit.checked and not fit.usable:
+                note = (f"\n\u26a0 this table's layout only reads on "
+                        f"{fit.ratio:.0%} of records sampled \u2014 some "
+                        f"rows' columns will be misaligned; _key and _name "
+                        f"are authoritative")
+            elif fit is not None and fit.usable and not fit.exact:
+                note = ("\nfield columns read consistently, but the schema "
+                        "doesn't account for every byte of a record, so a "
+                        "column may still be misaligned; _key and _name are "
+                        "authoritative")
+            elif fit is not None and fit.exact:
+                note = ("\nfield columns account for every byte of every "
+                        "record sampled \u2014 the strongest signal CDUMM "
+                        "has that this layout fits your build")
             else:
-                note = ("\nfield columns are experimental (from CDUMM's patch "
-                        "parser); _key and _name are authoritative")
+                note = ("\nfield columns are experimental (from CDUMM's "
+                        "patch parser); _key and _name are authoritative")
             if res.get("has_pos"):
                 note += ("\nworld pos (X, Y, Z) = decoded, region-validated "
                          "map coordinates for mod-makers")
