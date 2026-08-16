@@ -37,7 +37,7 @@ from cdumm.engine.storeinfo_native_parser import (
     locate_stock_list,
     serialize_stock_list,
 )
-from cdumm.semantic.parser import parse_pabgh_index, _parse_entry_header
+from cdumm.semantic.parser import _parse_entry_header, parse_pabgh_index
 
 logger = logging.getLogger(__name__)
 
@@ -98,8 +98,23 @@ def _check_new_record_buildable(j: dict, idx: int) -> None:
                 f"ground-truth record they are the same value")
 
 
-def _build_new_record(j: dict, idx: int) -> StockRecord:
+def _build_new_record(j: dict, idx: int,
+                      layout: StoreLayout) -> StockRecord:
     _check_new_record_buildable(j, idx)
+    # The three fields mapped below live INSIDE the opaque interior at
+    # fixed indices. On a build whose interior CDUMM has not re-derived
+    # them for, writing there lands in the wrong bytes, so refuse the
+    # record rather than write a plausible-looking wrong one.
+    #
+    # Editing an EXISTING record is unaffected: nothing else touches the
+    # interior, it is carried through verbatim. (GitHub #365.)
+    if not layout.vgap_map_verified:
+        raise StoreinfoWriteRefused(
+            f"new stock record [{idx}]: the {layout.label} value "
+            f"interior has not been re-derived, so raw_e / raw_g / raw_q "
+            f"would be written at indices measured on an older build. "
+            f"Editing existing stock records still works on this game "
+            f"version; only ADDING one is refused")
     v = j.get("value") or {}
     rec = StockRecord(
         lookup_a=int(j.get("lookup_a") or 0),
@@ -304,7 +319,8 @@ def build_storeinfo_changes(
             if van is not None:
                 out_records.append(van)
             else:
-                out_records.append(_build_new_record(j, idx))
+                out_records.append(
+                    _build_new_record(j, idx, layout))
                 n_new += 1
         new_list = serialize_stock_list(out_records, layout)
         replacements[key] = (list_start, list_end, new_list)

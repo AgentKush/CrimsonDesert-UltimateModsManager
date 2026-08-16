@@ -46,6 +46,7 @@ from cdumm.engine.storeinfo_native_parser import (
     StockRecord,
     StoreinfoParseError,
     StoreListNotFound,
+    _unreadable_entries,
     locate_stock_list,
     parse_stock_list,
     serialize_stock_list,
@@ -54,8 +55,10 @@ from cdumm.semantic.parser import _parse_entry_header, parse_pabgh_index
 from tests.fixture_loaders import (
     has_vanilla113,
     has_vanilla116,
+    has_vanilla1161,
     load_vanilla113,
     load_vanilla116,
+    load_vanilla1161,
 )
 
 _VANILLA_DIR = Path(__file__).resolve().parents[1] / "issue_repro" / "183" / "vanilla"
@@ -158,7 +161,7 @@ def test_refuses_an_implausible_effect_count_on_parse():
 
 
 def _entry_payload_offsets():
-    from cdumm.semantic.parser import parse_pabgh_index, _parse_entry_header
+    from cdumm.semantic.parser import _parse_entry_header, parse_pabgh_index
     body = _LIVE_BODY.read_bytes()
     key_size, offsets = parse_pabgh_index(
         _LIVE_HEADER.read_bytes(), "storeinfo")
@@ -232,6 +235,11 @@ def test_live_full_file_clean_entries_round_trip():
 _COMMITTED = (
     ("vanilla113", "CD 1.13", 293, 263, 5443, 30),
     ("vanilla116", "CD 1.16", 432, 397, 6376, 35),
+    # GitHub #365. The 15 Aug 2026 patch took 4 bytes out of the opaque
+    # `vgap` interior (71 -> 67) without moving anything ahead of the
+    # const tripwire, so this build needs its own layout even though
+    # every offset up to the const is identical to CD 1.16.
+    ("vanilla1161", "CD 1.16.1", 437, 398, 6378, 39),
 )
 
 
@@ -248,7 +256,9 @@ def _committed_entries(load, ver: str):
 
 
 def _walk_committed(ver: str, layout):
-    load = load_vanilla113 if ver == "vanilla113" else load_vanilla116
+    load = {"vanilla113": load_vanilla113,
+            "vanilla116": load_vanilla116,
+            "vanilla1161": load_vanilla1161}[ver]
     body, entries = _committed_entries(load, ver)
     located = records = empty = not_found = 0
     for key, (payload, end) in entries.items():
@@ -282,10 +292,10 @@ def test_committed_fixture_locates_and_round_trips(
     dead" reading immediately: the parser reads the current table
     completely. Counts are pinned so a real drift moves them.
     """
-    if ver == "vanilla113" and not has_vanilla113("storeinfo.pabgb"):
-        pytest.skip("vanilla113 storeinfo fixture absent")
-    if ver == "vanilla116" and not has_vanilla116("storeinfo.pabgb"):
-        pytest.skip("vanilla116 storeinfo fixture absent")
+    _have = {"vanilla113": has_vanilla113, "vanilla116": has_vanilla116,
+             "vanilla1161": has_vanilla1161}[ver]
+    if not _have("storeinfo.pabgb"):
+        pytest.skip(f"{ver} storeinfo fixture absent")
 
     located, records, empty, not_found, total = _walk_committed(
         ver, _BY_LABEL[label])
@@ -304,25 +314,45 @@ def test_older_layouts_lose_decisively_on_committed_fixture(
         ver, label, n_entries, exp_located, exp_records, exp_empty):
     """Detection is not a close call, so a wrong layout cannot win.
 
-    Every layout other than the fixture's own must locate dramatically
-    fewer entries. If a future layout ever ties, ``_score_layout`` can no
-    longer tell them apart and the tie must be resolved rather than
-    silently broken by ordering — which is precisely how the #352 no-op
+    Asserted on UNREADABLE entries, which is what ``detect_storeinfo_layout``
+    ranks on, rather than on how many entries a layout locates.
+
+    Located-count stopped separating layouts on CD 1.16.1 (GitHub #365):
+    CD 1.13 locates 320 of that table's 437 against CD 1.16.1's 398, a
+    margin of 1.24x where every earlier build gave 100x or more, so the
+    old "must locate less than half" assertion fails there on a correct
+    fix. Holes separate them cleanly -- 78 against 0 -- because a layout
+    that abandons entries the other one reads has not understood the
+    table better however many records it got through.
+
+    If a future build ever ties on holes too, detection can no longer
+    tell those layouts apart and the tie must be resolved rather than
+    broken silently by ordering, which is precisely how the #352 no-op
     change looked like an improvement.
     """
-    if ver == "vanilla113" and not has_vanilla113("storeinfo.pabgb"):
-        pytest.skip("vanilla113 storeinfo fixture absent")
-    if ver == "vanilla116" and not has_vanilla116("storeinfo.pabgb"):
-        pytest.skip("vanilla116 storeinfo fixture absent")
+    _have = {"vanilla113": has_vanilla113, "vanilla116": has_vanilla116,
+             "vanilla1161": has_vanilla1161}[ver]
+    if not _have("storeinfo.pabgb"):
+        pytest.skip(f"{ver} storeinfo fixture absent")
 
-    right = _walk_committed(ver, _BY_LABEL[label])[0]
+    load = {"vanilla113": load_vanilla113, "vanilla116": load_vanilla116,
+            "vanilla1161": load_vanilla1161}[ver]
+    body = load("storeinfo.pabgb")
+    _ks, offsets = parse_pabgh_index(load("storeinfo.pabgh"), "storeinfo")
+    starts = sorted(offsets.values())
+
+    right = _unreadable_entries(body, starts, _BY_LABEL[label])
+    assert right == 0, (
+        f"{ver}: its own layout {label!r} leaves {right} entries "
+        f"unreadable; it does not fully explain the table")
     for other in LAYOUTS:
         if other.label == label:
             continue
-        got = _walk_committed(ver, other)[0]
-        assert got < right / 2, (
-            f"{ver}: layout {other.label!r} located {got} entries against "
-            f"{label!r}'s {right} — detection is no longer decisive")
+        got = _unreadable_entries(body, starts, other)
+        assert got > right, (
+            f"{ver}: layout {other.label!r} leaves {got} entries "
+            f"unreadable against {label!r}'s {right} — detection is no "
+            f"longer decisive")
 
 
 def test_parsing_an_older_shape_with_the_default_layout_refuses():

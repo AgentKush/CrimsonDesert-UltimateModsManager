@@ -129,6 +129,34 @@ def has_vanilla116(name: str) -> bool:
         return False
 
 
+def load_vanilla1161(name: str) -> bytes:
+    """Load a CD 1.16.1 vanilla extract (the 15 August 2026 patch).
+
+    Added for storeinfo (GitHub #365). That patch is the first storeinfo
+    change that did not move a field ahead of the const tripwire: the
+    four bytes came out of the opaque ``vgap`` interior instead, 71 -> 67,
+    so the record shrank while everything up to the const stayed put.
+
+    Both this and the vanilla116 extract have to be present to test it.
+    The 1.16 table needs vgap 71 and this one needs 67, and each decodes
+    0 not-found under its own layout and hundreds under the other's, so
+    one table alone cannot show that detection picks correctly.
+    """
+    packed = _TESTS_DIR / "fixtures" / "vanilla1161" / (name + ".zlib")
+    if packed.exists():
+        return zlib.decompress(packed.read_bytes())
+    raise FileNotFoundError(
+        f"vanilla1161 fixture {name!r} absent from tests/fixtures")
+
+
+def has_vanilla1161(name: str) -> bool:
+    try:
+        load_vanilla1161(name)
+        return True
+    except FileNotFoundError:
+        return False
+
+
 def has_vanilla115(name: str) -> bool:
     try:
         load_vanilla115(name)
