@@ -18,11 +18,12 @@ import struct
 from dataclasses import dataclass
 from typing import Any
 
+from cdumm.engine.equipslotinfo_writer import serialize_entry_payload
 from cdumm.engine.storeinfo_native_parser import (
+    LAYOUTS,
     StockRecord,
     serialize_stock_list,
 )
-from cdumm.engine.equipslotinfo_writer import serialize_entry_payload
 
 
 @dataclass
@@ -36,6 +37,12 @@ class _Intent:
 
 
 # ── Synthetic table builders ─────────────────────────────────────────
+
+#: The layout the synthetic records below are shaped for: a 71-byte
+#: interior with raw_q at index 59. Named so this helper cannot drift
+#: onto a newer layout with a different interior (GitHub #365).
+_SYNTH_LAYOUT = next(ly for ly in LAYOUTS if ly.label == "CD 1.16")
+
 
 def build_store_table(entries):
     """entries: list of (key, name, [StockRecord, ...]). Returns
@@ -58,7 +65,13 @@ def build_store_table(entries):
         # table has to be faithful about it too.
         for rec in records:
             rec.lookup_a = key
-        body += serialize_stock_list(records)
+        # Named, not defaulted. These synthetic records carry a 71-byte
+        # interior with raw_q written at index 59, which is the CD 1.16
+        # shape; leaving the layout to default re-points this helper at
+        # whatever ships next and it silently stops matching its own
+        # records. That is the #351 trap, and CD 1.16.1 (interior 67)
+        # tripped it. (GitHub #365.)
+        body += serialize_stock_list(records, _SYNTH_LAYOUT)
     header = struct.pack("<H", len(entries))
     for key, _name, _records in entries:
         header += struct.pack("<H", key) + struct.pack("<I", offs[key])
