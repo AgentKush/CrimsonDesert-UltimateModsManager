@@ -20,7 +20,6 @@ Safety contract pinned here:
 from __future__ import annotations
 
 import json
-import struct
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -85,12 +84,9 @@ def _apply(body: bytes, changes: list[dict]) -> bytes:
 
 @pytest.mark.skipif(not _have_fixtures(), reason="183 fixtures absent")
 def test_hernandpets_applies_end_to_end():
-    from cdumm.engine.storeinfo_writer import build_storeinfo_changes
     from cdumm.engine.storeinfo_native_parser import parse_stock_list
-    from cdumm.semantic.parser import parse_pabgh_index, _parse_entry_header
-
-    from cdumm.engine.storeinfo_native_parser import serialize_stock_list
-    from cdumm.engine.storeinfo_writer import _record_identity
+    from cdumm.engine.storeinfo_writer import _record_identity, build_storeinfo_changes
+    from cdumm.semantic.parser import _parse_entry_header, parse_pabgh_index
 
     layout = _fixture_layout()
     list_count_off = layout.count_payload_offset
@@ -146,10 +142,14 @@ def test_hernandpets_applies_end_to_end():
         if r.body in vbodies:
             from cdumm.engine.storeinfo_native_parser import _Writer
             wa, wb = _Writer(), _Writer()
-            from cdumm.engine.storeinfo_native_parser import (
-                write_stock_record)
-            write_stock_record(wa, r)
-            write_stock_record(wb, vby_body[r.body])
+            from cdumm.engine.storeinfo_native_parser import write_stock_record
+            # Named, not defaulted. This is the #351 trap the fixture
+            # helper above exists to avoid, and it caught this line when
+            # CD 1.16.1 became the newest layout: these records come from
+            # a CD 1.11 snapshot with a 71-byte interior, and the default
+            # had moved to a layout whose interior is 67.
+            write_stock_record(wa, r, layout)
+            write_stock_record(wb, vby_body[r.body], layout)
             assert bytes(wa.out) == bytes(wb.out), r.body
 
     # Every entry offset after store 3101 shifted by exactly +growth.
@@ -169,10 +169,13 @@ def test_hernandpets_applies_end_to_end():
 
 @pytest.mark.skipif(not _have_fixtures(), reason="183 fixtures absent")
 def test_new_record_with_unmapped_field_refuses():
-    from cdumm.engine.storeinfo_writer import (
-        StoreinfoWriteRefused, build_storeinfo_changes, _record_identity)
     from cdumm.engine.storeinfo_native_parser import parse_stock_list
-    from cdumm.semantic.parser import parse_pabgh_index, _parse_entry_header
+    from cdumm.engine.storeinfo_writer import (
+        StoreinfoWriteRefused,
+        _record_identity,
+        build_storeinfo_changes,
+    )
+    from cdumm.semantic.parser import _parse_entry_header, parse_pabgh_index
     layout = _fixture_layout()
     body = _BODY.read_bytes()
     header = _HDR.read_bytes()
