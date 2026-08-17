@@ -149,15 +149,23 @@ def _build_new_record(j: dict, idx: int,
         body=int(_record_identity(j) or 0),
     )
     # Mapped interior fields live inside the opaque value-struct blob
-    # (vgap). These indices are vgap-relative and stay stable across the
-    # CD 1.11 layout shift: is_restore_item was inserted before the vgap,
-    # so the blob's contents and internal offsets did not move (only the
-    # vgap's record-relative start did, 38 -> 39). raw_e -> vgap[41],
-    # raw_g u16 -> vgap[57], raw_q u32 -> vgap[59].
-    vgap = bytearray(rec.vgap)
-    struct.pack_into("<I", vgap, 41, int(v.get("raw_e") or 0))
-    struct.pack_into("<H", vgap, 57, int(v.get("raw_g") or 0) & 0xFFFF)
-    struct.pack_into("<I", vgap, 59, int(v.get("raw_q") or 0))
+    # (vgap), at the layout's raw_e_off / raw_g_off / raw_q_off. These
+    # stayed at 41/57/59 across the CD 1.11 layout shift (is_restore_item
+    # was inserted before the vgap, so the blob's contents and internal
+    # offsets did not move, only the vgap's record-relative start did,
+    # 38 -> 39) but moved to 37/53/55 on CD 1.16.1 (GitHub #365) -- see
+    # StoreLayout.raw_e_off for how that was derived.
+    #
+    # Sized from the layout, not from the StockRecord dataclass default
+    # (71, the pre-1.16.1 VGAP_SIZE): that default only ever matched by
+    # coincidence, because every layout before 1.16.1 also happened to be
+    # 71 bytes. On a shorter interior it silently built an oversized
+    # vgap that write_stock_record then refused outright.
+    vgap = bytearray(layout.vgap_size)
+    struct.pack_into("<I", vgap, layout.raw_e_off, int(v.get("raw_e") or 0))
+    struct.pack_into("<H", vgap, layout.raw_g_off,
+                     int(v.get("raw_g") or 0) & 0xFFFF)
+    struct.pack_into("<I", vgap, layout.raw_q_off, int(v.get("raw_q") or 0))
     rec.vgap = bytes(vgap)
     sd = j.get("sub_data")
     if sd is not None:
