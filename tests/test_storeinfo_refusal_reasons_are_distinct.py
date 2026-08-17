@@ -92,6 +92,51 @@ def test_provably_empty_entries_carry_the_flag_not_just_the_wording(
     assert flagged == 35
 
 
+def test_the_15_aug_failures_were_not_found_not_ambiguous():
+    """The question this split exists to answer, answered on the real
+    table.
+
+    #365 reported 78 entries under a single "not-found" label, and the
+    two possibilities demanded opposite fixes: a wrong record shape
+    (re-derive) or a scan that found two qualifying spans (narrow it).
+    Driven over the committed CD 1.16.1 table with the stale CD 1.13
+    layout, all 78 are genuinely not-found and none are ambiguous --
+    the shape was wrong, which is what the vgap 71 -> 67 fix corrected.
+
+    Pinned because it is the calibration for the next patch: if a future
+    break comes back ambiguous instead, that is a different failure and
+    a different fix, and the counters now say which.
+    """
+    body = zlib.decompress(
+        (_FIXTURES.parent / "vanilla1161" / "storeinfo.pabgb.zlib").read_bytes())
+    header = zlib.decompress(
+        (_FIXTURES.parent / "vanilla1161" / "storeinfo.pabgh.zlib").read_bytes())
+    _key_size, offsets = parse_pabgh_index(header, "storeinfo")
+    starts = sorted(offsets.values())
+    spans = starts + [len(body)]
+    stale = next(lay for lay in LAYOUTS if lay.label == "CD 1.13")
+
+    empty = not_found = ambiguous = located = 0
+    for key, off in offsets.items():
+        end = spans[spans.index(off) + 1]
+        try:
+            locate_stock_list(body, _entry_payload(body, off), end, key, stale)
+        except StoreListNotFound as exc:
+            if exc.provably_empty:
+                empty += 1
+            elif exc.ambiguous:
+                ambiguous += 1
+            else:
+                not_found += 1
+            continue
+        except Exception:  # noqa: BLE001 - any parse failure is not-found
+            not_found += 1
+            continue
+        located += 1
+
+    assert (located, empty, not_found, ambiguous) == (320, 39, 78, 0)
+
+
 def test_every_located_span_is_anchored_where_the_scan_says(table, cd116):
     """The invariant the ambiguity branch rests on.
 
