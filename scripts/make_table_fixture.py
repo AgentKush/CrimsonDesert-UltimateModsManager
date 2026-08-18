@@ -41,18 +41,10 @@ sys.path.insert(0, str(_REPO / "src"))
 #: Matches the fixture layout the tests already glob for.
 _FIXTURE_ROOT = _REPO / "tests" / "fixtures"
 
-#: Every table that already has a committed fixture on some build, which
-#: is the set worth re-freezing when a patch lands. Derived once and
-#: written down rather than globbed at runtime: a table that stops being
-#: captured should be a visible edit here, not a silent gap.
-#:
-#: Note this is WIDER than what post_update_check.py checks. The canary
-#: drives three tables (skill, storeinfo, statusgroupinfo) because those
-#: are the ones with a hand-written check; the other twelve have fixtures
-#: and layout tests but no canary entry, so a patch that moves them is
-#: caught only when the test suite runs against a new fixture. Capturing
-#: all of them is what makes that possible.
-ALL_TABLES = (
+#: Tables that already have a committed fixture on some build. Derived
+#: once and written down rather than globbed at runtime: a table that
+#: stops being captured should be a visible edit here, not a silent gap.
+_FIXTURE_BACKED = (
     "aieventtableinfo",
     "buffinfo",
     "characterappearanceindexinfo",
@@ -69,6 +61,31 @@ ALL_TABLES = (
     "storeinfo",
     "stringinfo",
 )
+
+#: Tables post_update_check.py gates on but that have never been frozen.
+#:
+#: These are the ordered tables: the canary scores each one through
+#: ``select_order`` against a pinned walk depth, so a patch that moves them
+#: IS caught -- but only on a machine with the game installed, and only
+#: while somebody remembers to run it. With no committed bytes there is
+#: nothing for CI to re-check them against, so a regression in this repo's
+#: own reader goes unnoticed between canary runs.
+#:
+#: Capturing them is what closes that. It costs one extra `--all` run.
+_CANARY_ONLY = (
+    "fieldinfo",
+    "regioninfo",
+    "stageinfo",
+    "vehicleinfo",
+    "wantedinfo",
+)
+
+#: The set worth re-freezing when a patch lands: everything either half
+#: cares about. Note this is WIDER than what the canary checks live -- ten
+#: of these have fixtures and layout tests but no canary entry, so a patch
+#: that moves them is caught only when the suite runs against a new
+#: fixture. Capturing all of them is what makes that possible.
+ALL_TABLES = tuple(sorted(_FIXTURE_BACKED + _CANARY_ONLY))
 
 #: zlib level 9: these are committed binaries, so size beats speed, and
 #: the existing vanilla116 fixtures were written the same way.
@@ -116,9 +133,12 @@ def main() -> int:
                          "Repeatable. Omit with --all to take every known "
                          "table.")
     ap.add_argument("--all", action="store_true",
-                    help=f"freeze all {len(ALL_TABLES)} tables that have ever "
-                         f"had a committed fixture — the set worth "
-                         f"re-capturing after a patch")
+                    help=f"freeze all {len(ALL_TABLES)} tables worth "
+                         f"capturing after a patch: the "
+                         f"{len(_FIXTURE_BACKED)} that already have a "
+                         f"fixture, plus the {len(_CANARY_ONLY)} the "
+                         f"post-update canary gates on but that have never "
+                         f"been frozen")
     ap.add_argument("--version", required=True,
                     help="fixture version label, e.g. 1162 -> vanilla1162/")
     ap.add_argument("--force", action="store_true",

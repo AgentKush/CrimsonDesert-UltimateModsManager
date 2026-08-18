@@ -199,13 +199,21 @@ _ORDER_BASELINE: dict[str, tuple[str, float]] = {
 }
 
 
-def check_ordered_table(table: str, body: bytes,
-                        header: bytes) -> tuple[bool, str]:
+def check_ordered_table(table: str, body: bytes, header: bytes,
+                        want: tuple[str, float] | None) -> tuple[bool, str]:
     """``select_order`` -- which applies the per-build variant.
 
-    Judged against ``_ORDER_BASELINE`` rather than an absolute bar: a
-    regression means a patch moved something, while a table that has always
-    stalled early is a known gap and must not read as breakage.
+    Judged against a pinned ``(order label, median fields)`` rather than an
+    absolute bar: a regression means a patch moved something, while a table
+    that has always stalled early is a known gap and must not read as
+    breakage.
+
+    The pin is passed in rather than looked up, because the live install and
+    a committed fixture are pinned to different numbers. ``_ORDER_BASELINE``
+    describes the build the game is on; a 1.10 fixture legitimately reads
+    shallower than a 1.16 one, and judging it against the live figure would
+    print a regression on a table that has never changed. ``None`` means
+    unpinned: reported, not gated.
     """
     from cdumm.engine.schema_verify import decode_score, select_order
     label, order = select_order(table, body, header)
@@ -216,7 +224,6 @@ def check_ordered_table(table: str, body: bytes,
               + (f", stalls on {s.first_bail_field}"
                  if s.first_bail_field else ""))
 
-    want = _ORDER_BASELINE.get(table)
     if want is None:
         return True, detail + "   [no baseline pinned]"
     want_label, want_median = want
@@ -245,6 +252,103 @@ _ORDERED = [("iteminfo", "ItemInfo"), ("characterinfo", "CharacterInfo"),
             ("regioninfo", "RegionInfo"), ("stageinfo", "StageInfo"),
             ("vehicleinfo", "VehicleInfo"), ("fieldinfo", "FieldInfo"),
             ("wantedinfo", "WantedInfo")]
+
+
+# ── the same checks, against the bytes committed to the repo ──────────────
+#
+# The live pass above needs a game install. This one needs nothing, which
+# is the point: it separates "the patch moved the bytes" from "we broke the
+# reader", and it is the only half that can run in CI.
+#
+# It used to walk a hardcoded ("vanilla113", "vanilla115", "vanilla116")
+# and only the three hand-written checks -- so vanilla110 was never read,
+# vanilla1161 was never read (the NEWEST table we have, frozen for the
+# 15 Aug patch that #365/#366 turned on), and no ordered table was ever
+# scored against a fixture at all. Five of the eleven decodes we have bytes
+# for were being exercised.
+#
+# Discovering the directories instead means the next capture is covered by
+# dropping it in: `make_table_fixture.py --version 1162 --all` writes
+# tests/fixtures/vanilla1162/, and this reads it without an edit here.
+
+
+def fixture_versions() -> list[str]:
+    """Every committed fixture directory. Sorted so runs are comparable."""
+    return sorted(p.name for p in (_REPO / "tests" / "fixtures").glob("vanilla*")
+                  if p.is_dir())
+
+
+#: ``(fixture version, table)`` pairs verified to decode with the code as
+#: it stands. A pair listed here GATES: it decoded once, so a failure is a
+#: regression in this repo and nothing else.
+#:
+#: A pair absent from this set is reported and does not gate, because a
+#: fixture nobody has verified yet is exactly what a fresh capture is --
+#: and a brand-new table failing to decode is the game patch this canary
+#: exists to report, not a code regression. Add the pair once its numbers
+#: have been looked at.
+#:
+#: Verified 2026-08-18.
+_FIXTURE_GREEN = frozenset({
+    ("vanilla113", "skill"), ("vanilla113", "storeinfo"),
+    ("vanilla113", "iteminfo"), ("vanilla113", "characterinfo"),
+    ("vanilla115", "statusgroupinfo"),
+    ("vanilla116", "skill"), ("vanilla116", "storeinfo"),
+    ("vanilla116", "iteminfo"),
+    ("vanilla110", "iteminfo"),
+    ("vanilla1161", "storeinfo"),
+})
+
+#: Per-fixture pins for the ordered tables, measured 2026-08-18.
+#:
+#: These are NOT ``_ORDER_BASELINE``. That one tracks the installed build;
+#: these track a specific frozen table, and they differ -- 1.10's iteminfo
+#: reads 64 of 113 fields on the base order and bails at
+#: ``_enchantDataList``, while 1.16's reads 109 of 109 on the ``cd116``
+#: order. Both are correct for their build. Pinning them separately is
+#: what lets an old fixture be a regression test rather than noise.
+_FIXTURE_ORDER_BASELINE: dict[tuple[str, str], tuple[str, float]] = {
+    ("vanilla110", "ItemInfo"): ("base", 64),
+    ("vanilla113", "ItemInfo"): ("base", 110),
+    ("vanilla113", "CharacterInfo"): ("base", 14),
+    ("vanilla116", "ItemInfo"): ("cd116", 109),
+}
+
+
+def run_fixture_checks(
+        versions: list[str] | None = None) -> list[tuple[str, bool, str, bool]]:
+    """Every check that has committed bytes to run against.
+
+    Returns ``(label, ok, detail, gating)`` rows in fixture order. Nothing
+    is printed and nothing is skipped silently: a table with no fixture on
+    a given build simply has no row.
+
+    ``versions`` narrows the sweep to named fixture directories. The canary
+    always wants all of them; it is there so a caller checking the *shape*
+    of a row does not have to pay for a full decode to get one -- the 1.10
+    iteminfo walk alone is 25 seconds.
+    """
+    rows: list[tuple[str, bool, str, bool]] = []
+    for ver in (versions if versions is not None else fixture_versions()):
+        todo: list[tuple[str, object]] = [
+            (name, fn) for _label, name, fn in _CHECKS]
+        todo += [
+            (name, lambda b, h, _c=cls, _v=ver: check_ordered_table(
+                _c, b, h, _FIXTURE_ORDER_BASELINE.get((_v, _c))))
+            for name, cls in _ORDERED]
+        for name, fn in todo:
+            body = _fixture(ver, f"{name}.pabgb")
+            header = _fixture(ver, f"{name}.pabgh")
+            if body is None or header is None:
+                continue
+            gating = (ver, name) in _FIXTURE_GREEN
+            try:
+                ok, detail = fn(body, header)
+            except Exception as exc:            # noqa: BLE001
+                ok = False
+                detail = f"{type(exc).__name__}: {str(exc)[:70]}"
+            rows.append((f"{ver}/{name}", ok, detail, gating))
+    return rows
 
 
 def build_stamp(game_dir: Path) -> str:
@@ -307,19 +411,29 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  {name:<18} ERROR  cannot load: {str(e)[:60]}")
             problems.append(f"{name}: load failed")
             continue
-        run(name, lambda b, h, _c=cls: check_ordered_table(_c, b, h),
+        run(name,
+            lambda b, h, _c=cls: check_ordered_table(
+                _c, b, h, _ORDER_BASELINE.get(_c)),
             body, header)
 
     if args.baseline:
         print("\ncommitted fixtures (a failure here is a CODE regression, "
               "not a game patch):")
-        for ver in ("vanilla113", "vanilla115", "vanilla116"):
-            for label, name, fn in _CHECKS:
-                b = _fixture(ver, f"{name}.pabgb")
-                h = _fixture(ver, f"{name}.pabgh")
-                if b is None or h is None:
-                    continue
-                run(f"{ver}/{label}", fn, b, h)
+        unpinned = 0
+        for label, ok, detail, gating in run_fixture_checks():
+            if not gating:
+                unpinned += 1
+                mark = "NEW "
+                detail += "   [unpinned -- add to _FIXTURE_GREEN once read]"
+            else:
+                mark = "ok  " if ok else "FAIL"
+            print(f"  {label:<28} {mark}  {detail}")
+            if gating and not ok:
+                problems.append(f"{label}: {detail}")
+        if unpinned:
+            print(f"\n  {unpinned} fixture check(s) are new and did not gate. "
+                  f"A fresh capture failing here is the game patch, not a "
+                  f"code regression -- read the numbers, then pin them.")
 
     print()
     if problems:
