@@ -355,6 +355,82 @@ def test_older_layouts_lose_decisively_on_committed_fixture(
             f"longer decisive")
 
 
+@pytest.mark.skipif(
+    not (has_vanilla116("storeinfo.pabgb") and has_vanilla1161("storeinfo.pabgb")),
+    reason="vanilla116/vanilla1161 storeinfo fixtures absent")
+def test_vgap_shift_is_uniformly_at_37():
+    """GitHub #365: the CD 1.16.1 interior shrink is one point, not two.
+
+    Naive first-byte-divergence between the CD 1.16 (71-byte) and CD
+    1.16.1 (67-byte) interior lands at index 37 for 4,749 of the 6,376
+    records shared between the two builds and at 53 for the other 1,627
+    -- which is what originally made this look like two different
+    layouts needing two different ``raw_e``/``raw_g``/``raw_q``
+    mappings (see StoreLayout.raw_e_off).
+
+    It isn't. This pins the stronger claim directly: shifting at 37 --
+    keep vgap[:37], drop exactly 4 bytes, keep the rest -- reproduces
+    the CD 1.16 interior byte-exact for EVERY one of the 6,376 shared
+    records, with zero exceptions. The 1,627 that merely *look*
+    consistent with a shift at 53 too are not a second layout; they are
+    records whose vgap[37:57] is all zero in both builds, so shifting at
+    53 is also consistent for them by coincidence, never because
+    shifting at 37 is wrong for them.
+    """
+    layout116 = _BY_LABEL["CD 1.16"]
+    layout1161 = _BY_LABEL["CD 1.16.1"]
+    body116, entries116 = _committed_entries(load_vanilla116, "vanilla116")
+    body1161, entries1161 = _committed_entries(load_vanilla1161, "vanilla1161")
+
+    def _records(body, entries, layout):
+        by_store: dict[int, dict[int, StockRecord]] = {}
+        for key, (payload, end) in entries.items():
+            try:
+                recs, _s, _e = locate_stock_list(body, payload, end, key, layout)
+            except StoreListNotFound:
+                continue
+            by_store[key] = {}
+            for r in recs:
+                by_store[key].setdefault(r.body, []).append(r)
+        return by_store
+
+    stores116 = _records(body116, entries116, layout116)
+    stores1161 = _records(body1161, entries1161, layout1161)
+
+    common_stores = set(stores116) & set(stores1161)
+    assert len(common_stores) == 397
+
+    checked = 0
+    zero_window_ambiguous = 0
+    for key in common_stores:
+        pool1161 = {b: list(rs) for b, rs in stores1161[key].items()}
+        for body_id, recs116 in stores116[key].items():
+            cands = pool1161.get(body_id)
+            if not cands:
+                continue
+            for r116 in recs116:
+                if not cands:
+                    break
+                r1161 = cands.pop(0)
+                checked += 1
+                v116, v1161 = r116.vgap, r1161.vgap
+                assert v116[:37] == v1161[:37] and v116[41:] == v1161[37:], (
+                    f"store {key} body {body_id}: shift-at-37 does not "
+                    f"reproduce the CD 1.16 interior byte-exact -- a "
+                    f"real second layout, not zero-padding coincidence")
+                window = v116[37:57]
+                if v116[:53] == v1161[:53] and v116[57:] == v1161[53:]:
+                    assert not any(window), (
+                        f"store {key} body {body_id}: shift-at-53 is "
+                        f"ALSO consistent but vgap[37:57] is non-zero "
+                        f"({window.hex()}) -- this would be genuine "
+                        f"evidence of a second layout")
+                    zero_window_ambiguous += 1
+
+    assert checked == 6376
+    assert zero_window_ambiguous == 1627
+
+
 def test_parsing_an_older_shape_with_the_default_layout_refuses():
     """The #351 bug class, pinned so it cannot come back silently.
 

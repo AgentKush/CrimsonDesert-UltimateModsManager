@@ -20,11 +20,15 @@ Safety contract pinned here:
 from __future__ import annotations
 
 import json
+import struct
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import pytest
+
+from tests.fixture_loaders import has_vanilla1161 as _have_vanilla1161
+from tests.fixture_loaders import load_vanilla1161 as _load_vanilla1161
 
 _BASE = Path(__file__).resolve().parents[1] / "issue_repro" / "183"
 _BODY = _BASE / "vanilla" / "storeinfo.pabgb"
@@ -211,3 +215,72 @@ def test_unknown_store_key_yields_no_changes():
     intent.entry = "NoSuchStore_zzz"
     changes, hdr_change = build_storeinfo_changes(body, header, [intent])
     assert changes == [] and hdr_change is None
+
+
+@pytest.mark.skipif(
+    not _have_vanilla1161("storeinfo.pabgb"),
+    reason="vanilla1161 storeinfo fixture absent")
+def test_new_record_applies_on_cd1161():
+    """GitHub #365 follow-up: adding a stock record works again.
+
+    Before the raw_e_off/raw_g_off/raw_q_off fix, every ADD on this
+    layout refused outright ("the CD 1.16.1 value interior has not been
+    re-derived"). This targets the committed vanilla1161 fixture
+    directly (not the gitignored issue_repro snapshot from #183, which
+    predates this layout), adds one brand-new stock record with distinct
+    non-zero raw_e/raw_g/raw_q, and checks it comes back at exactly
+    those values -- i.e. they landed at vgap[37]/[53]/[55], not the
+    stale pre-1.16.1 vgap[41]/[57]/[59].
+    """
+    from cdumm.engine.storeinfo_native_parser import LAYOUTS, locate_stock_list
+    from cdumm.engine.storeinfo_writer import build_storeinfo_changes
+    from cdumm.semantic.parser import _parse_entry_header, parse_pabgh_index
+
+    layout = next(ly for ly in LAYOUTS if ly.label == "CD 1.16.1")
+    body = _load_vanilla1161("storeinfo.pabgb")
+    header = _load_vanilla1161("storeinfo.pabgh")
+
+    ks, offs = parse_pabgh_index(header, "storeinfo")
+    key = 1  # Store_Her_Equipment on this fixture
+    sorted_offs = sorted(offs.values()) + [len(body)]
+    entry_end = sorted_offs[sorted_offs.index(offs[key]) + 1]
+    _, ename, payload = _parse_entry_header(body, offs[key], ks)
+    vrecords, _s, _e = locate_stock_list(body, payload, entry_end, key, layout)
+
+    new_body_id = max(r.body for r in vrecords) + 1
+    new_record = {
+        "lookup_a": vrecords[0].lookup_a,
+        "raw_a": 0, "raw_b": 0, "raw_c": 0, "raw_d": 0, "raw_e": 0,
+        "order_index_113": 0xFFFFFFFF,
+        "low_price_threshold_count": 0xFFFFFFFF,
+        "flag_a": 0, "flag_b": 0, "flag_c": 0, "is_restore_item": 0,
+        "value": {
+            "payload": {"body": new_body_id},
+            "raw_e": 0xDEAD1E, "raw_g": 0xBEEF, "raw_q": new_body_id,
+        },
+    }
+    intent = _Intent(entry=ename, key=key, field="stock_data_list", op="set",
+                     new=[{"value": {"payload": {"body": r.body}}}
+                          for r in vrecords] + [new_record])
+
+    pabgb_changes, pabgh_change = build_storeinfo_changes(body, header, [intent])
+    assert pabgb_changes, "the add must not be refused"
+
+    patched = _apply(body, pabgb_changes)
+    new_header = bytes.fromhex(pabgh_change["patched"]) if pabgh_change else header
+    _, noffs = parse_pabgh_index(new_header, "storeinfo")
+    nsorted_offs = sorted(noffs.values()) + [len(patched)]
+    nentry_end = nsorted_offs[nsorted_offs.index(noffs[key]) + 1]
+    _, _, npayload = _parse_entry_header(patched, noffs[key], ks)
+    out_records, _s, _e = locate_stock_list(
+        patched, npayload, nentry_end, key, layout)
+
+    added = next(r for r in out_records if r.body == new_body_id)
+    assert struct.unpack_from(
+        "<I", added.vgap, layout.raw_e_off)[0] == 0xDEAD1E
+    assert struct.unpack_from(
+        "<H", added.vgap, layout.raw_g_off)[0] == 0xBEEF
+    assert struct.unpack_from(
+        "<I", added.vgap, layout.raw_q_off)[0] == new_body_id
+    # And nowhere near the stale pre-1.16.1 indices.
+    assert struct.unpack_from("<I", added.vgap, 41)[0] != 0xDEAD1E

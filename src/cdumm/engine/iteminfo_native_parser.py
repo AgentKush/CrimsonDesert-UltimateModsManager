@@ -2166,6 +2166,67 @@ def _write_PrefabData_CD113(w: _Writer, v: dict) -> None:
     w.u8(v["unk_flag_c"])
 
 
+def _read_PrefabData_CD116b(r: _Reader) -> dict:
+    """A later patch adds one u32 to each PrefabData element, right
+    after ``tribe_gender_list`` and before ``is_craft_material``.
+
+    On the exe fingerprinted SHA256 3416fdbf...c7 (2026-08-17 build):
+    ``cd116`` (:func:`_read_PrefabData_CD113`, no extra field) round-trips
+    only 81 of a 506-record sample; every other layout scores 0. Every
+    matched record's size grew over the committed CD 1.16 fixture by
+    EXACTLY ``4 * len(prefab_data_list)`` bytes -- 0 extra prefab
+    entries costs 0 bytes, 1 costs 4, 2 costs 8, ... 11 costs 44, with
+    no exceptions among the size buckets that aren't also explained by
+    an unrelated prefab-list edit between builds. That is a per-element
+    insertion, not a per-record one.
+
+    Placement (after tribe_gender_list, before is_craft_material) is
+    from the field VALUES, not the round-trip: reading the new u32
+    AFTER is_craft_material/unk_flag_b/unk_flag_c also round-trips
+    6,573/6,573 byte-exact (an empty/misplaced split can still
+    reproduce its own bytes), but under that placement the three u8s
+    read as the same non-boolean triple (115, 225, 197) on literally
+    every one of 12,274 prefab entries -- three ``unk_flag_*`` fields
+    that were 0 on almost every CD 1.16 record turning into one
+    constant non-zero byte triple table-wide is what a wrong split
+    looks like. Placed before them instead, the three read {0: 12205,
+    1: 69}, {0: 12184, 1: 90}, and {0: 6286, 3: 5631, 1: 353, 2: 4} --
+    back in the boolean/small-enum range the field names imply, and
+    matching the CD 1.16 fixture's own domain on entries whose byte
+    count didn't move.
+
+    The new field itself is a plain constant, 0xEAC5E173, on all
+    12,274 entries: a sentinel value (also seen elsewhere in this table
+    as the constant ``map_icon_path``), not per-item data, so it is
+    carried opaque as ``unk_prefab_hash`` rather than assigned meaning
+    it doesn't have evidence for yet.
+    """
+    return {
+        "scale": [r.f32(), r.f32(), r.f32()],
+        "prefab_names": r.carray(_Reader.u32),
+        "animation_path_list": r.carray(_Reader.u32),
+        "equip_slot_list": r.carray(_Reader.u16),
+        "tribe_gender_list": r.carray(_Reader.u32),
+        "unk_prefab_hash": r.u32(),
+        "is_craft_material": r.u8(),
+        "unk_flag_b": r.u8(),
+        "unk_flag_c": r.u8(),
+    }
+
+
+def _write_PrefabData_CD116b(w: _Writer, v: dict) -> None:
+    for f in v["scale"]:
+        w.f32(f)
+    w.carray(v["prefab_names"], _Writer.u32)
+    w.carray(v["animation_path_list"], _Writer.u32)
+    w.carray(v["equip_slot_list"], _Writer.u16)
+    w.carray(v["tribe_gender_list"], _Writer.u32)
+    w.u32(v["unk_prefab_hash"])
+    w.u8(v["is_craft_material"])
+    w.u8(v["unk_flag_b"])
+    w.u8(v["unk_flag_c"])
+
+
 def _with_cd113_prefab_tail(fields):
     """CD 1.13 relocated prefab_data_list to the end of the item record.
 
@@ -2365,6 +2426,18 @@ def _with_cd116_tail(fields, source):
 _ITEM_FIELDS_CD116 = _with_cd116_tail(
     _with_cd116(_ITEM_FIELDS_CD113_ENCHANT), _ITEM_FIELDS_CD113_ENCHANT)
 
+#: CD 1.16b: identical to CD 1.16 except each PrefabData element grew
+#: one u32 (see _read_PrefabData_CD116b). Same field list, just the
+#: prefab_data_list codec swapped -- everything ahead of the prefab
+#: tail is unaffected, so building from _ITEM_FIELDS_CD116 rather than
+#: re-deriving the whole tail keeps the two layouts from drifting apart
+#: on the fields they do share.
+_ITEM_FIELDS_CD116B = [
+    (spec[0], spec[1], _read_PrefabData_CD116b, _write_PrefabData_CD116b)
+    if spec[0] == "prefab_data_list" else spec
+    for spec in _ITEM_FIELDS_CD116
+]
+
 # (label, fields) candidates, tried in order by detect_iteminfo_layout.
 # Most specific first: the enchant variant decodes 6508/6508 on live 1.13,
 # where the plain relocated variant only manages the 3167 non-equipment
@@ -2373,11 +2446,18 @@ _ITEM_LAYOUTS = (
     ("default", None),                       # None -> _ITEM_FIELDS
     ("cd113_prefab_relocated", _ITEM_FIELDS_CD113),
     ("cd113_enchant", _ITEM_FIELDS_CD113_ENCHANT),
-    # CD 1.16. Last = most specific: detect_iteminfo_layout keeps the
-    # later layout on a tie. cd116 scores 6,581/6,581 on live 1.16 where
-    # every earlier layout scores 0, and 0 on the 1.13 fixture where
-    # cd113_enchant scores 6,508/6,508 -- so the two never compete.
+    # CD 1.16. cd116 scores 6,581/6,581 on live 1.16 where every earlier
+    # layout scores 0, and 0 on the 1.13 fixture where cd113_enchant
+    # scores 6,508/6,508 -- so the two never compete.
     ("cd116", _ITEM_FIELDS_CD116),
+    # CD 1.16b (see _read_PrefabData_CD116b). Last = most specific:
+    # detect_iteminfo_layout keeps the later layout on a tie, and cd116b
+    # can only round-trip a superset of what cd116 does (a table with no
+    # extra-sized PrefabData elements decodes identically either way).
+    # Scores 6,573/6,573 on the live table fingerprinted there where
+    # cd116 manages 1,025, and 0 on the CD 1.16 fixture where cd116
+    # scores 6,581/6,581 -- so this one never wins on an older table.
+    ("cd116b", _ITEM_FIELDS_CD116B),
 )
 
 

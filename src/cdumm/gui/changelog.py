@@ -21,6 +21,18 @@ _UNRELEASED_NOTES: list[str] = [
 
 CHANGELOG = [
     {
+        "version": "3.15.0",
+        "date": "2026-08-20",
+        "notes": [
+            "<b>Item price mods work again.</b> A game update added four bytes to part of the item table, and CDUMM could no longer read 5,548 of the game's 6,573 items. Those items fell back to a limited mode that only supports two fields, so a mod editing anything else, a price above all, was accepted when you imported it, passed every check, and then changed nothing when applied. It reported success. That is the worst way for this to fail and it is fixed.",
+            "<b>Store mods can add stock again.</b> The August 15 update moved four bytes inside each stock record. CDUMM could read and edit existing stock after the first fix, but adding a new item to a shop was still refused because the layout inside that record was not pinned down. It is now, checked against every one of the 6,376 records in the table.",
+            "<b>Mods that identify a record by number alone now import.</b> Some mods name the record they change, some give its number, and CDUMM only accepted the first. The second was rejected at import with a missing-field error, before it ever reached the part of CDUMM that has always understood numbers perfectly well.",
+            "<b>The Game Data grid says when it cannot read a table.</b> Instead of one vague note, it now tells you whether the layout accounts for every byte of every record, reads most of them, or cannot frame the records at all on your build.",
+            "Three more of the game's tables are readable, taking it to 55. Readable, not editable, as before.",
+            "Thanks to <b>Gleb Kogtev</b> for the first three fixes above, all found by chasing a single broken mod down to three separate causes rather than special-casing it, and for correcting a conclusion of mine that was wrong. Thanks to <b>AgentKush</b> for the table work and for the post-update check that caught the store break the day the patch landed, before anyone had to report it. And thanks to <b>lupo1190</b> and <b>Srimk1</b>, who reported the mod that led to all of it.",
+        ],
+    },
+    {
         "version": "3.14.0",
         "date": "2026-08-13",
         "notes": [
