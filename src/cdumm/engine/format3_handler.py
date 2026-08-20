@@ -368,8 +368,19 @@ def _parse_intents_block(
         # the apply path's _match_record_keys treats a no-condition match as
         # "all records" (all([]) is True) -- so accept it here rather than
         # rejecting the whole mod.
+        #
+        # GitHub #125 made entry-without-key valid (real v3.1 exports treat
+        # entry as the primary locator and leave key unpopulated). donr484's
+        # "Cheap Gold Bars" (targeting iteminfo.pabgb by numeric key alone,
+        # no entry) is the mirror case the fix never covered: key-without-
+        # entry is just as valid a locator -- Format3Intent already defaults
+        # a missing entry to "" (line ~429) and every apply path (storeinfo,
+        # iteminfo, ...) resolves by key first and only falls back to entry
+        # name when the key misses. So entry is required only when NEITHER
+        # a match selector NOR a key locates the record.
         required_keys = (
-            ("field",) if raw_match is not None else ("entry", "field")
+            ("field",) if raw_match is not None or "key" in raw
+            else ("entry", "field")
         )
         for required in required_keys:
             if required not in raw:

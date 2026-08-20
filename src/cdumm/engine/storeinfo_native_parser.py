@@ -150,17 +150,30 @@ class StoreLayout:
     #: 2026 patch cut it to 67 without moving anything ahead of it, which
     #: is why ``const_off`` is unchanged on that build (GitHub #365).
     vgap_size: int = VGAP_SIZE
-    #: Whether the three mapped fields INSIDE the interior (``raw_e`` at
-    #: vgap[41], ``raw_g`` at vgap[57], ``raw_q`` at vgap[59]) are known to
-    #: sit at those indices on this build.
+    #: vgap-relative offsets of the three fields the writer maps INSIDE
+    #: the opaque interior for a NEW record: raw_e (u32), raw_g (u16),
+    #: raw_q (u32). Constant at 41/57/59 from CD 1.10 through CD 1.16.
     #:
-    #: False on CD 1.16.1: the four bytes that patch removed came out of
-    #: the middle of the interior, not off its end, and at two different
-    #: points -- comparing all 6,376 shared records against CD 1.16, the
-    #: interiors first diverge at index 37 on 4,749 of them and index 53
-    #: on the other 1,627. So a single fixed mapping cannot be right for
-    #: both, and writing to the old indices would land in the wrong bytes.
-    #: Reading is unaffected: the interior is carried verbatim.
+    #: On CD 1.16.1 these move to 37/53/55. Naive first-divergence against
+    #: CD 1.16 lands at index 37 for 4,749 of the 6,376 shared records and
+    #: at 53 for the other 1,627 -- which is what first made this look
+    #: like two different removal points needing two different mappings.
+    #: It isn't: for literally all 6,376, re-derived by SHIFT (not first
+    #: difference) -- keep vgap[:37], drop 4, keep the rest -- reproduces
+    #: the CD 1.16 interior byte-exact. The 53-only-look records are not a
+    #: second layout; every one of them has vgap[37:57] == 0 in both
+    #: builds, so shifting at 53 instead is *also* consistent for them by
+    #: coincidence of zero-padding, never because shifting at 37 is wrong.
+    #: No record in the shared table ever contradicts 37. See
+    #: ``test_vgap_shift_is_uniformly_at_37`` for the check across the
+    #: committed fixtures.
+    raw_e_off: int = 41
+    raw_g_off: int = 57
+    raw_q_off: int = 59
+    #: Whether ``raw_e_off`` / ``raw_g_off`` / ``raw_q_off`` are known to
+    #: be correct for this build, i.e. safe to write a NEW record with.
+    #: Reading is unaffected by this flag either way: the interior is
+    #: always carried through verbatim for records that already exist.
     vgap_map_verified: bool = True
 
     @property
@@ -194,9 +207,15 @@ LAYOUTS: tuple[StoreLayout, ...] = (
     # 4 x record_count bytes, with zero exceptions, and this layout reads
     # 398 located + 39 provably empty = 437/437, 6378 records, 0 not-found
     # and 0 mis-round-tripped.
+    #
+    # The interior's removed 4 bytes are at vgap offset 37 for every one
+    # of those records (see raw_e_off's docstring and
+    # test_vgap_shift_is_uniformly_at_37) -- so raw_e/raw_g/raw_q move to
+    # 37/53/55 and adding a stock record is safe again.
     StoreLayout("CD 1.16.1", 44, 34, 38, 41, 42,
                 low_price_threshold=True, vgap_size=67,
-                vgap_map_verified=False),
+                raw_e_off=37, raw_g_off=53, raw_q_off=55,
+                vgap_map_verified=True),
     # CD 1.16: a u32 (_lowPriceThresholdCount) inserted after raw_c pushed
     # everything below it down another four bytes. Under the CD 1.13 shape
     # the live 1.16 table decodes ZERO entries; under this one, 397 of 432
