@@ -157,6 +157,32 @@ def has_vanilla1161(name: str) -> bool:
         return False
 
 
+def load_vanilla_b24773079(name: str) -> bytes:
+    """Load a vanilla extract from Steam buildid 24773079.
+
+    Added for iteminfo's PrefabData: each ``prefab_data_list`` element
+    grew one u32 (``unk_prefab_hash``, see
+    ``_read_PrefabData_CD116b``), which the committed vanilla116 fixture
+    predates. Named by Steam buildid rather than a game version string
+    because, unlike storeinfo's CD 1.16.1 fixture, no in-app version
+    label for this build was available to cite with the same
+    confidence -- the buildid is machine-checkable instead of guessed.
+    """
+    packed = _TESTS_DIR / "fixtures" / "vanilla_b24773079" / (name + ".zlib")
+    if packed.exists():
+        return zlib.decompress(packed.read_bytes())
+    raise FileNotFoundError(
+        f"vanilla_b24773079 fixture {name!r} absent from tests/fixtures")
+
+
+def has_vanilla_b24773079(name: str) -> bool:
+    try:
+        load_vanilla_b24773079(name)
+        return True
+    except FileNotFoundError:
+        return False
+
+
 def has_vanilla115(name: str) -> bool:
     try:
         load_vanilla115(name)
