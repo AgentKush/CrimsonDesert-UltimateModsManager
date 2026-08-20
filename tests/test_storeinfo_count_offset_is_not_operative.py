@@ -71,9 +71,18 @@ def _operative_shape(lay: StoreLayout) -> tuple:
     width, because that is what CD 1.16.1 changed while leaving every
     offset alone.
 
-    ``vgap_map_verified`` is deliberately excluded: it gates *writing* a
-    new record (the three fields mapped inside the interior are at stale
-    indices on 1.16.1), and does not change how a byte is read.
+    Four fields are deliberately excluded, all for the same reason: they
+    describe *writing* a new record, not reading an existing one.
+    ``raw_e_off`` / ``raw_g_off`` / ``raw_q_off`` are where the writer
+    maps three values inside the opaque interior, and
+    ``vgap_map_verified`` says whether those indices are trusted on this
+    build. An existing record's interior is carried through verbatim, so
+    none of the four changes how a byte is read -- and two layouts that
+    differed only there would still be indistinguishable from the file,
+    which is what this key exists to detect.
+
+    (#367 moved 1.16.1's three to 37/53/55 and flipped the flag to True,
+    which is precisely a write-side change with no read-side effect.)
     """
     return (lay.order_index_off is None,
             lay.is_restore_off is None,

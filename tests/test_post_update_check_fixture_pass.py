@@ -72,16 +72,32 @@ def test_the_pinned_set_is_all_reachable(rows):
 def test_the_pass_covers_more_than_the_three_hand_written_checks(rows):
     """Coverage is the point of the change; assert it rather than trust it.
 
-    Ten decodes across five builds, from three named checks plus the
+    Fifteen decodes across six builds, from the named checks plus the
     ordered tables that have fixtures. Pinned as a floor, not an equality:
     committing a new capture should raise this, never lower it.
     """
-    assert len(rows) >= 10
-    assert len({label.split("/", 1)[0] for label, *_ in rows}) >= 5
+    assert len(rows) >= 15
+    assert len({label.split("/", 1)[0] for label, *_ in rows}) >= 6
     tables = {label.split("/", 1)[1] for label, *_ in rows}
     assert {"skill", "storeinfo", "statusgroupinfo"} < tables, (
         "the ordered tables are meant to be scored against fixtures too -- "
         "that was the other half of the hardcoded-list bug")
+
+
+def test_iteminfo_gets_a_row_from_each_of_its_two_readers(rows):
+    """One table, two readers, two rows -- and they must stay separable.
+
+    The row label is what keeps them apart, because both load the same
+    two files. If they ever collapse to one label, one silently overwrites
+    the other in _FIXTURE_GREEN and half the coverage disappears without
+    a failure anywhere.
+    """
+    labels = [label for label, *_ in rows]
+    assert len(labels) == len(set(labels)), (
+        f"duplicate row labels: {sorted({x for x in labels if labels.count(x) > 1})}")
+    for ver in ("vanilla116", "vanilla_b24773079"):
+        assert f"{ver}/iteminfo" in labels
+        assert f"{ver}/iteminfo-native" in labels
 
 
 def test_an_unpinned_fixture_reports_without_gating(monkeypatch):
