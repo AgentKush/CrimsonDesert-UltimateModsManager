@@ -149,6 +149,81 @@ def check_storeinfo(body: bytes, header: bytes) -> tuple[bool, str]:
     return ok, msg
 
 
+#: Ceiling on the share of iteminfo records carried opaque before this
+#: reads as breakage rather than the known tail.
+#:
+#: Some opacity is correct and permanent: the 1.12 "*_Flag_I" guild flags
+#: have never had a schema (#219), which is 64 records on vanilla110 and
+#: 14 on vanilla116. Measured across every committed table the figure is
+#: 1.0% or lower. The Steam buildid 24773079 break was 84.4%. Nothing
+#: observed sits between, so the ceiling is set well clear of the tail and
+#: nowhere near the failure -- the count is printed either way, so a rise
+#: inside the band is still visible without failing a healthy build.
+_ITEM_OPAQUE_CEILING = 0.05
+
+
+def check_iteminfo_native(body: bytes, header: bytes) -> tuple[bool, str]:
+    """``detect_iteminfo_layout`` -> ``parse_iteminfo_from_bytes`` -- the
+    reader the item editor writes through.
+
+    This is NOT the same check as the ``iteminfo`` row further down, and
+    the difference is the point. That one scores the ``select_order``
+    schema walk; this one drives the native parser. Two readers over one
+    table, and they fail independently.
+
+    On the Steam buildid 24773079 table the ordered walk reports a
+    perfectly healthy "median 109/109 fields, 88% of 6,573 records
+    complete" -- while this path carried 5,548 of those 6,573 items
+    (84.4%) opaque, because PrefabData had gained a trailing u32 (#369).
+    An opaque record can only be patched for ``is_blocked`` and
+    ``max_stack_count``, so a mod editing prices imported cleanly,
+    validated cleanly, and then silently dropped its edits at apply time.
+    The canary said iteminfo was fine throughout.
+
+    So the gate is the opaque share, under ``_ITEM_OPAQUE_CEILING``, plus
+    a byte-exact round-trip. Round-trip alone cannot catch this: the
+    opaque fallback carries bytes verbatim, which is precisely what keeps
+    the round-trip green while the table stops being editable.
+
+    Note what is deliberately NOT gated. ``detect_iteminfo_layout``
+    returning ``None`` means *use the default schema*, not *detection
+    failed* -- on the CD 1.10 table that is the correct answer, and it
+    decodes 6,419 of 6,483 records with the other 64 being the #219 guild
+    flags. The genuine "nothing round-trips" case also returns ``None``,
+    but it is not told apart by the return value; it is told apart by
+    every record going opaque, which the ceiling already catches.
+    """
+    from cdumm.engine.iteminfo_native_parser import (
+        detect_iteminfo_layout,
+        parse_iteminfo_from_bytes,
+        serialize_iteminfo,
+    )
+    from cdumm.semantic.parser import parse_pabgh_index
+    _ks, offs = parse_pabgh_index(header, "iteminfo")
+    starts = sorted(offs.values())
+    fields = detect_iteminfo_layout(body, starts)
+    items = parse_iteminfo_from_bytes(body, starts, fields=fields)
+    total = len(items)
+    opaque = sum(1 for it in items if it.get("_opaque_record"))
+    frac = opaque / max(total, 1)
+    rt = serialize_iteminfo(items, fields=fields) == body
+
+    ok = rt and frac <= _ITEM_OPAQUE_CEILING
+    shape = ("default schema" if fields is None
+             else f"{len(fields)}-field variant")
+    detail = (f"{total - opaque}/{total} items decoded structurally, "
+              f"{opaque} opaque ({frac:.1%}), "
+              f"round-trip {'byte-exact' if rt else 'MISMATCH'}, "
+              f"layout {shape}")
+    if frac > _ITEM_OPAQUE_CEILING:
+        detail += (f"   [over the {_ITEM_OPAQUE_CEILING:.0%} ceiling: a "
+                   f"patch has almost certainly moved a field inside a "
+                   f"list element. Opaque items accept only is_blocked "
+                   f"and max_stack_count, so price/stat mods will apply "
+                   f"as no-ops]")
+    return ok, detail
+
+
 def check_statusgroupinfo(body: bytes, header: bytes) -> tuple[bool, str]:
     from cdumm.engine.statusgroupinfo_writer import parse_record_full
     from cdumm.semantic.parser import parse_pabgh_index
@@ -245,6 +320,11 @@ _CHECKS = [
     ("skill", "skill", check_skill),
     ("storeinfo", "storeinfo", check_storeinfo),
     ("statusgroupinfo", "statusgroupinfo", check_statusgroupinfo),
+    # Label deliberately differs from the loader name: iteminfo is read by
+    # two independent readers and both get a row. "iteminfo-native" is the
+    # editor's parser; the plain "iteminfo" row below is the select_order
+    # schema walk. #369 broke one while the other stayed green.
+    ("iteminfo-native", "iteminfo", check_iteminfo_native),
 ]
 
 #: Tables with a verified field order, checked through select_order.
@@ -288,15 +368,24 @@ def fixture_versions() -> list[str]:
 #: exists to report, not a code regression. Add the pair once its numbers
 #: have been looked at.
 #:
-#: Verified 2026-08-18.
+#: The second element is the ROW LABEL, not the loader name -- iteminfo
+#: contributes both "iteminfo-native" and "iteminfo" off one pair of files.
+#:
+#: Verified 2026-08-20, after merging upstream v3.15.0 (the fixes for
+#: Steam buildid 24773079).
 _FIXTURE_GREEN = frozenset({
+    ("vanilla110", "iteminfo"), ("vanilla110", "iteminfo-native"),
     ("vanilla113", "skill"), ("vanilla113", "storeinfo"),
-    ("vanilla113", "iteminfo"), ("vanilla113", "characterinfo"),
+    ("vanilla113", "iteminfo"), ("vanilla113", "iteminfo-native"),
+    ("vanilla113", "characterinfo"),
     ("vanilla115", "statusgroupinfo"),
     ("vanilla116", "skill"), ("vanilla116", "storeinfo"),
-    ("vanilla116", "iteminfo"),
-    ("vanilla110", "iteminfo"),
+    ("vanilla116", "iteminfo"), ("vanilla116", "iteminfo-native"),
     ("vanilla1161", "storeinfo"),
+    # The 17 Aug build. iteminfo-native reads 6,573/6,573 with the cd116b
+    # layout #369 added; under cd116 it was 5,548 opaque (84.4%).
+    ("vanilla_b24773079", "iteminfo"),
+    ("vanilla_b24773079", "iteminfo-native"),
 })
 
 #: Per-fixture pins for the ordered tables, measured 2026-08-18.
@@ -312,6 +401,11 @@ _FIXTURE_ORDER_BASELINE: dict[tuple[str, str], tuple[str, float]] = {
     ("vanilla113", "ItemInfo"): ("base", 110),
     ("vanilla113", "CharacterInfo"): ("base", 14),
     ("vanilla116", "ItemInfo"): ("cd116", 109),
+    # Identical to vanilla116's, and that is the finding, not a typo: the
+    # ordered walk did not move at all across the patch that made 84% of
+    # this same table opaque to the native parser. See
+    # check_iteminfo_native.
+    ("vanilla_b24773079", "ItemInfo"): ("cd116", 109),
 }
 
 
@@ -330,24 +424,27 @@ def run_fixture_checks(
     """
     rows: list[tuple[str, bool, str, bool]] = []
     for ver in (versions if versions is not None else fixture_versions()):
-        todo: list[tuple[str, object]] = [
-            (name, fn) for _label, name, fn in _CHECKS]
+        # (row label, loader name, fn). The two are not the same thing:
+        # iteminfo is read by two different readers, so it contributes two
+        # rows off one pair of files, and the label is what keeps them
+        # apart in _FIXTURE_GREEN.
+        todo: list[tuple[str, str, object]] = list(_CHECKS)
         todo += [
-            (name, lambda b, h, _c=cls, _v=ver: check_ordered_table(
+            (name, name, lambda b, h, _c=cls, _v=ver: check_ordered_table(
                 _c, b, h, _FIXTURE_ORDER_BASELINE.get((_v, _c))))
             for name, cls in _ORDERED]
-        for name, fn in todo:
+        for label, name, fn in todo:
             body = _fixture(ver, f"{name}.pabgb")
             header = _fixture(ver, f"{name}.pabgh")
             if body is None or header is None:
                 continue
-            gating = (ver, name) in _FIXTURE_GREEN
+            gating = (ver, label) in _FIXTURE_GREEN
             try:
                 ok, detail = fn(body, header)
             except Exception as exc:            # noqa: BLE001
                 ok = False
                 detail = f"{type(exc).__name__}: {str(exc)[:70]}"
-            rows.append((f"{ver}/{name}", ok, detail, gating))
+            rows.append((f"{ver}/{label}", ok, detail, gating))
     return rows
 
 
@@ -427,7 +524,7 @@ def main(argv: list[str] | None = None) -> int:
                 detail += "   [unpinned -- add to _FIXTURE_GREEN once read]"
             else:
                 mark = "ok  " if ok else "FAIL"
-            print(f"  {label:<28} {mark}  {detail}")
+            print(f"  {label:<34} {mark}  {detail}")
             if gating and not ok:
                 problems.append(f"{label}: {detail}")
         if unpinned:

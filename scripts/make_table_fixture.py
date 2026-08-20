@@ -140,7 +140,13 @@ def main() -> int:
                          f"post-update canary gates on but that have never "
                          f"been frozen")
     ap.add_argument("--version", required=True,
-                    help="fixture version label, e.g. 1162 -> vanilla1162/")
+                    help="fixture label; the directory is vanilla<label>/. "
+                         "Use the Steam buildid with a leading underscore "
+                         "and b when you have it — _b24773079 -> "
+                         "vanilla_b24773079/, which is what upstream "
+                         "committed for the 17 Aug patch. A buildid names "
+                         "the exact bytes; a marketing version number does "
+                         "not.")
     ap.add_argument("--force", action="store_true",
                     help="overwrite an existing fixture")
     ap.add_argument("--keep-going", action="store_true",
