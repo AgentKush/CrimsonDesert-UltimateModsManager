@@ -21,6 +21,14 @@ _UNRELEASED_NOTES: list[str] = [
 
 CHANGELOG = [
     {
+        "version": "3.15.1",
+        "date": "2026-08-24",
+        "notes": [
+            "<b>Store mods no longer apply only part of their edits.</b> When a mod changed an item a store already sold, CDUMM discarded the mod's values for that item and wrote the vanilla ones back, silently. On one mod's shop this dropped 5 of 41 edits while the other 36 went through, so the mod looked like it was working. Changing an item already on sale now works the same as adding a new one.",
+            "Thanks to <b>Gleb Kogtev</b> for finding and fixing this.",
+        ],
+    },
+    {
         "version": "3.15.0",
         "date": "2026-08-20",
         "notes": [
