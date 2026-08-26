@@ -2273,6 +2273,18 @@ def _next_paz_directory(game_dir: Path, db=None) -> str:
             existing.add(int(d.name))
     existing |= _assigned_dirs
 
+    # Dir numbers claimed by the live/vanilla PAPGT even with no dir on
+    # disk: Crimson Desert 2.0 ships placeholder entries 0036-0040
+    # (optional language-pack slots). A standalone mod remapped onto one
+    # of those numbers inherits the placeholder's is_optional flags at
+    # PAPGT rebuild and the game never mounts it (GitHub #383).
+    from cdumm.archive.papgt_manager import reserved_papgt_dir_numbers
+    try:
+        vanilla_root = get_cdmods_root(None, game_dir) / "vanilla"
+    except Exception:
+        vanilla_root = None
+    existing |= reserved_papgt_dir_numbers(game_dir, vanilla_root)
+
     if db is not None:
         try:
             rows = db.connection.execute(
