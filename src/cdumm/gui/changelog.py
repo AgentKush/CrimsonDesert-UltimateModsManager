@@ -21,6 +21,19 @@ _UNRELEASED_NOTES: list[str] = [
 
 CHANGELOG = [
     {
+        "version": "3.16.0",
+        "date": "2026-08-26",
+        "notes": [
+            "<b>Item mods work again on the 26 August game update (2.0).</b> The update changed the item table's layout and CDUMM could not read a single one of its 6,810 records, so every item mod -- stack sizes, prices, durability, gear stats -- was accepted, validated, and then applied nothing. The new layout is decoded, checked byte-for-byte against every record, and mods apply again.",
+            "<b>Reset and Rescan work on 2.0.</b> Both were permanently refused with \"game files appear to be modded\" on a completely clean install, because a version check was pinned to the old game's file count. The check now reads the file's own structure instead of assuming a count.",
+            "<b>Disabling all your mods now actually removes them from the game.</b> Turning every mod off and hitting Apply used to report \"nothing to do\" while the game kept loading the old mod data from disk -- which after a game update is exactly the state that crashes the game at launch. The leftover data is now cleaned up properly.",
+            "<b>Apply no longer sits at 100% looking hung.</b> The verification step after Apply was re-checking every part of the game install every single time; it now only re-checks what actually changed.",
+            "<b>\"Check for Mod Updates\" tells you what it actually checked.</b> Mods imported from a manually downloaded archive have no NexusMods link and cannot be checked -- but the summary still said \"All mods are up to date!\", even when not one mod was checkable. It now says how many mods were checked and how many could not be, and warns instead of celebrating when the answer is none.",
+            "Also: apply no longer logs a scary error on game versions whose item layout is unknown, and the Game Data grid reads the 2.0 item table at full depth again.",
+            "Thanks to <b>Gleb Kogtev</b> for four of these fixes, and to <b>CoryFT</b>, <b>vizionblind</b>, <b>DikiDR</b> and <b>delakula123</b> on Nexus, whose reports shaped this release.",
+        ],
+    },
+    {
         "version": "3.15.1",
         "date": "2026-08-24",
         "notes": [
