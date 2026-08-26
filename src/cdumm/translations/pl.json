@@ -980,5 +980,7 @@
   "activity.msg_removed_stale_appdata": "Usunięto nieaktualne AppData ({size_mb} MB)",
   "stats.outdated": "Nieaktualne",
   "mod_list.click_to_update": "Kliknij, aby zaktualizować",
-  "tooltip.update_available_with_version": "Aktualizacja dostępna. Zainstalowane: {version}. Kliknij, aby zaktualizować."
+  "tooltip.update_available_with_version": "Aktualizacja dostępna. Zainstalowane: {version}. Kliknij, aby zaktualizować.",
+  "settings.nexus_none_linked": "Żaden z Twoich {count} modów nie jest powiązany ze stroną NexusMods, więc żadnego nie można sprawdzić. Mody zaimportowane z ręcznie pobranego archiwum nie mają łącza Nexus; zaimportuj je ponownie przez pobranie z Nexusa albo dodaj łącze na karcie moda.",
+  "settings.nexus_up_to_date_partial": "{checked} powiązanych modów jest aktualnych. {unlinked} modów bez łącza NexusMods nie udało się sprawdzić."
 }

@@ -77,6 +77,7 @@ def test_translation_keys_exist_in_english():
     en = _en()
     assert "settings.nexus_none_linked" in en
     assert "settings.nexus_up_to_date_partial" in en
-    # tr() falls back to English for other languages, so en.json alone
-    # is sufficient for correctness; other locales pick it up later.
     assert "{count}" in en["settings.nexus_none_linked"]
+    # All 15 locales carry the keys too -- test_i18n_key_parity enforces
+    # it repo-wide, and its CI failure on this branch's first push is
+    # what corrected the "en-only is fine via fallback" assumption.

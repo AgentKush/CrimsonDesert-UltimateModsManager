@@ -1016,5 +1016,7 @@
   "preset.customize": "Personalizar…",
   "stats.outdated": "Desatualizado",
   "mod_list.click_to_update": "Clique para atualizar",
-  "tooltip.update_available_with_version": "Atualização disponível. Instalado: {version}. Clique para atualizar."
+  "tooltip.update_available_with_version": "Atualização disponível. Instalado: {version}. Clique para atualizar.",
+  "settings.nexus_none_linked": "Nenhum dos seus {count} mods está vinculado a uma página do NexusMods, então nenhum pode ser verificado. Mods importados de um arquivo baixado manualmente não têm link do Nexus; reimporte-os pelo download do Nexus ou adicione o link no cartão do mod.",
+  "settings.nexus_up_to_date_partial": "{checked} mod(s) vinculados estão atualizados. {unlinked} mod(s) sem link do NexusMods não puderam ser verificados."
 }

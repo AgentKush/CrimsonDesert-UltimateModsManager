@@ -980,5 +980,7 @@
   "activity.msg_removed_stale_appdata": "已移除過期 AppData ({size_mb} MB)",
   "stats.outdated": "已過時",
   "mod_list.click_to_update": "點擊更新",
-  "tooltip.update_available_with_version": "有可用更新。已安裝: {version}。點擊更新。"
+  "tooltip.update_available_with_version": "有可用更新。已安裝: {version}。點擊更新。",
+  "settings.nexus_none_linked": "你的 {count} 個 Mod 都未連結 NexusMods 頁面，因此無法檢查任何更新。從手動下載的壓縮檔匯入的 Mod 沒有 Nexus 連結；請透過 Nexus 下載重新匯入，或在 Mod 卡片上補上連結。",
+  "settings.nexus_up_to_date_partial": "{checked} 個已連結的 Mod 皆為最新。{unlinked} 個 Mod 沒有 NexusMods 連結，無法檢查。"
 }
