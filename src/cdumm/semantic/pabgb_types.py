@@ -499,6 +499,9 @@ TAGGED_VARIANT_DEFS: dict[str, dict] = {
             14: "",
             16: "",
             17: "",
+            # CD 2.0 (buildid 24934353) renumbered the sentinel again:
+            # 18 on 6,806 of the live table's 6,810 records. GitHub #377.
+            18: "",
         },
     },
     # SealableItemInfo (crimson-rs structs.rs lines 411-487) — read order:
