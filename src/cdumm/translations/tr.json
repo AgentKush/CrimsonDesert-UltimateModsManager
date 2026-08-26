@@ -980,5 +980,7 @@
   "activity.msg_removed_stale_appdata": "Eski AppData silindi ({size_mb} MB)",
   "stats.outdated": "Güncel Değil",
   "mod_list.click_to_update": "Güncellemek için tıkla",
-  "tooltip.update_available_with_version": "Güncelleme mevcut. Yüklü: {version}. Güncellemek için tıkla."
+  "tooltip.update_available_with_version": "Güncelleme mevcut. Yüklü: {version}. Güncellemek için tıkla.",
+  "settings.nexus_none_linked": "{count} modunuzdan hiçbiri bir NexusMods sayfasına bağlı değil, bu yüzden hiçbiri denetlenemiyor. Elle indirilen arşivden içe aktarılan modların Nexus bağlantısı yoktur; Nexus indirmesiyle yeniden içe aktarın veya mod kartından bağlantı ekleyin.",
+  "settings.nexus_up_to_date_partial": "Bağlı {checked} mod güncel. NexusMods bağlantısı olmayan {unlinked} mod denetlenemedi."
 }
