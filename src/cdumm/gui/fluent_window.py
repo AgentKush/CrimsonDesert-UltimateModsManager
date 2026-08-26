@@ -1811,6 +1811,17 @@ class CdummWindow(FluentWindow):
 
     def _deferred_startup(self) -> None:
         """Run after window is visible. Heavy checks happen here."""
+        # Sweep leftover import-extraction folders (GitHub #371: crashed
+        # or force-killed imports leave the extracted archive under
+        # CDMods/_import_staging/ and users accumulated 25+ GB). Safe
+        # here: the single-instance .gui_lock is held, so no import is
+        # in flight.
+        if self._game_dir:
+            try:
+                from cdumm.engine.import_handler import cleanup_import_staging
+                cleanup_import_staging(self._game_dir)
+            except Exception as e:
+                logger.warning("Import-staging cleanup failed (non-fatal): %s", e)
         # Retroactive configurable-mod scan: covers imports that predate the
         # configurable-detection logic. Cheap for mods whose source_path is
         # already a directory; rescues old ZIP-backed entries by extracting
