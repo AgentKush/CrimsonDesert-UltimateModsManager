@@ -264,7 +264,14 @@ _ORDER_BASELINE: dict[str, tuple[str, float]] = {
     "ItemInfo": ("cd116", 109),
     "CharacterInfo": ("base", 14),
     "RegionInfo": ("base", 21),
-    "StageInfo": ("base", 25),
+    # Was 25. The 26 Aug 2026 patch (b24934353) moved something in the
+    # never-fully-modelled region: the stall shifted from _playCondition
+    # to _closeCondition and the median slipped one field. Investigated
+    # under GitHub #377 -- StageInfo has never reached a usable depth
+    # (0% of records complete either way), is not editable, and no mod
+    # targets it, so this is a modelling-gap shift rather than a
+    # capability loss. Re-pinned so the canary guards the NEXT drop.
+    "StageInfo": ("base", 24),
     "VehicleInfo": ("base", 20),
     "FieldInfo": ("base", 19),
     # Was 2. #362's derived layouts took it to 3/3 on 100% of 35 records,

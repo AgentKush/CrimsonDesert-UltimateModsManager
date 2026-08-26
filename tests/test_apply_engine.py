@@ -149,6 +149,51 @@ def test_apply_no_enabled_mods(tmp_path: Path) -> None:
     db.close()
 
 
+def test_apply_disabling_every_json_mod_does_not_bail_with_stale_overlay(
+        tmp_path: Path) -> None:
+    """Report 2026-08-26: disabling every json_source mod at once
+    ("No mod changes to apply or revert") left the PREVIOUS overlay
+    mounted forever. _get_files_to_revert only tracks mod_type='paz'
+    deltas, so it's blind to json_source mods -- with every mod disabled
+    and none of them 'paz', file_deltas/revert_files/has_enabled_json
+    were all empty and Apply bailed before reaching orphan-cleanup.
+
+    A CDUMM-managed overlay dir (marked with _cdumm_overlay.marker) left
+    on disk from a prior apply must NOT hit that bail -- there's real
+    cleanup work to do even with nothing to apply or revert.
+    """
+    game_dir, vanilla_dir, db = _setup_apply_test(tmp_path)
+
+    # A disabled json_source mod. json_source mods never write a
+    # mod_deltas row (their overlay is built fresh at mount time), so
+    # _get_files_to_revert's JOIN against mod_deltas can't see it
+    # regardless of mod_type.
+    db.connection.execute(
+        "INSERT INTO mods (name, mod_type, enabled, json_source, priority) "
+        "VALUES ('JsonMod', 'paz', 0, 'C:/fake/JsonMod.json', 1)"
+    )
+    db.connection.commit()
+
+    # Stale overlay from when that mod was still enabled.
+    overlay_dir = game_dir / "0038"
+    overlay_dir.mkdir()
+    (overlay_dir / "_cdumm_overlay.marker").write_bytes(b"cdumm")
+
+    worker = ApplyWorker(game_dir, vanilla_dir, db.db_path)
+    errors = []
+    finished = []
+    worker.error_occurred.connect(lambda e: errors.append(e))
+    worker.finished.connect(lambda: finished.append(True))
+    worker.run()
+
+    assert errors == [], f"Apply must not bail with a stale overlay present: {errors}"
+    assert len(finished) == 1
+    assert not overlay_dir.exists(), (
+        "reaching orphan-cleanup must actually remove the stale overlay, "
+        "not just avoid the early bail")
+    db.close()
+
+
 def test_revert_no_backups(tmp_path: Path) -> None:
     game_dir = tmp_path / "game"
     game_dir.mkdir()

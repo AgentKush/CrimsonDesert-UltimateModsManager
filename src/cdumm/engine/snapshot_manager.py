@@ -477,15 +477,37 @@ class SnapshotWorker(QObject):
                     problems.append(
                         f"Mod directory {d.name}/ exists ({len(files)} files)")
 
-        # 2. Check PAPGT for mod entries (vanilla has 33 entries, ~577 bytes)
+        # 2. Check PAPGT structural integrity. This used to be a raw
+        # entry-count threshold ("vanilla has 33 entries"), which
+        # false-positived the instant a content update legitimately grew
+        # the table (2.0: 39 entries on a clean install, confirmed
+        # empirically) and permanently blocked Reset/Rescan for every
+        # user on the new version. That threshold never added real
+        # detection power in the first place: papgt_manager.rebuild only
+        # ever adds a PAPGT entry for a directory that has real content
+        # on disk (see its is_vanilla_dir/pamt_on_disk gate), so "a mod
+        # added entries" and "a mod directory exists on disk" are the
+        # same fact -- check #1 above already catches that precisely and
+        # version-independently, no assumed count needed.
+        #
+        # What's left to check here is PAPGT's own structural validity,
+        # which a count threshold was never a sound tool for anyway (a
+        # single corrupted byte can undershoot just as easily as
+        # overshoot). Verify the declared entry table plus the
+        # string-table-size field actually fit inside the file; if
+        # entry_count is corrupt, this arithmetic runs past the file's
+        # real length regardless of what game version produced it.
         game_papgt = self._game_dir / "meta" / "0.papgt"
         if game_papgt.exists():
             papgt_data = game_papgt.read_bytes()
             if len(papgt_data) >= 12:
                 entry_count = papgt_data[8]
-                if entry_count > 35:  # vanilla has 33 entries
+                entry_start = 12
+                str_table_len_off = entry_start + entry_count * 12
+                if str_table_len_off + 4 > len(papgt_data):
                     problems.append(
-                        f"PAPGT has {entry_count} entries (vanilla has ~33)")
+                        f"PAPGT is corrupt: {entry_count} entries "
+                        f"don't fit in a {len(papgt_data)}-byte file")
 
         # 3. Check if CDMods/vanilla backup exists (means mods were applied before).
         # If backups have different sizes from game files, the backups are

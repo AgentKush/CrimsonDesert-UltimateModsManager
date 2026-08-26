@@ -980,5 +980,7 @@
   "activity.msg_removed_stale_appdata": "Удалены устаревшие AppData ({size_mb} МБ)",
   "stats.outdated": "Устаревшие",
   "mod_list.click_to_update": "Нажмите для обновления",
-  "tooltip.update_available_with_version": "Доступно обновление. Установлено: {version}. Нажмите для обновления."
+  "tooltip.update_available_with_version": "Доступно обновление. Установлено: {version}. Нажмите для обновления.",
+  "settings.nexus_none_linked": "Ни один из ваших {count} модов не привязан к странице NexusMods, поэтому проверить нечего. У модов, импортированных из скачанного вручную архива, нет ссылки на Nexus; импортируйте их заново через загрузку с Nexus или добавьте ссылку в карточке мода.",
+  "settings.nexus_up_to_date_partial": "{checked} привязанных мода(ов) актуальны. {unlinked} мод(ов) без ссылки на NexusMods проверить не удалось."
 }

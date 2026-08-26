@@ -326,6 +326,8 @@ def _iteminfo_layout_roots(body: bytes, header: bytes) -> frozenset | None:
         if not off:
             return None
         fields = detect_iteminfo_layout(body, sorted(off.values()))
+        if not fields:
+            return None
         return frozenset(f[0] for f in fields)
     except Exception:  # noqa: BLE001 - never break apply over a guard
         logger.exception("iteminfo: could not resolve the layout's fields")
