@@ -195,6 +195,48 @@ def import_staging_dir(game_dir: Path, config: "Config | None" = None):
                 staging, e)
 
 
+def cleanup_import_staging(game_dir: Path,
+                           config: "Config | None" = None) -> int:
+    """Delete leftover extraction folders under CDMods/_import_staging/.
+
+    Each import extracts into a fresh <uuid> subfolder there and removes
+    it when done — but a crash or force-kill mid-import leaves the
+    extracted archive behind, and repeated experimenting accumulates
+    tens of GB (GitHub #371, SyDant: +25 GB). Nothing ever reads a
+    staging folder after its import ends, and the GUI holds the
+    single-instance .gui_lock when this runs at startup, so no import
+    can be in flight.
+
+    Returns the number of bytes freed (0 when there was nothing).
+    """
+    try:
+        base = get_cdmods_root(config, game_dir) / "_import_staging"
+    except Exception:
+        return 0
+    if not base.is_dir():
+        return 0
+    freed = 0
+    for child in base.iterdir():
+        try:
+            if child.is_dir():
+                size = sum(f.stat().st_size for f in child.rglob("*")
+                           if f.is_file())
+            else:
+                size = child.stat().st_size
+            if child.is_dir():
+                shutil.rmtree(child, ignore_errors=True)
+            else:
+                child.unlink(missing_ok=True)
+            if not child.exists():
+                freed += size
+        except OSError as e:
+            logger.debug("cleanup_import_staging: skipping %s: %s", child, e)
+    if freed:
+        logger.info("cleanup_import_staging: freed %.1f MB from %s",
+                    freed / 1048576, base)
+    return freed
+
+
 def _validate_modified_pamt(modified_bytes: bytes, rel_path: str) -> None:
     """Parse ``modified_bytes`` as a PAMT to validate it before import.
 
