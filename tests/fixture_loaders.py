@@ -182,6 +182,31 @@ def has_vanilla_b24773079(name: str) -> bool:
     except FileNotFoundError:
         return False
 
+def load_vanilla_b24934353(name: str) -> bytes:
+    """Load a CD 2.0 (buildid 24934353, 26 Aug 2026) vanilla extract.
+
+    Added for iteminfo (GitHub #377): 2.0 inserted a u16 pair before
+    ``repair_data_list`` and renumbered the SubItem None tag 17 -> 18,
+    so every pre-2.0 layout decodes 0 of its 6,810 records. Committing
+    the bytes is what lets CI hold the cd20 layout to exact tiling, and
+    lets the next drift be diffed against a known-good build the way
+    this one was diffed against b24773079.
+    """
+    packed = _TESTS_DIR / "fixtures" / "vanilla_b24934353" / (name + ".zlib")
+    if packed.exists():
+        return zlib.decompress(packed.read_bytes())
+    raise FileNotFoundError(
+        f"vanilla_b24934353 fixture {name!r} absent from tests/fixtures")
+
+
+def has_vanilla_b24934353(name: str) -> bool:
+    try:
+        load_vanilla_b24934353(name)
+        return True
+    except FileNotFoundError:
+        return False
+
+
 
 def has_vanilla115(name: str) -> bool:
     try:

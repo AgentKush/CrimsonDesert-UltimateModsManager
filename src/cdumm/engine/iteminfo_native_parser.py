@@ -1752,6 +1752,50 @@ def _write_DropDefaultData_CD113(w: _Writer, v: dict) -> None:
     w.u8(v["use_socket"])
 
 
+# ── CD 2.0 (buildid 24934353, 26 Aug 2026): SubItem None tag 17 -> 18 ────
+# The 2.0 update renumbered the SubItem None sentinel: every record that
+# carried tag 17 on b24773079 carries tag 18 on 2.0 (6,569 of 6,573
+# shared records; the other 4 use tag 0, populated, and are unchanged).
+# 17 and 18 never co-occur in either build -- 18 does not exist in
+# pre-2.0 data and 17 does not exist in 2.0 data -- so keeping BOTH in
+# the None set would also parse; the set here matches only what 2.0
+# actually ships so a future reuse of 17 as a populated tag fails
+# loudly (exact tiling) instead of silently mis-parsing. GitHub #377.
+_SUBITEM_NONE_TAGS_CD20 = (14, 18)
+
+
+def _read_SubItem_CD20(r: _Reader) -> dict:
+    type_id = r.u8()
+    value = None if type_id in _SUBITEM_NONE_TAGS_CD20 else r.u32()
+    return {"type_id": type_id, "value": value}
+
+
+def _write_SubItem_CD20(w: _Writer, v: dict) -> None:
+    w.u8(v["type_id"])
+    if v["type_id"] not in _SUBITEM_NONE_TAGS_CD20:
+        w.u32(v["value"])
+
+
+def _read_DropDefaultData_CD20(r: _Reader) -> dict:
+    return {
+        "drop_enchant_level": r.u16(),
+        "socket_item_list": r.carray(_Reader.u32),
+        "add_socket_material_item_list": r.carray(_read_SocketMaterialItem),
+        "default_sub_item": _read_SubItem_CD20(r),
+        "socket_valid_count": r.u8(),
+        "use_socket": r.u8(),
+    }
+
+
+def _write_DropDefaultData_CD20(w: _Writer, v: dict) -> None:
+    w.u16(v["drop_enchant_level"])
+    w.carray(v["socket_item_list"], _Writer.u32)
+    w.carray(v["add_socket_material_item_list"], _write_SocketMaterialItem)
+    _write_SubItem_CD20(w, v["default_sub_item"])
+    w.u8(v["socket_valid_count"])
+    w.u8(v["use_socket"])
+
+
 def _read_EnchantData_CD113(r: _Reader) -> dict:
     """Pre-1.13 EnchantData plus the u32 CD 1.12 added to it."""
     v = _read_EnchantData(r)
@@ -2438,6 +2482,34 @@ _ITEM_FIELDS_CD116B = [
     for spec in _ITEM_FIELDS_CD116
 ]
 
+_ITEM_FIELDS_CD20 = []
+for _spec in _ITEM_FIELDS_CD116B:
+    if _spec[0] == "drop_default_data":
+        # 2.0 renumbered the SubItem None tag inside this struct
+        # (17 -> 18); everything else in it is unchanged.
+        _ITEM_FIELDS_CD20.append(
+            ("drop_default_data", "struct",
+             _read_DropDefaultData_CD20, _write_DropDefaultData_CD20))
+    elif _spec[0] == "repair_data_list":
+        # 2.0 inserted 4 bytes immediately before repair_data_list.
+        # Derived, not assumed: on the 4 records whose default_sub_item
+        # is populated (tag 0, so the sentinel renumber cannot confound
+        # the walk), every field position matches b24773079 byte-for-
+        # byte up to this boundary, and the new build carries exactly
+        # `00 00 ff ff` here before an otherwise identical tail.
+        # Read as two u16s because the table-wide value domain is a
+        # u16 pair, not one u32. Measured on all 6,810 live records:
+        # the first is a flag-like {0: 6055, 0xFFFF: 755}; the second
+        # is 0xFFFF on 6,688 with real small values on the rest
+        # (20 x77, 100 x25, 50 x11, 15, 30, ...) -- the same
+        # sentinel-plus-seconds shape as respawn_time_seconds. As one
+        # u32 the common value would be the nonsensical 0xFFFF0000.
+        _ITEM_FIELDS_CD20.append(("unk_pre_repair_20_a", "u16"))
+        _ITEM_FIELDS_CD20.append(("unk_pre_repair_20_b", "u16"))
+        _ITEM_FIELDS_CD20.append(_spec)
+    else:
+        _ITEM_FIELDS_CD20.append(_spec)
+
 # (label, fields) candidates, tried in order by detect_iteminfo_layout.
 # Most specific first: the enchant variant decodes 6508/6508 on live 1.13,
 # where the plain relocated variant only manages the 3167 non-equipment
@@ -2458,6 +2530,11 @@ _ITEM_LAYOUTS = (
     # cd116 manages 1,025, and 0 on the CD 1.16 fixture where cd116
     # scores 6,581/6,581 -- so this one never wins on an older table.
     ("cd116b", _ITEM_FIELDS_CD116B),
+    # CD 2.0 (buildid 24934353). Last = newest/most specific. Scores
+    # 6,810/6,810 on the live 2.0 table where cd116b scores 0, and 0 on
+    # the b24773079 fixture where cd116b scores 6,573/6,573 -- the two
+    # never compete. GitHub #377.
+    ("cd20", _ITEM_FIELDS_CD20),
 )
 
 
