@@ -5078,6 +5078,17 @@ class ApplyWorker(QObject):
                 num = int(d)
                 if num > max_num:
                     max_num = num
+        # Never collide with dir numbers the live or vanilla PAPGT
+        # already claims. Crimson Desert 2.0 ships placeholder entries
+        # 0036-0040 (optional language-pack slots with NO dir on disk);
+        # squatting one hands the overlay the placeholder's
+        # is_optional=1 flags and the game silently never mounts it
+        # (GitHub #383). Both indexes are scanned because a pre-fix
+        # apply may have stripped the placeholders from the live one.
+        from cdumm.archive.papgt_manager import reserved_papgt_dir_numbers
+        for num in reserved_papgt_dir_numbers(self._game_dir, self._vanilla_dir):
+            if num > max_num:
+                max_num = num
         overlay_num = max_num + 1
         return f"{overlay_num:04d}"
 
