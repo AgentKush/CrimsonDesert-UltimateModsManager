@@ -61,6 +61,59 @@ def encode_papgt_entry_flags(
     )
 
 
+def read_papgt_entries(path: Path) -> "list[tuple[str, int, int]] | None":
+    """Parse a PAPGT file into ``[(dir_name, flags, pamt_hash), ...]``.
+
+    Returns ``None`` when the file is missing or malformed — callers use
+    this for *advisory* data (vanilla entry names, reserved dir numbers)
+    and must degrade gracefully rather than crash mid-apply.
+    """
+    try:
+        data = path.read_bytes()
+        if len(data) < 12:
+            return None
+        entry_start = 12
+        entry_count = _find_entry_count(bytearray(data), entry_start)
+        string_table_start = entry_start + entry_count * ENTRY_SIZE + 4
+        out: list[tuple[str, int, int]] = []
+        for i in range(entry_count):
+            pos = entry_start + i * ENTRY_SIZE
+            flags, name_offset, pamt_hash = struct.unpack_from("<III", data, pos)
+            name = _read_string(bytearray(data), string_table_start, name_offset)
+            if name:
+                out.append((name, flags, pamt_hash))
+        return out
+    except (OSError, ValueError, struct.error):
+        return None
+
+
+def reserved_papgt_dir_numbers(game_dir: Path,
+                               vanilla_dir: "Path | None" = None) -> "set[int]":
+    """Numeric dir names claimed by the live and vanilla PAPGT indexes.
+
+    Crimson Desert 2.0 (build 24934353) ships five PLACEHOLDER entries
+    0036-0040 in vanilla meta/0.papgt — optional language-pack slots
+    (is_optional=1, single-bit lang_type) whose directories do not exist
+    on disk for most installs. Any dir number CDUMM allocates for an
+    overlay or standalone mod must not collide with these reserved
+    names, or the game applies the placeholder's optional/language
+    gating to the mod content and silently never mounts it (GitHub
+    #383, EnefFlow).
+    """
+    reserved: set[int] = set()
+    for papgt in (game_dir / "meta" / "0.papgt",
+                  (vanilla_dir / "meta" / "0.papgt") if vanilla_dir else None):
+        if papgt is None:
+            continue
+        entries = read_papgt_entries(papgt)
+        if not entries:
+            continue
+        for name, _flags, _h in entries:
+            if name.isdigit() and len(name) == 4:
+                reserved.add(int(name))
+    return reserved
+
+
 class PapgtManager:
     """Manages PAPGT rebuild from scratch."""
 
@@ -147,6 +200,21 @@ class PapgtManager:
         #   boot). Treat them as already gone so the new PAPGT never
         #   references them.
         excluded = exclude_dirs or set()
+
+        # Vanilla entry set from the pristine snapshot PAPGT. Crimson
+        # Desert 2.0 (build 24934353) ships PLACEHOLDER entries 0036-0040
+        # — optional language-pack slots with no directory on disk — so
+        # "digit < 36" is no longer a valid vanilla test (GitHub #383,
+        # EnefFlow: the old test stripped 4 vanilla entries and let the
+        # overlay squat slot 0037, inheriting is_optional=1 flags the
+        # game uses to skip it). The snapshot is re-taken on every game
+        # update (fingerprint-stamped), so its PAPGT tracks the current
+        # build's entry set.
+        vanilla_entries: dict[str, tuple[int, int]] = {}
+        if self._vanilla_papgt is not None:
+            for _n, _f, _h in (read_papgt_entries(self._vanilla_papgt) or []):
+                vanilla_entries[_n] = (_f, _h)
+
         live_entries: list[tuple[str, int, int]] = []
         removed = []
         for dir_name, flags, pamt_hash in parsed_entries:
@@ -155,17 +223,48 @@ class PapgtManager:
                 continue
             pamt_on_disk = (self._game_dir / dir_name / "0.pamt").exists()
             in_modified = modified_pamts and dir_name in modified_pamts
-            # Keep vanilla entries (dirs < 0036) even if not on disk — they may
-            # be placeholders for DLC/patches. Only remove mod-added dirs (0036+).
-            is_vanilla_dir = True
-            try:
-                is_vanilla_dir = int(dir_name) < 36
-            except (ValueError, TypeError):
-                pass
-            if pamt_on_disk or in_modified or is_vanilla_dir:
+            # Keep vanilla entries even if not on disk — 2.0 ships
+            # placeholder entries whose dirs don't exist. Fall back to
+            # the historical "digit < 36" floor when no snapshot PAPGT
+            # is available. Only remove mod-added dirs.
+            is_vanilla_dir = dir_name in vanilla_entries
+            if not is_vanilla_dir:
+                try:
+                    is_vanilla_dir = int(dir_name) < 36
+                except (ValueError, TypeError):
+                    is_vanilla_dir = True
+            # DANGLING entries (no dir on disk at all) are also kept,
+            # independent of the snapshot: CDUMM's own removals always
+            # go through ``exclude_dirs`` while the dir still exists
+            # (deletion is deferred to post-commit), so a dangling entry
+            # cannot be a CDUMM leftover — it is a vanilla placeholder
+            # (2.0 ships five: 0036-0040) or an external tool's entry.
+            # This keeps placeholders alive even when the vanilla
+            # snapshot is stale (snapshot only refreshes on apply, so a
+            # pre-2.0 snapshot is common right after the game update).
+            dir_missing = not (self._game_dir / dir_name).exists()
+            if pamt_on_disk or in_modified or is_vanilla_dir or dir_missing:
                 live_entries.append((dir_name, flags, pamt_hash))
             else:
                 removed.append(dir_name)
+
+        # Restore vanilla entries missing from the base (heals installs
+        # mutilated by the pre-fix "digit < 36" removal, and installs
+        # whose squatted placeholder dir is being deleted this apply —
+        # the ENTRY must survive with its vanilla flags+hash even though
+        # the dir goes away, because that is exactly how vanilla ships).
+        restored: list[str] = []
+        _present = {e[0] for e in live_entries}
+        for _n, (_f, _h) in vanilla_entries.items():
+            if _n in _present:
+                continue
+            if modified_pamts and _n in modified_pamts:
+                continue  # actively rewritten this apply; added below
+            live_entries.append((_n, _f, _h))
+            restored.append(_n)
+        if restored:
+            logger.info("PAPGT: restored %d vanilla entries: %s",
+                        len(restored), restored)
 
         if removed:
             logger.info("PAPGT: removing %d stale entries: %s", len(removed), removed)
@@ -251,12 +350,24 @@ class PapgtManager:
         # directories may be stale (mod built on older game version).
         # Always verify existing hashes against the actual PAMT on disk.
         existing_hashes = {d: h for d, _, h in parsed_entries}
+        # Restored vanilla entries aren't in the parsed base — carry
+        # their vanilla hashes so the hash loop below doesn't zero them.
+        for _n in restored:
+            existing_hashes.setdefault(_n, vanilla_entries[_n][1])
         modified_set = set(modified_pamts.keys()) if modified_pamts else set()
         is_mod_base = mod_papgt is not None
         rehashed = 0
 
+        restored_set = set(restored)
         for dir_name, flags in all_entries:
-            if dir_name in modified_set:
+            if dir_name in restored_set and dir_name in excluded:
+                # Vanilla entry restored over a squatted placeholder dir
+                # that is deleted right after commit — its pamt is still
+                # on disk NOW, so the rehash branches below would pin the
+                # hash of a file about to vanish. Use the vanilla hash:
+                # that is the exact end-state the game ships.
+                pamt_hash = vanilla_entries[dir_name][1]
+            elif dir_name in modified_set:
                 # PAMT was modified — recompute hash from new data
                 pamt_data = modified_pamts[dir_name]
                 pamt_hash = compute_pamt_hash(pamt_data) if len(pamt_data) >= 12 else 0
