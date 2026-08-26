@@ -21,6 +21,14 @@ _UNRELEASED_NOTES: list[str] = [
 
 CHANGELOG = [
     {
+        "version": "3.16.1",
+        "date": "2026-08-26",
+        "notes": [
+            "<b>Mods actually load in game on 2.0.</b> The 26 August game update added five reserved slots (0036-0040) to the game's archive index -- placeholder entries for optional language packs, with no folder on disk. CDUMM mistook four of them for leftover mod folders and deleted them from the index on every Apply, and parked its own mod overlay in the fifth, which the game treats as a not-installed language pack and silently never loads. So Apply reported success and verified clean, while not a single mod had any effect in game. Mod overlays now go in slot 0041 and up, the reserved slots are left alone, and an index damaged by an earlier version repairs itself on the next Apply -- no Steam file verify needed.",
+            "Thanks to <b>EnefFlow</b>, whose bug report contained the one log line that gave this away.",
+        ],
+    },
+    {
         "version": "3.16.0",
         "date": "2026-08-26",
         "notes": [
