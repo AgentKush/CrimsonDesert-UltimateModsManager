@@ -72,12 +72,14 @@ def test_the_pinned_set_is_all_reachable(rows):
 def test_the_pass_covers_more_than_the_three_hand_written_checks(rows):
     """Coverage is the point of the change; assert it rather than trust it.
 
-    Fifteen decodes across six builds, from the named checks plus the
+    Seventeen decodes across seven builds, from the named checks plus the
     ordered tables that have fixtures. Pinned as a floor, not an equality:
-    committing a new capture should raise this, never lower it.
+    committing a new capture should raise this, never lower it -- the CD
+    2.0 capture (b24934353) raised it from fifteen with no code change,
+    which is the discovery design working.
     """
-    assert len(rows) >= 15
-    assert len({label.split("/", 1)[0] for label, *_ in rows}) >= 6
+    assert len(rows) >= 17
+    assert len({label.split("/", 1)[0] for label, *_ in rows}) >= 7
     tables = {label.split("/", 1)[1] for label, *_ in rows}
     assert {"skill", "storeinfo", "statusgroupinfo"} < tables, (
         "the ordered tables are meant to be scored against fixtures too -- "
@@ -95,7 +97,7 @@ def test_iteminfo_gets_a_row_from_each_of_its_two_readers(rows):
     labels = [label for label, *_ in rows]
     assert len(labels) == len(set(labels)), (
         f"duplicate row labels: {sorted({x for x in labels if labels.count(x) > 1})}")
-    for ver in ("vanilla116", "vanilla_b24773079"):
+    for ver in ("vanilla116", "vanilla_b24773079", "vanilla_b24934353"):
         assert f"{ver}/iteminfo" in labels
         assert f"{ver}/iteminfo-native" in labels
 

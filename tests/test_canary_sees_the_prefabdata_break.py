@@ -120,6 +120,40 @@ def test_the_native_check_would_have_caught_it(monkeypatch):
     assert "no-ops" in detail, "the message has to say what the user loses"
 
 
+def test_cd20_is_the_other_failure_shape_and_both_rows_fire():
+    """The contrast that stops this test file from over-claiming.
+
+    Two real breaks are now committed, and they are not the same shape:
+
+      b24773079 (#369)  84.4% opaque   ordered walk 109/109, BLIND
+      b24934353 (#377)  100%   opaque  ordered walk 10/113, fires
+
+    The native row exists because of the first. It would have caught the
+    second too, and with a more actionable message -- but the second is
+    not evidence for it, because the pre-existing ordered row caught that
+    one on its own. Pinning both keeps the justification honest: the
+    native row earns its place on PARTIAL breaks, where a table stays
+    structurally plausible while most of it stops being editable.
+
+    If a future build ever makes the CD 2.0 table decode under a pre-2.0
+    layout, or makes the ordered walk stay green on it, this test is the
+    thing that notices.
+    """
+    d = _FIX.parent / "vanilla_b24934353"
+    body = zlib.decompress((d / "iteminfo.pabgb.zlib").read_bytes())
+    header = zlib.decompress((d / "iteminfo.pabgh.zlib").read_bytes())
+
+    stale = tuple(e for e in P._ITEM_LAYOUTS if e[0] != "cd20")
+    _keys, offs = parse_pabgh_index(header, "iteminfo")
+    starts = sorted(offs.values())
+    for label, fields in stale:
+        items = P.parse_iteminfo_from_bytes(body, starts, fields=fields)
+        opaque = sum(1 for it in items if it.get("_opaque_record"))
+        assert opaque == len(items) == 6_810, (
+            f"{label} decoded {len(items) - opaque} records on the CD 2.0 "
+            f"table; every pre-2.0 layout must carry it wholly opaque")
+
+
 def test_a_byte_exact_round_trip_is_not_enough_on_its_own(monkeypatch):
     """Why the check cannot just assert round-trip.
 

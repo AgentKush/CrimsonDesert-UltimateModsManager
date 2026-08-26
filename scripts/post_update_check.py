@@ -249,7 +249,7 @@ def check_statusgroupinfo(body: bytes, header: bytes) -> tuple[bool, str]:
 #:
 #: Pinned deliberately, because the useful question is "did this CHANGE",
 #: not "is this complete". Several of these tables have never walked to the
-#: end -- StageInfo reaches 25 of 81 fields and RegionInfo stalls on
+#: end -- StageInfo reaches 24 of 81 fields and RegionInfo stalls on
 #: ``_gimmickAliasPointerList`` -- and those are open modelling gaps, not
 #: patch damage. An absolute threshold would print three failures on a
 #: perfectly healthy build, and a check that is red every run is one people
@@ -378,8 +378,8 @@ def fixture_versions() -> list[str]:
 #: The second element is the ROW LABEL, not the loader name -- iteminfo
 #: contributes both "iteminfo-native" and "iteminfo" off one pair of files.
 #:
-#: Verified 2026-08-20, after merging upstream v3.15.0 (the fixes for
-#: Steam buildid 24773079).
+#: Verified 2026-08-26, after merging upstream v3.16.0 (which carries
+#: #377's CD 2.0 layout and the b24934353 capture).
 _FIXTURE_GREEN = frozenset({
     ("vanilla110", "iteminfo"), ("vanilla110", "iteminfo-native"),
     ("vanilla113", "skill"), ("vanilla113", "storeinfo"),
@@ -393,9 +393,13 @@ _FIXTURE_GREEN = frozenset({
     # layout #369 added; under cd116 it was 5,548 opaque (84.4%).
     ("vanilla_b24773079", "iteminfo"),
     ("vanilla_b24773079", "iteminfo-native"),
+    # CD 2.0, the 26 Aug build. Every pre-2.0 layout carries this table
+    # 100% opaque; cd20 (#377) reads 6,810/6,810.
+    ("vanilla_b24934353", "iteminfo"),
+    ("vanilla_b24934353", "iteminfo-native"),
 })
 
-#: Per-fixture pins for the ordered tables, measured 2026-08-18.
+#: Per-fixture pins for the ordered tables, measured 2026-08-26.
 #:
 #: These are NOT ``_ORDER_BASELINE``. That one tracks the installed build;
 #: these track a specific frozen table, and they differ -- 1.10's iteminfo
@@ -413,6 +417,12 @@ _FIXTURE_ORDER_BASELINE: dict[tuple[str, str], tuple[str, float]] = {
     # this same table opaque to the native parser. See
     # check_iteminfo_native.
     ("vanilla_b24773079", "ItemInfo"): ("cd116", 109),
+    # Also unchanged at 109 -- but unlike b24773079 this is NOT a case of
+    # the ordered walk being blind. Driven with a pre-2.0 layout it drops
+    # to median 10/113 and stalls on _itemUseInfoList, so it does fire on
+    # this break. The 109 here is what it reads once #377's cd20 layout is
+    # present, i.e. the healthy figure.
+    ("vanilla_b24934353", "ItemInfo"): ("cd116", 109),
 }
 
 
