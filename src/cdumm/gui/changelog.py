@@ -21,6 +21,13 @@ _UNRELEASED_NOTES: list[str] = [
 
 CHANGELOG = [
     {
+        "version": "3.16.2",
+        "date": "2026-08-26",
+        "notes": [
+            "<b>CDUMM now cleans up after interrupted imports.</b> Every mod import extracts its archive into a working folder and deletes it when done -- but if an import crashed or CDUMM was force-closed mid-way, the extracted files stayed behind forever. One user found 25 GB of these leftovers. CDUMM now sweeps them out automatically at startup. Reported by <b>SyDant</b>.",
+        ],
+    },
+    {
         "version": "3.16.1",
         "date": "2026-08-26",
         "notes": [
