@@ -661,7 +661,8 @@ class WelcomeWizard(QDialog):
 
     def _on_browse(self):
         from cdumm.i18n import tr as _tr
-        folder = QFileDialog.getExistingDirectory(self, _tr("setup.browse_dialog_title"))
+        from cdumm.gui.file_dialogs import pick_directory
+        folder = pick_directory(self, _tr("setup.browse_dialog_title"))
         if folder:
             self._path_edit.setText(folder)
 

@@ -989,7 +989,8 @@ class SettingsPage(SmoothScrollArea):
     def _on_game_dir_browse(self) -> None:
         """Open a folder browser to change the game directory."""
         current = str(self._game_dir) if self._game_dir else ""
-        new_dir = QFileDialog.getExistingDirectory(
+        from cdumm.gui.file_dialogs import pick_directory
+        new_dir = pick_directory(
             self.window(), tr("settings.game_dir_picker_title"), current)
         if not new_dir:
             return
@@ -1610,11 +1611,9 @@ class SettingsPage(SmoothScrollArea):
         except Exception:
             start_dir = ""
 
-        picked = QFileDialog.getExistingDirectory(
-            self,
-            tr("settings.cdmods_path_picker_title"),
-            start_dir,
-        )
+        from cdumm.gui.file_dialogs import pick_directory
+        picked = pick_directory(
+            self, tr("settings.cdmods_path_picker_title"), start_dir)
         if not picked:
             return  # user cancelled
         picked_path = Path(picked)
