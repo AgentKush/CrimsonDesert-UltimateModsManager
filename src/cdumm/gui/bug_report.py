@@ -563,11 +563,24 @@ def generate_bug_report(db: Database | None, game_dir: Path | None,
     body.append(f"Python: {_short_python_version()} "
                  f"({'frozen' if frozen else 'source'})")
     admin_state = _is_admin_windows()
+    from cdumm.platform import is_wine
+    under_wine = is_wine()
+    if under_wine:
+        body.append("Environment: Wine/Proton prefix")
     body.append(f"Running as administrator: {admin_state}")
     if admin_state == "yes":
-        tldr_flags.append(
-            "CDUMM is running as administrator — drag-drop and mod install "
-            "will often fail. Close CDUMM and relaunch WITHOUT 'Run as admin'.")
+        if under_wine:
+            # Wine prefixes always report the user as administrator and
+            # UAC does not exist there, so the drag-drop/install failure
+            # modes the flag warns about don't apply (GitHub #388,
+            # NonDScript's report led with this false alarm).
+            body.append(
+                "  (Wine artifact — the prefix user always reports as "
+                "admin; not a real problem)")
+        else:
+            tldr_flags.append(
+                "CDUMM is running as administrator — drag-drop and mod install "
+                "will often fail. Close CDUMM and relaunch WITHOUT 'Run as admin'.")
     elif admin_state == "no":
         tldr_ok.append("Not running as admin (good)")
 
