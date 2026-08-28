@@ -213,3 +213,42 @@ def subprocess_no_window_kwargs() -> dict:
         return {}
     flag = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
     return {"creationflags": flag}
+
+
+_IS_WINE: bool | None = None
+
+
+def is_wine() -> bool:
+    """True when this Windows build is running under Wine / Proton.
+
+    Canonical check: Wine's ntdll exports ``wine_get_version``; real
+    Windows never does. Cached after the first call. Always False on
+    native macOS / Linux builds — those don't run inside a prefix.
+
+    Used to widen game auto-detection to the host filesystem (Proton
+    always maps ``Z:`` to ``/``, so the host's Steam libraries are
+    reachable as ``Z:/home/...``) and to swap file pickers to the Qt
+    dialog that can show hidden dot-folders (GitHub #386, NonDScript
+    on Bazzite: the native Wine picker cannot enter ``.local``).
+    """
+    global _IS_WINE
+    if _IS_WINE is None:
+        detected = False
+        if IS_WINDOWS:
+            try:
+                import ctypes
+                kernel32 = ctypes.windll.kernel32
+                kernel32.GetProcAddress.restype = ctypes.c_void_p
+                kernel32.GetProcAddress.argtypes = (
+                    ctypes.c_void_p, ctypes.c_char_p)
+                kernel32.GetModuleHandleW.restype = ctypes.c_void_p
+                ntdll = kernel32.GetModuleHandleW("ntdll.dll")
+                if ntdll:
+                    detected = bool(
+                        kernel32.GetProcAddress(ntdll, b"wine_get_version"))
+            except Exception as e:  # noqa: BLE001 - ctypes failure = not Wine
+                logger.debug("is_wine detection failed: %s", e)
+        _IS_WINE = detected
+        if detected:
+            logger.info("Running under Wine/Proton (wine_get_version present)")
+    return _IS_WINE
