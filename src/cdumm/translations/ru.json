@@ -662,6 +662,7 @@
   "tools.rescan.requested": "Пересканирование запрошено",
   "tools.rescan.requested_desc": "Обновление снимка запущено. Это может занять некоторое время в зависимости от размера файлов игры.",
   "tools.rescan.enable_hint": "Установите флажок выше для включения",
+  "tools.rescan.complete": "Пересканирование завершено!",
   "tools.stat.never": "Никогда",
   "tools.error": "Ошибка: {detail}",
   "tools.progress.checking": "Проверка {name}...",

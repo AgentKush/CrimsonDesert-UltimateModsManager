@@ -657,6 +657,7 @@
   "tools.rescan.requested": "已請求重新掃描",
   "tools.rescan.requested_desc": "快照更新已啟動。根據遊戲檔案大小，可能需要一點時間。",
   "tools.rescan.enable_hint": "勾選上方核取方塊以啟用",
+  "tools.rescan.complete": "重新掃描完成！",
   "tools.stat.never": "Never",
   "tools.error": "Error: {detail}",
   "tools.progress.checking": "Checking {name}...",

@@ -774,6 +774,7 @@
   "tools.rescan.requested": "Rescan Requested",
   "tools.rescan.requested_desc": "The snapshot refresh has been initiated. This may take a moment depending on game file sizes.",
   "tools.rescan.enable_hint": "Check the box above to enable",
+  "tools.rescan.complete": "Rescan complete!",
   "tools.stat.never": "Never",
   "tools.error": "Error: {detail}",
   "tools.progress.checking": "Checking {name}...",

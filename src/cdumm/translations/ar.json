@@ -657,6 +657,7 @@
   "tools.rescan.requested": "تم طلب إعادة المسح",
   "tools.rescan.requested_desc": "تم بدء تحديث اللقطة. قد يستغرق هذا لحظة حسب حجم ملفات اللعبة.",
   "tools.rescan.enable_hint": "حدد المربع أعلاه للتفعيل",
+  "tools.rescan.complete": "اكتملت إعادة المسح!",
   "tools.stat.never": "Never",
   "tools.error": "Error: {detail}",
   "tools.progress.checking": "Checking {name}...",
