@@ -170,6 +170,7 @@ def _compute_post_apply_issues(game_dir, conn) -> list[tuple[str, str]]:
     import struct
 
     from cdumm.archive.hashlittle import compute_pamt_hash, compute_papgt_hash
+    from cdumm.archive.papgt_manager import decode_papgt_entry_flags
     from cdumm.engine.cdmods_paths import get_cdmods_root
 
     issues: list[tuple[str, str]] = []
@@ -192,6 +193,7 @@ def _compute_post_apply_issues(game_dir, conn) -> list[tuple[str, str]]:
             str_table_off = entry_start + entry_count * 12 + 4
             for i in range(entry_count):
                 pos = entry_start + i * 12
+                flags = struct.unpack_from('<I', data, pos)[0]
                 name_off = struct.unpack_from('<I', data, pos + 4)[0]
                 papgt_hash = struct.unpack_from('<I', data, pos + 8)[0]
                 abs_off = str_table_off + name_off
@@ -204,7 +206,17 @@ def _compute_post_apply_issues(game_dir, conn) -> list[tuple[str, str]]:
                         if actual != papgt_hash:
                             issues.append(("PAPGT", f"{dir_name} PAMT hash mismatch"))
                     elif not (game_dir / dir_name).exists():
-                        # Skip vanilla placeholder dirs (< 0036) that don't exist on disk
+                        # GitHub #390: CD 2.0 ships reserved/optional
+                        # placeholder entries (0036-0040 -- language-pack
+                        # slots) that have no folder on disk by design.
+                        # The entry's own is_optional flag is the real,
+                        # version-independent signal for that -- not a
+                        # hardcoded dir-number range, which is exactly
+                        # what false-positived here after #384 taught
+                        # the rest of CDUMM to leave these entries alone.
+                        is_optional, _lang_type, _zero = decode_papgt_entry_flags(flags)
+                        if is_optional:
+                            continue
                         _owners = dir_owners.get(dir_name)
                         _src = ", ".join(sorted(_owners)) if _owners else "PAPGT"
                         try:

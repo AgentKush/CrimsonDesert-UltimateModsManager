@@ -19,8 +19,12 @@ from pathlib import Path
 from cdumm.archive.hashlittle import compute_pamt_hash, compute_papgt_hash
 
 
-def _build_papgt(entries: list[tuple[str, int]]) -> bytes:
-    """entries: list of (dir_name, pamt_hash)."""
+def _build_papgt(entries: list[tuple[str, int]],
+                  flags_by_dir: dict[str, int] | None = None) -> bytes:
+    """entries: list of (dir_name, pamt_hash). ``flags_by_dir`` overrides
+    the default non-optional flags word for specific dir names (e.g.
+    ``{"0037": 0x00010001}`` for an is_optional=1 placeholder)."""
+    flags_by_dir = flags_by_dir or {}
     names = [e[0].encode("ascii") + b"\x00" for e in entries]
     string_table = b"".join(names)
     name_offsets = []
@@ -31,7 +35,8 @@ def _build_papgt(entries: list[tuple[str, int]]) -> bytes:
 
     body = bytearray()
     for (dir_name, pamt_hash), name_off in zip(entries, name_offsets):
-        body += struct.pack("<III", 0x003FFF00, name_off, pamt_hash)
+        flags = flags_by_dir.get(dir_name, 0x003FFF00)
+        body += struct.pack("<III", flags, name_off, pamt_hash)
     body += struct.pack("<I", len(string_table))
     body += string_table
 
@@ -70,6 +75,41 @@ def test_pamt_hash_mismatch_is_reported(tmp_path, db):
     game_dir = _setup_game_dir(tmp_path, corrupt=True)
     issues = _compute_post_apply_issues(game_dir, db.connection)
     assert any("PAMT hash mismatch" in detail for _src, detail in issues)
+
+
+# ── GitHub #390: CD 2.0's reserved placeholder entries ─────────────────
+
+def test_optional_placeholder_missing_dir_is_not_flagged(tmp_path, db):
+    """CD 2.0 ships reserved language-pack placeholder entries
+    (0036-0040) that legitimately have no folder on disk -- is_optional=1
+    in their own PAPGT flags is the real signal for that, confirmed
+    against the live install (all five: is_optional=1, no dir on disk).
+    Report 2026-08-28 (#390): every apply was flagging all five as
+    "Missing directory", warning the game "may crash" over nothing."""
+    from cdumm.gui.fluent_window import _compute_post_apply_issues
+
+    game_dir = tmp_path / "game"
+    (game_dir / "meta").mkdir(parents=True)
+    is_optional_flags = 0x00010001  # is_optional=1, matches a live entry
+    papgt = _build_papgt([("0037", 0)], flags_by_dir={"0037": is_optional_flags})
+    (game_dir / "meta" / "0.papgt").write_bytes(papgt)
+
+    assert _compute_post_apply_issues(game_dir, db.connection) == []
+
+
+def test_non_optional_missing_mod_dir_is_still_flagged(tmp_path, db):
+    """The original protection must survive: a real mod directory
+    (is_optional=0) that PAPGT references but that doesn't exist on
+    disk is genuine corruption, not a placeholder."""
+    from cdumm.gui.fluent_window import _compute_post_apply_issues
+
+    game_dir = tmp_path / "game"
+    (game_dir / "meta").mkdir(parents=True)
+    papgt = _build_papgt([("0037", 0)])  # default flags: is_optional=0
+    (game_dir / "meta" / "0.papgt").write_bytes(papgt)
+
+    issues = _compute_post_apply_issues(game_dir, db.connection)
+    assert any("Missing directory 0037" in detail for _src, detail in issues)
 
 
 # ── PAMT hash cache ─────────────────────────────────────────────────────
