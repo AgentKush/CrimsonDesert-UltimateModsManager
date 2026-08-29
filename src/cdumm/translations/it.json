@@ -662,6 +662,7 @@
   "tools.rescan.requested": "Riscansione richiesta",
   "tools.rescan.requested_desc": "L'aggiornamento dello snapshot è stato avviato. Potrebbe richiedere un momento a seconda della dimensione dei file di gioco.",
   "tools.rescan.enable_hint": "Seleziona la casella sopra per abilitare",
+  "tools.rescan.complete": "Riscansione completata!",
   "tools.stat.never": "Mai",
   "tools.error": "Errore: {detail}",
   "tools.progress.checking": "Verifica di {name}...",

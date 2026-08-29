@@ -657,6 +657,7 @@
   "tools.rescan.requested": "Reescaneo Solicitado",
   "tools.rescan.requested_desc": "La actualización del snapshot ha sido iniciada. Puede tardar un momento según el tamaño de los archivos del juego.",
   "tools.rescan.enable_hint": "Marca la casilla de arriba para activar",
+  "tools.rescan.complete": "¡Reescaneo completo!",
   "tools.stat.never": "Never",
   "tools.error": "Error: {detail}",
   "tools.progress.checking": "Checking {name}...",

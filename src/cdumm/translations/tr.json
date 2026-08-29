@@ -662,6 +662,7 @@
   "tools.rescan.requested": "Yeniden Tarama İstendi",
   "tools.rescan.requested_desc": "Anlık görüntü yenilemesi başlatıldı. Oyun dosya boyutlarına bağlı olarak biraz zaman alabilir.",
   "tools.rescan.enable_hint": "Etkinleştirmek için yukarıdaki kutuyu işaretleyin",
+  "tools.rescan.complete": "Yeniden tarama tamamlandı!",
   "tools.stat.never": "Hiçbir zaman",
   "tools.error": "Hata: {detail}",
   "tools.progress.checking": "{name} kontrol ediliyor...",

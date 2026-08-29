@@ -662,6 +662,7 @@
   "tools.rescan.requested": "Пересканування запитано",
   "tools.rescan.requested_desc": "Оновлення знімка розпочато. Це може зайняти деякий час залежно від розміру файлів гри.",
   "tools.rescan.enable_hint": "Поставте прапорець вище для увімкнення",
+  "tools.rescan.complete": "Пересканування завершено!",
   "tools.stat.never": "Ніколи",
   "tools.error": "Помилка: {detail}",
   "tools.progress.checking": "Перевірка {name}...",

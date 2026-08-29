@@ -662,6 +662,7 @@
   "tools.rescan.requested": "再スキャンをリクエストしました",
   "tools.rescan.requested_desc": "スナップショットの更新を開始しました。ゲームファイルのサイズによっては時間がかかる場合があります。",
   "tools.rescan.enable_hint": "上のチェックボックスをオンにしてください",
+  "tools.rescan.complete": "再スキャン完了！",
   "tools.stat.never": "なし",
   "tools.error": "エラー：{detail}",
   "tools.progress.checking": "{name} を確認中...",

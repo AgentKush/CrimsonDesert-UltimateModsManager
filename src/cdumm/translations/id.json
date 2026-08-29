@@ -662,6 +662,7 @@
   "tools.rescan.requested": "Pemindaian Ulang Diminta",
   "tools.rescan.requested_desc": "Penyegaran snapshot telah dimulai. Ini mungkin memerlukan waktu tergantung ukuran berkas game.",
   "tools.rescan.enable_hint": "Centang kotak di atas untuk mengaktifkan",
+  "tools.rescan.complete": "Pemindaian ulang selesai!",
   "tools.stat.never": "Belum Pernah",
   "tools.error": "Galat: {detail}",
   "tools.progress.checking": "Memeriksa {name}...",

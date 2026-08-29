@@ -774,6 +774,7 @@
   "tools.rescan.requested": "Scan angefordert",
   "tools.rescan.requested_desc": "Der Snapshot wird aktualisiert. Das kann je nach Dateigröße etwas dauern.",
   "tools.rescan.enable_hint": "Oben aktivieren, um fortzufahren",
+  "tools.rescan.complete": "Scan abgeschlossen!",
   "tools.stat.never": "Nie",
   "tools.error": "Fehler: {detail}",
   "tools.progress.checking": "Prüfe {name}...",

@@ -657,6 +657,7 @@
   "tools.rescan.requested": "Rebalayage Demandé",
   "tools.rescan.requested_desc": "L'actualisation du snapshot a été lancée. Cela peut prendre un moment selon la taille des fichiers du jeu.",
   "tools.rescan.enable_hint": "Cochez la case ci-dessus pour activer",
+  "tools.rescan.complete": "Rebalayage terminé !",
   "tools.stat.never": "Never",
   "tools.error": "Error: {detail}",
   "tools.progress.checking": "Checking {name}...",
