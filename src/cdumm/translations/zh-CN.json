@@ -662,6 +662,7 @@
   "tools.rescan.requested": "已请求重新扫描",
   "tools.rescan.requested_desc": "快照刷新已启动。这可能需要一些时间，具体取决于游戏文件大小。",
   "tools.rescan.enable_hint": "勾选上方复选框以启用",
+  "tools.rescan.complete": "重新扫描完成！",
   "tools.stat.never": "从未",
   "tools.error": "错误：{detail}",
   "tools.progress.checking": "正在检查 {name}...",

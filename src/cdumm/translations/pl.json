@@ -662,6 +662,7 @@
   "tools.rescan.requested": "Żądanie ponownego skanowania",
   "tools.rescan.requested_desc": "Odświeżenie migawki zostało zainicjowane. Może to chwilę potrwać w zależności od rozmiaru plików gry.",
   "tools.rescan.enable_hint": "Zaznacz pole powyżej, aby włączyć",
+  "tools.rescan.complete": "Ponowne skanowanie zakończone!",
   "tools.stat.never": "Nigdy",
   "tools.error": "Błąd: {detail}",
   "tools.progress.checking": "Sprawdzanie {name}...",
