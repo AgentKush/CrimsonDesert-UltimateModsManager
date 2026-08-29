@@ -21,6 +21,16 @@ _UNRELEASED_NOTES: list[str] = [
 
 CHANGELOG = [
     {
+        "version": "3.16.3",
+        "date": "2026-08-29",
+        "notes": [
+            "<b>No more false \"5 issues that may crash the game\" after every Apply on 2.0.</b> The post-apply check was flagging the game's five reserved language-pack slots (0036-0040) as missing folders. They are supposed to have no folder; 3.16.1 taught Apply to leave them alone but this check still used the old rule. It now reads each entry's own optional flag. Reported by <b>MaldronM</b>, fixed by <b>Gleb Kogtev</b>.",
+            "<b>Rescan no longer sits on \"Initiating rescan...\" forever.</b> The scan finished fine underneath, but the Rescan page never learned it had, so the button stayed dead and users kicked off a second scan by clicking again. Fixed by <b>Gleb Kogtev</b>.",
+            "<b>Linux / Steam Deck / Bazzite: CDUMM now finds the game when run under Proton or Wine.</b> Auto-detect only looked at Windows-side locations, and Wine's folder browser cannot enter hidden folders like .local, so there was no way to reach a Steam library under /home. CDUMM now detects it is running under Wine, scans the host's Steam libraries through the Z: drive, and uses a folder picker that shows hidden folders. Reported by <b>NonDScript</b>.",
+            "Bug reports generated under Wine no longer lead with a bogus \"running as administrator\" warning (Wine always reports that).",
+        ],
+    },
+    {
         "version": "3.16.2",
         "date": "2026-08-26",
         "notes": [
