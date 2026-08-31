@@ -718,6 +718,9 @@ def expand_format3_into_aggregated(
         "storeinfo.pabgb", "equipslotinfo.pabgb", "stringinfo.pabgb",
         "inventory.pabgb", "statusinfo.pabgb", "knowledgeinfo.pabgb",
         "interactioninfo.pabgb",
+        # npcinfo.pabgb: dye-list writer (GitHub #393) rebuilds lists
+        # that grow, so it needs the .pabgh rebuild this branch provides.
+        "npcinfo.pabgb",
         # statusgroupinfo.pabgb is whole-table because the writer walks each
         # record's list grammar itself (statusgroupinfo has no CDUMM schema).
         # The writes are length-preserving, so no .pabgh rebuild.
@@ -1565,7 +1568,8 @@ def expand_format3_into_aggregated(
             # in the entry head before the record list, and the apply
             # pipeline's cumulative shift covers offsets after a grown
             # entry, same as multichangeinfo's per-record growth.
-            if target in ("storeinfo.pabgb", "equipslotinfo.pabgb"):
+            if target in ("storeinfo.pabgb", "equipslotinfo.pabgb",
+                          "npcinfo.pabgb"):
                 if target == "equipslotinfo.pabgb":
                     from cdumm.engine.equipslotinfo_writer import (
                         EquipslotWriteRefused as StoreinfoWriteRefused,
@@ -1576,6 +1580,16 @@ def expand_format3_into_aggregated(
                         return _re.match(
                             r"^entries\[\d+\]\.etl_hashes$",
                             (getattr(i, "field", "") or "")) is not None
+                elif target == "npcinfo.pabgb":
+                    # GitHub #393: Dye Hard's dye lists. Same writer
+                    # shape as storeinfo (list rebuild + .pabgh shift).
+                    from cdumm.engine.npcinfo_writer import (
+                        SUPPORTED_FIELDS as _NPC_FIELDS,
+                        NpcinfoWriteRefused as StoreinfoWriteRefused,
+                        build_npcinfo_changes as build_storeinfo_changes,
+                    )
+                    def _writer_supported(i):
+                        return (getattr(i, "field", "") or "").strip() in _NPC_FIELDS
                 else:
                     from cdumm.engine.storeinfo_writer import (
                         StoreinfoWriteRefused, build_storeinfo_changes,

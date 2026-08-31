@@ -191,6 +191,10 @@ def load_vanilla_b24934353(name: str) -> bytes:
     the bytes is what lets CI hold the cd20 layout to exact tiling, and
     lets the next drift be diffed against a known-good build the way
     this one was diffed against b24773079.
+
+    npcinfo + storeinfo added for GitHub #393 (donr484's Dye Hard and
+    Greylight Special): the npcinfo dye-list layout and the storeinfo
+    exchange-item field are held to these bytes.
     """
     packed = _TESTS_DIR / "fixtures" / "vanilla_b24934353" / (name + ".zlib")
     if packed.exists():

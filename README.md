@@ -19,6 +19,22 @@
 
 CDUMM ships frequent updates. The complete version history — every release back to the first commit — is in **[CHANGELOG.md](CHANGELOG.md)**; the [Releases](https://github.com/faisalkindi/CrimsonDesert-UltimateModsManager/releases) page has full notes and downloads (the in-app updater shows them too). Recent highlights, newest first:
 
+### v3.16 — the 26 August game update (2.0)
+
+- **v3.16.3** — _August 29, 2026_ — **No more false "5 issues that may crash the game" after every Apply on 2.0.** The post-apply check was flagging the game's five reserved language-pack slots (0036 to 0040) as missing folders; they are supposed to have none. **Rescan no longer sits on "Initiating rescan..." forever.** **Linux / Steam Deck / Bazzite: CDUMM finds the game under Proton or Wine** and its folder picker can enter hidden folders like `.local`, so a Steam library under `/home` is reachable. (#390, #376, #386)
+- **v3.16.2** — _August 26, 2026_ — **Interrupted imports no longer leave gigabytes behind.** A crashed or force-closed import left its extracted archive under `CDMods/_import_staging/`; one user had 25 GB of leftovers. Swept automatically at startup now. (#371)
+- **v3.16.1** — _August 26, 2026_ — **Mods actually load in game on 2.0.** The update added five reserved slots (0036 to 0040) to the game's archive index with no folder on disk. CDUMM mistook four of them for leftover mod folders and deleted them from the index on every Apply, and parked its own overlay in the fifth, which the game treats as a not-installed language pack and never loads. Apply reported success and verified clean while not one mod had any effect. Overlays now go in slot 0041 and up, the reserved slots are left alone, and a damaged index repairs itself on the next Apply. (#383)
+- **v3.16.0** — _August 26, 2026_ — **Item mods work again on 2.0.** The update changed the item table's layout and CDUMM could not read one of its 6,810 records, so every item mod applied nothing. **Reset and Rescan work on 2.0** (a version check was pinned to the old file count). **Disabling all mods actually removes them** (leftover overlay data used to stay on disk and crash the game after an update). **"Check for Mod Updates" says what it checked** instead of reporting "all up to date" when nothing was checkable. Four of these fixes by Gleb Kogtev. (#377, #372 to #375, #379)
+
+### v3.15 — item prices, store stock, more tables
+
+- **v3.15.1** — _August 24, 2026_ — **Store mods no longer apply only part of their edits.** Changing an item a store already sold silently wrote the vanilla values back; fixed by Gleb Kogtev.
+- **v3.15.0** — _August 20, 2026_ — **Item price mods work again** after the August 15 update added four bytes to part of the item table (5,548 of 6,573 items had fallen into a two-field fallback that accepted price edits and wrote nothing). **Store mods can add stock again.** Mods that identify a record by number alone now import. The Game Data grid says when it cannot read a table. **55 of the game's tables are readable.** Fixes by Gleb Kogtev and AgentKush. (#365, #367)
+
+### v3.14 — 53 tables readable
+
+- **v3.14.0** — _August 13, 2026_ — **CDUMM reads 53 of the game's data tables, up from 29**, each held to the exact-tiling rule. Two v3.13 layouts that only fitted by coincidence were withdrawn. Derivation work by AgentKush. (#362, #364)
+
 ### v3.13 — 22 more of the game's tables readable
 
 - **v3.13.0** — _August 12, 2026_ — **CDUMM reads 22 more of the game's data tables, taking it from 7 to 29.** Their layouts were worked out from the game's own code and then held to a hard rule before being accepted: the walk has to account for **every byte of every record** in the table, and no other layout the format allows may fit it as well. A walk that reaches the last field with bytes left over hasn't understood the record, it's just stopped politely, so anything short of an exact fit was thrown away rather than shipped. Getting there needed a real bug fixed first: every record starts with an id, how many bytes that id takes varies by table, and CDUMM was deciding with a rule that only held for the two commonest widths — so on the rest it read the id too wide and swallowed the front of the record with it. Five tables went from **no** readable entry names to all of them (`mercenaryinfo` 21/21, `mercenarygroupinfo` 11/11, `socketinfo` 2/2, `autospawnfilterinfo` 1/1, `gamestartinfo` 1/1), and the character appearance index stopped reading its 3,508 records as nonsense. These 22 are **readable, not yet editable** — the proof pins down where each field sits, not what it means, and CDUMM won't offer you a value to change until the meaning is checked too. (#360)
@@ -99,7 +115,7 @@ Your original game files are **never modified**. Mods are applied through an ove
 | `.zip` / `.7z` / `.rar` | Archives — auto-extracted, including nested zips for multi-language packs |
 | Folders | Loose directories with PAZ/PAMT files or Crimson Browser mods |
 | `.json` (byte-patch) | Offset-based JSON mods (`offset`, `original`, `patched`) |
-| `.field.json` (field-name) | Field-name JSON mods — items, mounts, terrain, stages, regions, mount character, buffs, drop sets, and skills. Supports both singular `target` and multi-target `targets: [...]` shapes. |
+| `.field.json` (field-name) | Field-name JSON mods — items, mounts, terrain, stages, regions, mount character, buffs, drop sets, skills, stores (stock, reset timers, purchase currency), and NPC dyers (colour groups, texture sets). Supports both singular `target` and multi-target `targets: [...]` shapes. |
 | `.cdmod` (v3.6) | Crimson Desert Mod Package — imports directly, including localization patches that tweak individual strings instead of replacing a whole language file |
 | `.dds` | DDS texture mods with full PATHC index registration (BC1/BC3/BC4/BC5/BC7) |
 | `OG_*.xml` | XML full replacement mods |
@@ -120,7 +136,7 @@ Your original game files are **never modified**. Mods are applied through an ove
 - **Gear stat editor** (v3.6) — read and edit weapon / armour stats straight from the grid.
 - **Preview assets inline** — DDS textures (with a rotatable 3D view), Wwise audio (play / export to WAV), and text / structured formats, without leaving the app.
 - **Keeps up with game patches** — a version-adaptive `iteminfo` decoder re-aligns to each record-layout change, so stackable-item, price, stat and socket mods keep applying byte-exact. It picks the layout by reading the file rather than by trusting a version number, and currently carries layouts up to game 1.16.
-- **29 tables read record-by-record** (v3.13) — up from 7. Of those, 22 had their layouts recovered from the game's own code and are held to a hard rule: the walk has to account for every byte of every record in the table, or the table is left alone. Those 22 are readable but not yet editable — the grid only lets you change a field once its meaning has been cross-checked, not merely its position.
+- **55 tables read record-by-record** (v3.15) — up from 7. Most had their layouts recovered from the game's own code and are held to a hard rule: the walk has to account for every byte of every record in the table, or the table is left alone. Those 22 are readable but not yet editable — the grid only lets you change a field once its meaning has been cross-checked, not merely its position.
 
 ### NexusMods Integration (v3.2)
 - **One-click sign-in** — Login with Nexus opens your browser, you confirm, done. No API keys to copy and paste. CDUMM never sees your password.
