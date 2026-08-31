@@ -467,9 +467,21 @@ class SnapshotWorker(QObject):
         """
         problems = []
 
-        # 1. Check for mod-created directories (0036+)
+        # 1. Check for mod-created directories (0036+). Steam-delivered
+        # language packs (2.0's optional voice packs, slots 0036-0040,
+        # flagged optional in the PAPGT) are NOT mod dirs and must
+        # survive: this check feeds an rmtree in _create_snapshot, and
+        # it was deleting users' installed languages (Nexus, Dante1963).
+        # They are snapshotted like any vanilla dir instead.
+        from cdumm.archive.papgt_manager import language_pack_dirs
+        lang_dirs = language_pack_dirs(self._game_dir)
+        if lang_dirs:
+            logger.info("Pre-snapshot: keeping Steam language-pack dir(s) %s",
+                        sorted(lang_dirs))
         for d in sorted(self._game_dir.iterdir()):
             if not d.is_dir() or not d.name.isdigit() or len(d.name) != 4:
+                continue
+            if d.name in lang_dirs:
                 continue
             if int(d.name) >= 36:
                 files = list(d.iterdir())

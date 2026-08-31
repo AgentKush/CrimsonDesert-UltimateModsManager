@@ -592,9 +592,13 @@ def _run_verify(game_dir: str, db_path: str) -> None:
             else:
                 results["vanilla"].append(file_path)
 
-    # Check for extra directories (>= 0036)
+    # Check for extra directories (>= 0036). Steam language packs occupy
+    # the optional 0036-0040 slots on 2.0 and are vanilla, not extra.
+    from cdumm.archive.papgt_manager import language_pack_dirs
+    _lang_dirs = language_pack_dirs(game_dir)
     for item in sorted(game_dir.iterdir()):
-        if item.is_dir() and item.name.isdigit() and int(item.name) >= 36:
+        if (item.is_dir() and item.name.isdigit() and int(item.name) >= 36
+                and item.name not in _lang_dirs):
             results["extra_dirs"].append(item.name)
 
     db.close()
