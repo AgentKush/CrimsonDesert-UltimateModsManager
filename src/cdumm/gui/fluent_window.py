@@ -1994,6 +1994,11 @@ class CdummWindow(FluentWindow):
             if not snap:
                 return
             actual_size = papgt_path.stat().st_size
+            # Steam language packs live in the optional 0036-0040
+            # slots and are not in an older snapshot; they are not
+            # orphans and must never be deleted here (Nexus, Dante1963).
+            from cdumm.archive.papgt_manager import language_pack_dirs
+            _lang_dirs = language_pack_dirs(self._game_dir, self._vanilla_dir)
             if actual_size == snap[0]:
                 has_orphans = False
                 for d in self._game_dir.iterdir():
@@ -2002,6 +2007,7 @@ class CdummWindow(FluentWindow):
                         and d.name.isdigit()
                         and len(d.name) == 4
                         and int(d.name) >= 36
+                        and d.name not in _lang_dirs
                     ):
                         orphan_check = self._db.connection.execute(
                             "SELECT COUNT(*) FROM snapshots WHERE file_path LIKE ?",
@@ -2019,7 +2025,7 @@ class CdummWindow(FluentWindow):
             for d in sorted(self._game_dir.iterdir()):
                 if not d.is_dir() or not d.name.isdigit() or len(d.name) != 4:
                     continue
-                if int(d.name) < 36:
+                if int(d.name) < 36 or d.name in _lang_dirs:
                     continue
                 orphan_check = self._db.connection.execute(
                     "SELECT COUNT(*) FROM snapshots WHERE file_path LIKE ?",
