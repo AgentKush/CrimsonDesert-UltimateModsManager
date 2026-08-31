@@ -5,6 +5,47 @@ Summaries are condensed; each version links to its full release notes. See the
 [Releases](https://github.com/faisalkindi/CrimsonDesert-UltimateModsManager/releases) page for complete notes and downloads (the in-app updater also shows them).
 
 
+## v3.16
+
+- **[v3.16.4](https://github.com/faisalkindi/CrimsonDesert-UltimateModsManager/releases/tag/v3.16.4)** -- _2026-08-31_ -- Dye Hard applies (new NPC dye-list writer). Greylight Special fully applies (store purchase-currency field pinned). README, CHANGELOG and Linux guide caught up.
+- **[v3.16.3](https://github.com/faisalkindi/CrimsonDesert-UltimateModsManager/releases/tag/v3.16.3)** -- _2026-08-29_ -- No more false "5 issues that may crash the game" after every Apply on 2.0. Rescan no longer sits on "Initiating rescan..." forever. Linux / Steam Deck / Bazzite: CDUMM now finds the game when run under Proton or Wine. Bug reports generated under Wine no longer lead with a bogus "running as administrator" warning (Wine always reports that).
+- **[v3.16.2](https://github.com/faisalkindi/CrimsonDesert-UltimateModsManager/releases/tag/v3.16.2)** -- _2026-08-26_ -- CDUMM now cleans up after interrupted imports.
+- **[v3.16.1](https://github.com/faisalkindi/CrimsonDesert-UltimateModsManager/releases/tag/v3.16.1)** -- _2026-08-26_ -- Mods actually load in game on 2.0.
+- **[v3.16.0](https://github.com/faisalkindi/CrimsonDesert-UltimateModsManager/releases/tag/v3.16.0)** -- _2026-08-26_ -- Item mods work again on the 26 August game update (2.0). Reset and Rescan work on 2.0. Disabling all your mods now actually removes them from the game. Apply no longer sits at 100% looking hung. "Check for Mod Updates" tells you what it actually checked. Also: apply no longer logs a scary error on game versions whose item layout is unknown, and the Game Data grid reads the 2.0 item table at full depth again.
+
+## v3.15
+
+- **[v3.15.1](https://github.com/faisalkindi/CrimsonDesert-UltimateModsManager/releases/tag/v3.15.1)** -- _2026-08-24_ -- Store mods no longer apply only part of their edits.
+- **[v3.15.0](https://github.com/faisalkindi/CrimsonDesert-UltimateModsManager/releases/tag/v3.15.0)** -- _2026-08-20_ -- Item price mods work again. Store mods can add stock again. Mods that identify a record by number alone now import. The Game Data grid says when it cannot read a table. Three more of the game's tables are readable, taking it to 55.
+
+## v3.14
+
+- **[v3.14.0](https://github.com/faisalkindi/CrimsonDesert-UltimateModsManager/releases/tag/v3.14.0)** -- _2026-08-13_ -- CDUMM reads 53 of the game's data tables, up from 29. Two table layouts shipped in 3.13.0 were wrong and have been withdrawn. One more field of the wanted-list table is read, taking it to all three.
+
+## v3.13
+
+- **[v3.13.0](https://github.com/faisalkindi/CrimsonDesert-UltimateModsManager/releases/tag/v3.13.0)** -- _2026-08-12_ -- CDUMM reads five more of the game's tables correctly. Twenty-two more of the game's tables can be read. Nothing that worked before changes.
+
+## v3.12
+
+- **[v3.12.0](https://github.com/faisalkindi/CrimsonDesert-UltimateModsManager/releases/tag/v3.12.0)** -- _2026-08-11_ -- Skill mods work again on the current game. Character Creator's Female Animations starts the game again. Status-group mods apply again.
+
+## v3.11
+
+- **[v3.11.0](https://github.com/faisalkindi/CrimsonDesert-UltimateModsManager/releases/tag/v3.11.0)** -- _2026-08-07_ -- A mod can no longer smuggle extra commands past you when CDUMM runs its script. A mod can no longer use an XML patch to stall CDUMM or read files off your disk. Both of these need a mod built on purpose to do it, so this is hardening rather than a fix for anything that has been reported happening. The warning after Apply no longer tells you a mod did nothing when it did.
+
+## v3.10
+
+- **[v3.10.0](https://github.com/faisalkindi/CrimsonDesert-UltimateModsManager/releases/tag/v3.10.0)** -- _2026-08-05_ -- CDUMM now tells you when a UI mod is too old for the current game. Status-group mods apply.
+
+## v3.9
+
+- **[v3.9.0](https://github.com/faisalkindi/CrimsonDesert-UltimateModsManager/releases/tag/v3.9.0)** -- _2026-08-04_ -- Item mods work again on the August 1 game update. Fixed a crash caused by a half-applied character mod. Four more kinds of mod apply instead of doing nothing. CDUMM finds Xbox and moved game installs it used to reject. Character Creator's race and gender picker appears again. Several places where CDUMM could have written to the wrong bytes now refuse instead.
+
+## v3.8
+
+- **[v3.8.0](https://github.com/faisalkindi/CrimsonDesert-UltimateModsManager/releases/tag/v3.8.0)** -- _2026-07-29_ -- Four more kinds of mod now apply instead of doing nothing. A wrong value can no longer be written when the game's layout shifts. A failed mod update can no longer delete the mod you already had. CDUMM reads game files it previously mistook for corrupt. When Apply is locked, it now tells you the real reason.
+
 ## v3.7
 
 - **[v3.7.0](https://github.com/faisalkindi/CrimsonDesert-UltimateModsManager/releases/tag/v3.7.0)** -- _2026-07-27_ -- Character Creator mods apply again: equipslotinfo's record block size is read from your files instead of an older build's constant (#190), Character Creator 7.6's appearance / model fields are written (#302), and wrapper-nested race / gender packs show the picker. Ultra Hard Mode goes 0 of 5 to 5 of 5 -- nine of the eleven unknown buff-variant lengths derived, so the item walk no longer loses its place. Apply is blocked, not just flagged, after a mid-session game update (#307). Same-named nested folders import on Windows (#191). Variant packs keep the selected option across an update. macOS: window restores after closing the game (#300), Find Culprit Mod works (#299). Skipped-file notices are dark-theme readable and copyable.

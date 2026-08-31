@@ -21,6 +21,17 @@ _UNRELEASED_NOTES: list[str] = [
 
 CHANGELOG = [
     {
+        "version": "3.16.4",
+        "date": "2026-08-31",
+        "notes": [
+            "<b>Dye Hard applies.</b> The mod unlocks every dye colour group and material at all ten world Dyers by editing two lists on each Dyer's NPC record, and CDUMM had no way to write that table, so all of it was skipped. CDUMM can now rebuild those lists. The layout was worked out from the game's own files: the Camp Dyer is the one NPC that ships with all ten groups, and its record was the proof.",
+            "<b>Greylight Special fully applies.</b> Its price edits already worked, but the part that makes the bond and contribution shops take copper (the store's purchase-currency field) was refused because CDUMM did not know that field. It does now, pinned across all 436 stores.",
+            "Shop Smart. Shop H-Mart and Refined Life were checked in the same pass and already applied in full.",
+            "README, CHANGELOG and the Linux guide caught up: every release from 3.8 to 3.16.3 is listed, and the Wine/Proton auto-detect from 3.16.3 is documented.",
+            "Reported by <b>delichandelarosse</b>; mods by <b>donr484</b>.",
+        ],
+    },
+    {
         "version": "3.16.3",
         "date": "2026-08-29",
         "notes": [

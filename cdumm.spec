@@ -101,6 +101,7 @@ a = Analysis(
            ('schemas/NOTICE', 'schemas'),
            ('field_schema/README.md', 'field_schema'),
            ('field_schema/skill.json', 'field_schema'),
+           ('field_schema/storeinfo.json', 'field_schema'),
            ('assets/fonts/Oxanium-VariableFont_wght.ttf', 'assets/fonts'),
            ('assets/cdumm-logo.png', 'assets'),
            ('assets/cdumm-logo-light.png', 'assets'),

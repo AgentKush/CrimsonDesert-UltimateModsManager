@@ -1099,6 +1099,18 @@ LIST_WRITERS: dict[tuple[str, str], str] = {
         "storeinfo_writer.build_storeinfo_changes",
     ("storeinfo", "_exchangeItemInfoListForSell"):
         "storeinfo_writer.build_storeinfo_changes",
+    # npcinfo dye lists (GitHub #393, donr484's Dye Hard): whole-table
+    # writer that rebuilds a Dyer's two dye lists (which grow) plus the
+    # companion .pabgh. Dispatched via the whole-table branch in
+    # format3_apply; registered here so validation accepts the fields.
+    ("npcinfo", "dye_color_group_data_list"):
+        "npcinfo_writer.build_npcinfo_changes",
+    ("npcinfo", "_dyeColorGroupDataList"):
+        "npcinfo_writer.build_npcinfo_changes",
+    ("npcinfo", "dye_texture_set_data_list"):
+        "npcinfo_writer.build_npcinfo_changes",
+    ("npcinfo", "_dyeTextureSetDataList"):
+        "npcinfo_writer.build_npcinfo_changes",
     # Equipslotinfo whole-table writer (GitHub #190): rewrites a
     # record's etl_hashes list + the companion .pabgh. The wildcard
     # key matches 'entries[N].etl_hashes' for any N via the indexed-

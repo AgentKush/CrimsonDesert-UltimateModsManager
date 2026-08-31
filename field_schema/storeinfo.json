@@ -1,0 +1,7 @@
+{
+  "_note": "storeinfo.pabgb scalar fields that sit BEFORE the variable-length stock list, so a plain payload-relative offset pins them on every build seen so far (CD 1.10 through 2.00.01). rel_offset is measured from the first byte after the entry name's NUL terminator.",
+  "_derivation": "GitHub #393 (delichandelarosse; donr484's Greylight Special). Across all 436 store entries on CD 2.00.01 the two u32 columns at payload +0 and +8 hold an item key: 1 (Money_Copper) for 278 stores, 11 (Money_Camp_Money) for the 14 TradeManager stores, Hernand_Bond (1004910) for Store_Her_Bond_Shop, Contribution_* items for the Contribution shops. They differ on exactly four camp stores, which fixes which is which: Store_Camp_AnimalButcher has Copper at +0 and Money_Camp_Food at +8, i.e. the player PAYS copper (buy side) and RECEIVES camp food (sell side). +0 is therefore the engine's _exchangeItemInfoForBuy and +8 its _exchangeItemInfoListForSell. Both are u32 item keys.",
+  "exchange_item_info_for_buy": {"rel_offset": 0, "type": "u32"},
+  "_exchangeItemInfoForBuy": {"rel_offset": 0, "type": "u32"},
+  "exchange_item_info_for_sell": {"rel_offset": 8, "type": "u32"}
+}
