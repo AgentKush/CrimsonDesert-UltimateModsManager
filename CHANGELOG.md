@@ -7,6 +7,7 @@ Summaries are condensed; each version links to its full release notes. See the
 
 ## v3.16
 
+- **[v3.16.5](https://github.com/faisalkindi/CrimsonDesert-UltimateModsManager/releases/tag/v3.16.5)** -- _2026-08-31_ -- CDUMM no longer deletes installed 2.0 language packs (Steam's optional voice packs in slots 0036-0040); a scan, rescan or startup health check used to remove them.
 - **[v3.16.4](https://github.com/faisalkindi/CrimsonDesert-UltimateModsManager/releases/tag/v3.16.4)** -- _2026-08-31_ -- Dye Hard applies (new NPC dye-list writer). Greylight Special fully applies (store purchase-currency field pinned). README, CHANGELOG and Linux guide caught up.
 - **[v3.16.3](https://github.com/faisalkindi/CrimsonDesert-UltimateModsManager/releases/tag/v3.16.3)** -- _2026-08-29_ -- No more false "5 issues that may crash the game" after every Apply on 2.0. Rescan no longer sits on "Initiating rescan..." forever. Linux / Steam Deck / Bazzite: CDUMM now finds the game when run under Proton or Wine. Bug reports generated under Wine no longer lead with a bogus "running as administrator" warning (Wine always reports that).
 - **[v3.16.2](https://github.com/faisalkindi/CrimsonDesert-UltimateModsManager/releases/tag/v3.16.2)** -- _2026-08-26_ -- CDUMM now cleans up after interrupted imports.
