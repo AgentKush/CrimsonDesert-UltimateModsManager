@@ -72,13 +72,14 @@ def test_the_pinned_set_is_all_reachable(rows):
 def test_the_pass_covers_more_than_the_three_hand_written_checks(rows):
     """Coverage is the point of the change; assert it rather than trust it.
 
-    Seventeen decodes across seven builds, from the named checks plus the
+    Nineteen decodes across seven builds, from the named checks plus the
     ordered tables that have fixtures. Pinned as a floor, not an equality:
     committing a new capture should raise this, never lower it -- the CD
-    2.0 capture (b24934353) raised it from fifteen with no code change,
-    which is the discovery design working.
+    2.0 capture (b24934353) raised it from fifteen to seventeen with no
+    code change, and widening that same capture to storeinfo and npcinfo
+    (#393) took it to nineteen. That is the discovery design working.
     """
-    assert len(rows) >= 17
+    assert len(rows) >= 19
     assert len({label.split("/", 1)[0] for label, *_ in rows}) >= 7
     tables = {label.split("/", 1)[1] for label, *_ in rows}
     assert {"skill", "storeinfo", "statusgroupinfo"} < tables, (

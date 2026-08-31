@@ -149,6 +149,75 @@ def check_storeinfo(body: bytes, header: bytes) -> tuple[bool, str]:
     return ok, msg
 
 
+def check_npcinfo_dye_lists(body: bytes, header: bytes) -> tuple[bool, str]:
+    """``locate_dye_lists`` -> ``serialize_dye_lists`` -- the writer the
+    Dye Hard class of mod goes through (#393).
+
+    npcinfo has no field order and no native record schema; the dye lists
+    are found by walking to the four tagged condition blobs every Dyer
+    carries and then tiling two counted lists that must land exactly on
+    the trailing bytes. Tiling is the whole safety property: an entry
+    that does not tile is REFUSED, never best-effort patched, so a moved
+    layout costs applied intents rather than a corrupted table.
+
+    Most entries refusing is therefore correct and expected -- the great
+    majority of NPCs are not Dyers and do not carry the anchor blobs.
+    What must not happen is a tiled entry that fails to reproduce its own
+    bytes, or the anchor vanishing so that NOTHING tiles. Those are the
+    two gates.
+
+    Measured on the committed CD 2.0 table: 462 of 542 entries tile, 80
+    refuse, 0 mis-round-trip, and 11 entries carry non-empty lists
+    (20 groups and 20 texture sets between them).
+
+    Worth writing down because the counts disagree: #393's commit message
+    reports "452 of 542 NPCs tile". Driving the production path over the
+    committed bytes gives 462, and no upstream test pins either figure --
+    a table-wide rate that lives only in prose goes stale without anyone
+    noticing. This row is that rate, asserted against the bytes.
+    """
+    from cdumm.engine.npcinfo_writer import (
+        locate_dye_lists,
+        serialize_dye_lists,
+    )
+    from cdumm.semantic.parser import _parse_entry_header, parse_pabgh_index
+    key_size, offs = parse_pabgh_index(header, "npcinfo")
+    starts = sorted(offs.values())
+    spans = starts + [len(body)]
+
+    tiled = refused = bad_rt = non_empty = 0
+    for key, off in offs.items():
+        end = spans[spans.index(off) + 1]
+        # The payload offset, not the entry offset. Passing `off` here is
+        # the PRODUCTION ENTRY POINTS mistake in miniature: the walk
+        # self-anchors so it still returns a plausible answer.
+        _eid, _name, payload = _parse_entry_header(body, off, key_size)
+        try:
+            dye = locate_dye_lists(body, payload, end, key)
+        except Exception:                       # noqa: BLE001
+            refused += 1
+            continue
+        tiled += 1
+        if dye.groups or dye.texsets:
+            non_empty += 1
+        if (serialize_dye_lists(dye.groups, dye.texsets)
+                != body[dye.list_start:dye.list_end]):
+            bad_rt += 1
+
+    ok = bad_rt == 0 and tiled > 0
+    detail = (f"{tiled}/{len(offs)} entries tile, {refused} refused, "
+              f"{bad_rt} mis-round-tripped, {non_empty} carry dye lists")
+    if tiled == 0:
+        detail += ("   [nothing tiles: the four-blob anchor has moved, so "
+                   "every dye-list intent will be refused and Dyer mods "
+                   "will apply nothing]")
+    elif bad_rt:
+        detail += ("   [a tiled entry cannot reproduce its own bytes -- "
+                   "the element widths are wrong, which is worse than "
+                   "refusing]")
+    return ok, detail
+
+
 #: Ceiling on the share of iteminfo records carried opaque before this
 #: reads as breakage rather than the known tail.
 #:
@@ -332,6 +401,7 @@ _CHECKS = [
     # editor's parser; the plain "iteminfo" row below is the select_order
     # schema walk. #369 broke one while the other stayed green.
     ("iteminfo-native", "iteminfo", check_iteminfo_native),
+    ("npcinfo", "npcinfo", check_npcinfo_dye_lists),
 ]
 
 #: Tables with a verified field order, checked through select_order.
@@ -397,6 +467,13 @@ _FIXTURE_GREEN = frozenset({
     # 100% opaque; cd20 (#377) reads 6,810/6,810.
     ("vanilla_b24934353", "iteminfo"),
     ("vanilla_b24934353", "iteminfo-native"),
+    # #393 widened the CD 2.0 capture to storeinfo and npcinfo.
+    # storeinfo is the notable one: 2.0 did NOT move it. The CD 1.16.1
+    # layout reads 397 located + 39 provably empty = 436/436 with zero
+    # not-found and zero ambiguous, and no other layout comes close
+    # (CD 1.13 gets 319, CD 1.16 gets 3, CD 1.11 and CD 1.10 get 0).
+    ("vanilla_b24934353", "storeinfo"),
+    ("vanilla_b24934353", "npcinfo"),
 })
 
 #: Per-fixture pins for the ordered tables, measured 2026-08-26.
