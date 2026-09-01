@@ -117,7 +117,7 @@ Your original game files are **never modified**. Mods are applied through an ove
 | `.zip` / `.7z` / `.rar` | Archives — auto-extracted, including nested zips for multi-language packs |
 | Folders | Loose directories with PAZ/PAMT files or Crimson Browser mods |
 | `.json` (byte-patch) | Offset-based JSON mods (`offset`, `original`, `patched`) |
-| `.field.json` (field-name) | Field-name JSON mods — items, mounts, terrain, stages, regions, mount character, buffs, drop sets, skills, stores (stock, reset timers, purchase currency), and NPC dyers (colour groups, texture sets). Supports both singular `target` and multi-target `targets: [...]` shapes. |
+| `.field.json` (field-name) | Field-name JSON mods — items, mounts, terrain, stages, regions, mount character, buffs, drop sets, skills, stores (stock lists including appends and per-slot edits, reset timers, purchase currency), NPC dyers (colour groups, texture sets), and dye colour groups (colour lists). Accepts DMM's `array_append` shape. Supports both singular `target` and multi-target `targets: [...]` shapes. |
 | `.cdmod` (v3.6) | Crimson Desert Mod Package — imports directly, including localization patches that tweak individual strings instead of replacing a whole language file |
 | `.dds` | DDS texture mods with full PATHC index registration (BC1/BC3/BC4/BC5/BC7) |
 | `OG_*.xml` | XML full replacement mods |

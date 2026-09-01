@@ -394,6 +394,13 @@ def _parse_intents_block(
         # for the target -- rather than the missing-``new`` check taking the
         # whole mod down (the parser's lenient-on-op contract, #66).
         _op = str(raw.get("op", "set"))
+        # DMM's ``array_append`` exports carry the element under
+        # ``value`` rather than ``new`` (AerowynX's Expanded Vendor
+        # Inventory Rebuilt V3, #191: 3,201 store appends and 400 dye
+        # appends, every one shaped that way). Accept it as ``new``.
+        if _op == "array_append" and "new" not in raw and "value" in raw:
+            raw = dict(raw)
+            raw["new"] = raw["value"]
         if _op == "scale":
             if "factor" not in raw:
                 raise ValueError(
@@ -835,7 +842,20 @@ def _classify_delete(intent: Format3Intent) -> str | None:
 # ``array_append`` can add one element while preserving every existing
 # element's bytes. dropsetinfo.drops is verified byte-exact on all 14,575
 # vanilla records. Add a (table, field) here only after proving the same.
-APPENDABLE_LIST_FIELDS = frozenset({("dropsetinfo", "drops")})
+APPENDABLE_LIST_FIELDS = frozenset({
+    ("dropsetinfo", "drops"),
+    # Whole-table writers that build the appended element themselves
+    # (#191, Expanded Vendor Inventory Rebuilt V3 + its Dye Addon).
+    ("storeinfo", "stock_data_list"),
+    ("npcinfo", "dye_color_group_data_list"),
+    ("npcinfo", "dye_texture_set_data_list"),
+    ("dyecolorgroupinfo", "dye_color_data_list"),
+})
+
+# storeinfo per-slot edits: ``stock_data_list[N].raw_c`` (quantity) and
+# ``stock_data_list[N].sub_data`` (null to clear) on an EXISTING vanilla
+# slot N. Handled by the storeinfo whole-table writer (#191).
+_STOREINFO_SLOT_RE = re.compile(r"^stock_data_list\[\d+\]\.(raw_c|sub_data)$")
 
 
 def _classify_array_append(
@@ -1111,6 +1131,12 @@ LIST_WRITERS: dict[tuple[str, str], str] = {
         "npcinfo_writer.build_npcinfo_changes",
     ("npcinfo", "_dyeTextureSetDataList"):
         "npcinfo_writer.build_npcinfo_changes",
+    # dyecolorgroupinfo colour lists (#191, Expanded Vendor Inventory
+    # Rebuilt V3 Dye Addon): list at payload start, grows, .pabgh shift.
+    ("dyecolorgroupinfo", "dye_color_data_list"):
+        "dyecolorgroupinfo_writer.build_dyecolorgroupinfo_changes",
+    ("dyecolorgroupinfo", "_dyeColorDataList"):
+        "dyecolorgroupinfo_writer.build_dyecolorgroupinfo_changes",
     # Equipslotinfo whole-table writer (GitHub #190): rewrites a
     # record's etl_hashes list + the companion .pabgh. The wildcard
     # key matches 'entries[N].etl_hashes' for any N via the indexed-
@@ -1279,6 +1305,8 @@ def _diagnose_unsupported_intent(
         if tn == "multichangeinfo" and (field or "").startswith(
                 "fixed_material_data_list["):
             return None
+        if tn == "storeinfo" and _STOREINFO_SLOT_RE.match(field or ""):
+            return None
         # GitHub #150 (Female Animations): characterinfo
         # upper_chart.group_lookup / lower_chart.group_lookup are
         # resolved by the clean-room characterinfo writer.
@@ -1440,6 +1468,8 @@ def _classify_intent(
     tn_norm = (table_name or "").lower().replace(".pabgb", "")
     if tn_norm == "buffinfo" and intent.field.startswith(
             "buff_data_list["):
+        return None
+    if tn_norm == "storeinfo" and _STOREINFO_SLOT_RE.match(intent.field):
         return None
 
     # interactioninfo (Fast Pickup - Increase Range): the pivot list is
