@@ -21,6 +21,15 @@ _UNRELEASED_NOTES: list[str] = [
 
 CHANGELOG = [
     {
+        "version": "3.16.6",
+        "date": "2026-09-01",
+        "notes": [
+            "<b>Expanded Vendor Inventory Rebuilt V3 applies, with its Dye Addon and Bran's Specialty Store.</b> The mod was refused at import because it uses DMM's way of adding items to a list, and past that it needed three things CDUMM could not do: add new stock records to a shop and edit existing slots, add colour groups and texture sets to the Dyers, and write the dye colour group table at all. All of that is in. Checked on a clean 2.00.01 install: every one of the 3,619 shop edits, 2,128 price edits and 400 dye colour additions applies, and the rebuilt tables read back byte-exact.",
+            "Any mod built with DMM's add-to-list operation now imports instead of failing with a missing-value error.",
+            "Requested by <b>Damascinas</b>; mod by <b>AerowynX</b>.",
+        ],
+    },
+    {
         "version": "3.16.5",
         "date": "2026-08-31",
         "notes": [
