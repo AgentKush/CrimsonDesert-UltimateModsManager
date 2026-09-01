@@ -1,15 +1,24 @@
-"""CD 2.0 rewrote iteminfo and left storeinfo alone. Both are findings.
+"""The 2.0 engine rewrote iteminfo and left storeinfo alone.
 
 The 26 Aug build (Steam buildid 24934353) is a major version bump that
 broke iteminfo outright -- every pre-2.0 layout carries that table 100%
 opaque (#377). It would be easy to assume a bump that large moved
-everything. It did not: #393 committed the CD 2.0 storeinfo table, and
-the CD 1.16.1 layout reads it exactly, with nothing left over.
+everything. It did not: the committed 2.0-era store table is read
+exactly by CD 1.16.1, with nothing left over.
 
-That negative result is worth an assertion rather than a shrug. If a
-later patch *does* move storeinfo, the thing that tells us is this test
-going red on a table it used to read; and if someone ever proposes a
-"CD 2.0" store layout, these numbers say what it would have to beat.
+A correction on provenance, kept rather than quietly fixed. #393 first
+committed these store and npc bytes under ``vanilla_b24934353``; #397
+renamed both directories to ``vanilla_b24994088``. Git records pure
+renames and the blobs are byte-identical, so the capture was simply
+mislabelled and the newer buildid is the true one. The finding is
+unchanged -- the same bytes read the same way -- but the build it is
+attributed to is not, and this file now reads the bytes where they
+actually live rather than skipping on a path that no longer exists.
+
+That mattered: the module's skipif guard would have turned the stale
+path into a silent skip. What actually caught the move was
+``test_the_pinned_set_is_all_reachable``, which fails when
+``_FIXTURE_GREEN`` names bytes that are not there.
 
 Also pins the npcinfo dye-list tiling rate, which nothing else does.
 """
@@ -36,13 +45,17 @@ from cdumm.engine.storeinfo_native_parser import (
 )
 from cdumm.semantic.parser import parse_pabgh_index
 
-_FIX = Path(__file__).resolve().parent / "fixtures" / "vanilla_b24934353"
+#: Where the 2.0-era store and npc bytes live after #397's rename.
+_FIX = Path(__file__).resolve().parent / "fixtures" / "vanilla_b24994088"
+
+#: The iteminfo capture kept its own (earlier) buildid label.
+_ITEM_FIX = Path(__file__).resolve().parent / "fixtures" / "vanilla_b24934353"
 
 pytestmark = pytest.mark.skipif(
     not (_FIX / "storeinfo.pabgb.zlib").exists(),
-    reason="CD 2.0 storeinfo fixture not present")
+    reason="2.0-era storeinfo fixture not present")
 
-#: Measured on the committed CD 2.0 table.
+#: Measured on the committed 2.0-era table.
 CD20_ENTRIES = 436
 CD20_LOCATED = 397
 CD20_EMPTY = 39
@@ -134,7 +147,7 @@ def test_the_canary_row_agrees(table):
 
 
 @pytest.mark.skipif(not (_FIX / "npcinfo.pabgb.zlib").exists(),
-                    reason="CD 2.0 npcinfo fixture not present")
+                    reason="2.0-era npcinfo fixture not present")
 def test_npcinfo_dye_list_tiling_rate_is_pinned():
     """A table-wide rate that otherwise lives only in a commit message.
 

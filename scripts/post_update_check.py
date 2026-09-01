@@ -467,13 +467,18 @@ _FIXTURE_GREEN = frozenset({
     # 100% opaque; cd20 (#377) reads 6,810/6,810.
     ("vanilla_b24934353", "iteminfo"),
     ("vanilla_b24934353", "iteminfo-native"),
-    # #393 widened the CD 2.0 capture to storeinfo and npcinfo.
-    # storeinfo is the notable one: 2.0 did NOT move it. The CD 1.16.1
-    # layout reads 397 located + 39 provably empty = 436/436 with zero
-    # not-found and zero ambiguous, and no other layout comes close
-    # (CD 1.13 gets 319, CD 1.16 gets 3, CD 1.11 and CD 1.10 get 0).
-    ("vanilla_b24934353", "storeinfo"),
-    ("vanilla_b24934353", "npcinfo"),
+    # #393 added storeinfo and npcinfo, first labelled b24934353. #397
+    # RENAMED both to b24994088 -- git records pure renames, the blobs
+    # are byte-identical, so the capture was simply mislabelled and the
+    # newer buildid is the true provenance. The pins move with the bytes.
+    #
+    # storeinfo is the notable one: the 2.0-era engine did NOT move it.
+    # The CD 1.16.1 layout reads 397 located + 39 provably empty =
+    # 436/436 with zero not-found and zero ambiguous. CD 1.13 gets 319
+    # located but leaves 78 unaccounted; CD 1.16 gets 3; CD 1.11 and
+    # CD 1.10 get 0.
+    ("vanilla_b24994088", "storeinfo"),
+    ("vanilla_b24994088", "npcinfo"),
 })
 
 #: Per-fixture pins for the ordered tables, measured 2026-08-26.
