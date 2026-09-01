@@ -75,7 +75,7 @@ def test_the_writer_docstring_agrees_with_the_bytes():
     into being wrong the way the npcinfo figure did."""
     body, header = _table()
     payloads = _payloads(body, header)
-    key_size, offs = parse_pabgh_index(header, _TABLE)
+    _key_size, offs = parse_pabgh_index(header, _TABLE)
     spans = sorted(offs.values()) + [len(body)]
 
     assert len(offs) == 10, f"the table is not ten groups: {len(offs)}"
@@ -101,7 +101,7 @@ def test_one_broken_group_is_enough_to_fail():
     """
     body, header = _table()
     payloads = _payloads(body, header)
-    victim = sorted(payloads)[0]
+    victim = min(payloads)
 
     broken = bytearray(body)
     # A count that cannot tile the payload -- the shape a moved layout
@@ -126,7 +126,7 @@ def test_the_layout_is_not_loosely_satisfiable():
     """
     body, header = _table()
     payloads = _payloads(body, header)
-    key_size, offs = parse_pabgh_index(header, _TABLE)
+    _key_size, offs = parse_pabgh_index(header, _TABLE)
     spans = sorted(offs.values()) + [len(body)]
 
     for shift in (-4, 4, 8):
