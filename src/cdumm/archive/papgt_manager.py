@@ -114,6 +114,47 @@ def reserved_papgt_dir_numbers(game_dir: Path,
     return reserved
 
 
+def language_pack_dirs(game_dir: Path,
+                       vanilla_dir: "Path | None" = None) -> "set[str]":
+    """Numbered directories on disk that hold Steam-delivered OPTIONAL
+    content, not mod content.
+
+    Crimson Desert 2.0 ("Enhanced") added voice packs for German, French,
+    Spanish, Brazilian Portuguese and Japanese. Steam downloads the
+    selected pack into one of the five reserved slots 0036-0040 -- the
+    PAPGT entries flagged ``is_optional=1`` with a single language bit.
+    Every "0036+ means a mod put it there" rule in CDUMM therefore has
+    to exempt these, or a rescan / health check deletes the user's
+    language pack and the game silently drops back to English (Nexus,
+    Dante1963, 27 Aug 2026).
+
+    A directory qualifies when it exists on disk, the live (or vanilla)
+    PAPGT lists it as optional, and it carries no
+    ``_cdumm_overlay.marker`` -- a CDUMM overlay that squatted one of
+    these slots (pre-3.16.1) is still CDUMM's to clean up.
+    """
+    optional: set[str] = set()
+    for papgt in (game_dir / "meta" / "0.papgt",
+                  (vanilla_dir / "meta" / "0.papgt") if vanilla_dir else None):
+        if papgt is None:
+            continue
+        for name, flags, _h in (read_papgt_entries(papgt) or []):
+            if not (name.isdigit() and len(name) == 4):
+                continue
+            is_optional, _lang, _zero = decode_papgt_entry_flags(flags)
+            if is_optional:
+                optional.add(name)
+    out: set[str] = set()
+    for name in optional:
+        d = game_dir / name
+        try:
+            if d.is_dir() and not (d / "_cdumm_overlay.marker").exists():
+                out.add(name)
+        except OSError:
+            continue
+    return out
+
+
 class PapgtManager:
     """Manages PAPGT rebuild from scratch."""
 

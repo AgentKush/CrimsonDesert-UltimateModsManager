@@ -21,6 +21,24 @@ _UNRELEASED_NOTES: list[str] = [
 
 CHANGELOG = [
     {
+        "version": "3.16.6",
+        "date": "2026-09-01",
+        "notes": [
+            "<b>Expanded Vendor Inventory Rebuilt V3 applies, with its Dye Addon and Bran's Specialty Store.</b> The mod was refused at import because it uses DMM's way of adding items to a list, and past that it needed three things CDUMM could not do: add new stock records to a shop and edit existing slots, add colour groups and texture sets to the Dyers, and write the dye colour group table at all. All of that is in. Checked on a clean 2.00.01 install: every one of the 3,619 shop edits, 2,128 price edits and 400 dye colour additions applies, and the rebuilt tables read back byte-exact.",
+            "Any mod built with DMM's add-to-list operation now imports instead of failing with a missing-value error.",
+            "Requested by <b>Damascinas</b>; mod by <b>AerowynX</b>.",
+        ],
+    },
+    {
+        "version": "3.16.5",
+        "date": "2026-08-31",
+        "notes": [
+            "<b>CDUMM no longer deletes your installed language packs.</b> The 26 August update added voice packs for German, French, Spanish, Brazilian Portuguese and Japanese, and Steam downloads the one you pick into one of the game's five reserved data slots (0036 to 0040). CDUMM treated anything in those slots as a mod folder, so the first scan, a Rescan, or the startup health check removed the language pack and the game silently went back to English. Those slots are now recognised as Steam-owned content: left alone, included in the vanilla snapshot, and no longer reported as extra folders.",
+            "<b>If a language already went missing:</b> run a Steam file verify (or re-select the language in Steam) once after updating CDUMM and it downloads again.",
+            "Reported by <b>Dante1963</b> on Nexus.",
+        ],
+    },
+    {
         "version": "3.16.4",
         "date": "2026-08-31",
         "notes": [

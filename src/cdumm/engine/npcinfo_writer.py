@@ -216,20 +216,30 @@ def build_npcinfo_changes(
         if ename:
             name_to_key.setdefault(ename, k)
 
-    # key -> {"groups": [...], "texsets": [...]} (only the fields set)
-    per_key: dict[int, dict] = {}
+    # key -> ordered ops: ("groups"|"texsets", "set", [elems]) or
+    # ("groups"|"texsets", "append", elem). Applied in order on top of
+    # the vanilla lists (#191: the Dye Addon appends 9 groups + 9
+    # texture sets to each Dyer instead of setting the whole list).
+    per_key: dict[int, list[tuple]] = {}
     for it in intents:
         field = (getattr(it, "field", "") or "").strip()
         if field not in SUPPORTED_FIELDS:
             logger.warning("npcinfo writer: unsupported field %r, skipping", field)
             continue
-        if (getattr(it, "op", "set") or "set") != "set":
-            logger.warning("npcinfo writer: unsupported op %r, skipping",
-                           getattr(it, "op", None))
-            continue
+        op = (getattr(it, "op", "set") or "set")
         new = getattr(it, "new", None)
         key = getattr(it, "key", None)
-        if not isinstance(new, list) or not isinstance(key, int):
+        if op == "set" and not isinstance(new, list):
+            logger.warning("npcinfo writer: malformed set (key=%r), skipping", key)
+            continue
+        if op == "array_append" and not isinstance(new, dict):
+            logger.warning("npcinfo writer: array_append element on key=%r is "
+                           "not an object, skipping", key)
+            continue
+        if op not in ("set", "array_append"):
+            logger.warning("npcinfo writer: unsupported op %r, skipping", op)
+            continue
+        if not isinstance(key, int):
             logger.warning("npcinfo writer: malformed intent (key=%r), skipping", key)
             continue
         if key not in offsets:
@@ -240,20 +250,32 @@ def build_npcinfo_changes(
                 continue
             key = resolved
         slot = "groups" if field in (GROUP_FIELD, "_dyeColorGroupDataList") else "texsets"
-        per_key.setdefault(key, {})[slot] = new
+        per_key.setdefault(key, []).append(
+            (slot, "set" if op == "set" else "append", new))
     if not per_key:
         return [], None
 
     replacements: dict[int, tuple[int, int, bytes]] = {}
-    for key, want in per_key.items():
+    for key, ops in per_key.items():
         off = offsets[key]
         entry_end = sorted_offs[sorted_offs.index(off) + 1]
         _, _, payload = _parse_entry_header(vanilla_body, off, key_size)
         van = locate_dye_lists(vanilla_body, payload, entry_end, key)
-        groups = (_groups_from_json(want["groups"], key)
-                  if "groups" in want else van.groups)
-        texsets = (_texsets_from_json(want["texsets"], key)
-                   if "texsets" in want else van.texsets)
+        groups = list(van.groups)
+        texsets = list(van.texsets)
+        for slot, kind, val in ops:
+            conv = _groups_from_json if slot == "groups" else _texsets_from_json
+            if kind == "set":
+                new_list = conv(val, key)
+            else:
+                new_list = (groups if slot == "groups" else texsets) + conv([val], key)
+            if slot == "groups":
+                groups = new_list
+            else:
+                texsets = new_list
+        if len(groups) > _MAX_LIST or len(texsets) > _MAX_LIST:
+            raise NpcinfoWriteRefused(
+                f"npc {key}: resulting dye list exceeds {_MAX_LIST} entries")
         blob = serialize_dye_lists(groups, texsets)
         replacements[key] = (van.list_start, van.list_end, blob)
         logger.info(
