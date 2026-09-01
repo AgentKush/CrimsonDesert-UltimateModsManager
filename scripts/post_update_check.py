@@ -218,6 +218,73 @@ def check_npcinfo_dye_lists(body: bytes, header: bytes) -> tuple[bool, str]:
     return ok, detail
 
 
+def check_dyecolorgroupinfo_color_lists(body: bytes,
+                                        header: bytes) -> tuple[bool, str]:
+    """``locate_color_list`` -> ``serialize_color_list`` -- the writer the
+    dye-addon class of mod goes through (#191 / #397).
+
+    Same shape of table as npcinfo's dye lists, with one difference that
+    makes the gate strictly stronger: npcinfo is 542 NPCs of which only a
+    handful are Dyers, so most entries refusing is correct. This table is
+    ten entries and every one of them IS a colour group. There is no
+    population that legitimately refuses, so ANY refusal means the layout
+    moved and the gate is completeness, not "something tiled".
+
+    That distinction matters because the failure is silent in the usual
+    way. A refused entry is never best-effort patched -- the append is
+    dropped -- so a dye addon installs cleanly, validates cleanly, and
+    the player sees the vanilla ten swatches with none of the 22 the mod
+    adds. Nothing errors.
+
+    Measured on the committed b24994088 table: 10/10 groups tile, 0
+    refused, 0 mis-round-tripped, 109 colours each (1,090 total), tails
+    33-37 bytes -- the variation being the length of each group's name
+    string, exactly as the writer's LAYOUT note predicts. Unlike npcinfo,
+    where the commit message and the bytes disagreed, here the prose and
+    the production path agree; this row is what keeps that true.
+
+    The colour count is printed but NOT gated. A patch that adds swatches
+    to a group is content, not breakage -- what would be breakage is a
+    count that stops tiling the payload, which is the refusal path.
+    """
+    from cdumm.engine.dyecolorgroupinfo_writer import (
+        locate_color_list,
+        serialize_color_list,
+    )
+    from cdumm.semantic.parser import _parse_entry_header, parse_pabgh_index
+    key_size, offs = parse_pabgh_index(header, "dyecolorgroupinfo")
+    starts = sorted(offs.values())
+    spans = starts + [len(body)]
+
+    tiled = refused = bad_rt = colours = 0
+    for key, off in offs.items():
+        end = spans[spans.index(off) + 1]
+        # Payload offset, not entry offset -- see the note on npcinfo above.
+        _eid, _name, payload = _parse_entry_header(body, off, key_size)
+        try:
+            start, stop, elems = locate_color_list(body, payload, end, key)
+        except Exception:                       # noqa: BLE001
+            refused += 1
+            continue
+        tiled += 1
+        colours += len(elems)
+        if serialize_color_list(elems) != body[start:stop]:
+            bad_rt += 1
+
+    total = len(offs)
+    ok = bad_rt == 0 and refused == 0 and tiled == total
+    detail = (f"{tiled}/{total} groups tile, {refused} refused, "
+              f"{bad_rt} mis-round-tripped, {colours} colours")
+    if refused:
+        detail += ("   [every entry in this table is a colour group, so a "
+                   "refusal is a moved layout -- dye-addon appends will be "
+                   "dropped and the mod will apply nothing]")
+    elif bad_rt:
+        detail += ("   [a tiled group cannot reproduce its own bytes -- the "
+                   "element width is wrong, which is worse than refusing]")
+    return ok, detail
+
+
 #: Ceiling on the share of iteminfo records carried opaque before this
 #: reads as breakage rather than the known tail.
 #:
@@ -402,6 +469,8 @@ _CHECKS = [
     # schema walk. #369 broke one while the other stayed green.
     ("iteminfo-native", "iteminfo", check_iteminfo_native),
     ("npcinfo", "npcinfo", check_npcinfo_dye_lists),
+    ("dyecolorgroupinfo", "dyecolorgroupinfo",
+     check_dyecolorgroupinfo_color_lists),
 ]
 
 #: Tables with a verified field order, checked through select_order.
@@ -479,6 +548,12 @@ _FIXTURE_GREEN = frozenset({
     # CD 1.10 get 0.
     ("vanilla_b24994088", "storeinfo"),
     ("vanilla_b24994088", "npcinfo"),
+    # #397 also brought dyecolorgroupinfo, which had a writer but no row
+    # -- the same gap npcinfo was in before. Ten groups, all ten tile,
+    # 109 colours each. Gated on completeness rather than "something
+    # tiled": every entry here IS a colour group, so nothing legitimately
+    # refuses.
+    ("vanilla_b24994088", "dyecolorgroupinfo"),
 })
 
 #: Per-fixture pins for the ordered tables, measured 2026-08-26.
