@@ -31,6 +31,7 @@ storeinfo_native_parser):
 from __future__ import annotations
 
 import logging
+import re
 import struct
 
 from cdumm.engine.storeinfo_native_parser import (
@@ -43,6 +44,11 @@ from cdumm.engine.storeinfo_native_parser import (
     serialize_stock_list,
 )
 from cdumm.semantic.parser import _parse_entry_header, parse_pabgh_index
+
+# ``stock_data_list[N].raw_c`` / ``stock_data_list[N].sub_data`` -- the
+# per-slot edits Expanded Vendor Inventory Rebuilt V3 (#191) makes on
+# existing vanilla stock slots before appending its own records.
+_SLOT_RE = re.compile(r"^stock_data_list\[(\d+)\]\.(raw_c|sub_data)$")
 
 logger = logging.getLogger(__name__)
 
@@ -267,24 +273,48 @@ def build_storeinfo_changes(
         if ename:
             name_to_key.setdefault(ename, k)
 
-    # One rebuild per entry key; later intents on the same key win
-    # (matching 'set' semantics).
-    per_key: dict[int, list] = {}
+    # One rebuild per entry key. Intents are applied IN ORDER to a
+    # working list that starts as the vanilla stock list (#191,
+    # Expanded Vendor Inventory Rebuilt V3 does, per store: edit a
+    # vanilla slot, append 59 records, then set a scalar):
+    #   ("set", records)        replace the whole list (matched/new)
+    #   ("append", record)      add one record built from JSON
+    #   ("slot", N, field, v)   edit field of existing slot N
+    per_key: dict[int, list[tuple]] = {}
     name_resolved = 0
     for it in intents:
         field = (getattr(it, "field", "") or "").strip()
-        if field not in ("stock_data_list", "_exchangeItemInfoListForSell"):
-            logger.warning(
-                "storeinfo writer: unsupported field %r, skipping", field)
-            continue
-        if (getattr(it, "op", "set") or "set") != "set":
-            logger.warning(
-                "storeinfo writer: unsupported op %r, skipping",
-                getattr(it, "op", None))
-            continue
+        op = (getattr(it, "op", "set") or "set")
         new = getattr(it, "new", None)
         key = getattr(it, "key", None)
-        if not isinstance(new, list) or not isinstance(key, int):
+        slot_m = _SLOT_RE.match(field)
+        if field in ("stock_data_list", "_exchangeItemInfoListForSell"):
+            if op == "set":
+                if not isinstance(new, list):
+                    logger.warning(
+                        "storeinfo writer: malformed intent (key=%r), "
+                        "skipping", key)
+                    continue
+                item = ("set", new)
+            elif op == "array_append":
+                if not isinstance(new, dict):
+                    logger.warning(
+                        "storeinfo writer: array_append element on key=%r "
+                        "is not an object, skipping", key)
+                    continue
+                item = ("append", new)
+            else:
+                logger.warning(
+                    "storeinfo writer: unsupported op %r, skipping", op)
+                continue
+        elif slot_m is not None and op == "set":
+            item = ("slot", int(slot_m.group(1)), slot_m.group(2), new)
+        else:
+            logger.warning(
+                "storeinfo writer: unsupported field %r / op %r, skipping",
+                field, op)
+            continue
+        if not isinstance(key, int):
             logger.warning(
                 "storeinfo writer: malformed intent (key=%r), skipping",
                 key)
@@ -304,7 +334,7 @@ def build_storeinfo_changes(
                     "storeinfo writer: store key %d / entry %r not in "
                     "table, skipping", key, entry_name)
                 continue
-        per_key[key] = new
+        per_key.setdefault(key, []).append(item)
 
     if name_resolved:
         logger.info(
@@ -378,17 +408,52 @@ def build_storeinfo_changes(
         by_body = {}
         for rec in van_records:
             by_body.setdefault(rec.body, rec)
-        out_records: list[StockRecord] = []
+        out_records: list[StockRecord] = list(van_records)
         n_new = 0
-        for idx, j in enumerate(json_records):
-            ident = _record_identity(j)
-            van = by_body.get(ident) if ident is not None else None
-            if van is not None:
-                out_records.append(_build_matched_record(j, van))
-            else:
+        for item in json_records:
+            if item[0] == "set":
+                out_records = []
+                for idx, j in enumerate(item[1]):
+                    ident = _record_identity(j)
+                    van = by_body.get(ident) if ident is not None else None
+                    if van is not None:
+                        out_records.append(_build_matched_record(j, van))
+                    else:
+                        out_records.append(
+                            _build_new_record(j, idx, layout))
+                        n_new += 1
+            elif item[0] == "append":
                 out_records.append(
-                    _build_new_record(j, idx, layout))
+                    _build_new_record(item[1], len(out_records), layout))
                 n_new += 1
+            else:  # ("slot", N, field, value)
+                _, n, fname, value = item
+                if not 0 <= n < len(out_records):
+                    raise StoreinfoWriteRefused(
+                        f"store entry {key}: stock_data_list[{n}].{fname} "
+                        f"targets a slot that does not exist (list has "
+                        f"{len(out_records)} records); refusing")
+                rec = out_records[n]
+                if fname == "raw_c":
+                    if isinstance(value, bool) or not isinstance(value, int):
+                        raise StoreinfoWriteRefused(
+                            f"store entry {key}: stock_data_list[{n}].raw_c "
+                            f"must be an integer, got {value!r}")
+                    rec.raw_c = value & 0xFFFFFFFF
+                elif fname == "sub_data":
+                    if value is None:
+                        rec.sub_data = None
+                    elif isinstance(value, dict):
+                        rec.sub_data = {
+                            "flag": int(value.get("flag") or 0),
+                            "lookup_a": int(value.get("lookup_a") or 0) & 0xFFFFFFFF,
+                            "lookup_b": int(value.get("lookup_b") or 0) & 0xFFFFFFFF,
+                            "lookup_c": int(value.get("lookup_c") or 0) & 0xFFFFFFFF,
+                        }
+                    else:
+                        raise StoreinfoWriteRefused(
+                            f"store entry {key}: stock_data_list[{n}]"
+                            f".sub_data must be null or an object")
         new_list = serialize_stock_list(out_records, layout)
         replacements[key] = (list_start, list_end, new_list)
         logger.info(

@@ -19,8 +19,8 @@ from cdumm.engine.field_schema import load_field_schema
 from cdumm.engine.format3_handler import validate_intents
 from cdumm.semantic.parser import _parse_entry_header, parse_pabgh_index
 from tests.fixture_loaders import (
-    has_vanilla_b24934353,
-    load_vanilla_b24934353,
+    has_vanilla_b24994088,
+    load_vanilla_b24994088,
 )
 
 BOND_SHOP = 907          # Store_Her_Bond_Shop, pays with Hernand_Bond
@@ -49,11 +49,11 @@ def test_validator_accepts_the_field():
     assert len(v.supported) == 1, v.skipped
 
 
-@pytest.mark.skipif(not has_vanilla_b24934353("storeinfo.pabgb"),
+@pytest.mark.skipif(not has_vanilla_b24994088("storeinfo.pabgb"),
                     reason="CD 2.0 storeinfo fixture absent")
 def test_offsets_match_the_vanilla_currency_keys():
-    body = load_vanilla_b24934353("storeinfo.pabgb")
-    header = load_vanilla_b24934353("storeinfo.pabgh")
+    body = load_vanilla_b24994088("storeinfo.pabgb")
+    header = load_vanilla_b24994088("storeinfo.pabgh")
     ks, offs = parse_pabgh_index(header, "storeinfo")
     fs = load_field_schema("storeinfo")
     buy, sell = fs["exchange_item_info_for_buy"], fs["exchange_item_info_for_sell"]

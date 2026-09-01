@@ -191,10 +191,6 @@ def load_vanilla_b24934353(name: str) -> bytes:
     the bytes is what lets CI hold the cd20 layout to exact tiling, and
     lets the next drift be diffed against a known-good build the way
     this one was diffed against b24773079.
-
-    npcinfo + storeinfo added for GitHub #393 (donr484's Dye Hard and
-    Greylight Special): the npcinfo dye-list layout and the storeinfo
-    exchange-item field are held to these bytes.
     """
     packed = _TESTS_DIR / "fixtures" / "vanilla_b24934353" / (name + ".zlib")
     if packed.exists():
@@ -206,6 +202,30 @@ def load_vanilla_b24934353(name: str) -> bytes:
 def has_vanilla_b24934353(name: str) -> bool:
     try:
         load_vanilla_b24934353(name)
+        return True
+    except FileNotFoundError:
+        return False
+
+
+def load_vanilla_b24994088(name: str) -> bytes:
+    """Load a CD 2.00.01 (buildid 24994088, 29 Aug 2026) vanilla extract.
+
+    npcinfo + storeinfo were captured for GitHub #393 (donr484's Dye
+    Hard and Greylight Special): the npcinfo dye-list layout and the
+    storeinfo exchange-item field are held to these bytes.
+    dyecolorgroupinfo was captured for AerowynX's Expanded Vendor
+    Inventory Rebuilt V3 Dye Addon (#191): its colour list layout.
+    """
+    packed = _TESTS_DIR / "fixtures" / "vanilla_b24994088" / (name + ".zlib")
+    if packed.exists():
+        return zlib.decompress(packed.read_bytes())
+    raise FileNotFoundError(
+        f"vanilla_b24994088 fixture {name!r} absent from tests/fixtures")
+
+
+def has_vanilla_b24994088(name: str) -> bool:
+    try:
+        load_vanilla_b24994088(name)
         return True
     except FileNotFoundError:
         return False

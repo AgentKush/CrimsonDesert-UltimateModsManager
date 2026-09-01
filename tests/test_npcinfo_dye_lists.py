@@ -26,12 +26,12 @@ from cdumm.engine.npcinfo_writer import (
 )
 from cdumm.semantic.parser import _parse_entry_header, parse_pabgh_index
 from tests.fixture_loaders import (
-    has_vanilla_b24934353,
-    load_vanilla_b24934353,
+    has_vanilla_b24994088,
+    load_vanilla_b24994088,
 )
 
 pytestmark = pytest.mark.skipif(
-    not has_vanilla_b24934353("npcinfo.pabgb"),
+    not has_vanilla_b24994088("npcinfo.pabgb"),
     reason="CD 2.0 npcinfo fixture absent")
 
 DYERS = list(range(1000221, 1000231))
@@ -44,7 +44,7 @@ GROUP_KEYS = [3363967477, 3693560950, 110038222, 1081114260, 2817281435,
 
 
 def _table():
-    return load_vanilla_b24934353("npcinfo.pabgb"), load_vanilla_b24934353("npcinfo.pabgh")
+    return load_vanilla_b24994088("npcinfo.pabgb"), load_vanilla_b24994088("npcinfo.pabgh")
 
 
 def _entries(body, header):
