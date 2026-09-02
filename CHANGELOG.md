@@ -7,6 +7,7 @@ Summaries are condensed; each version links to its full release notes. See the
 
 ## v3.16
 
+- **[v3.16.7](https://github.com/faisalkindi/CrimsonDesert-UltimateModsManager/releases/tag/v3.16.7)** -- _2026-09-02_ -- Rescan then Apply no longer leaves the game unable to start (stale index entry for a deleted mod folder was being restored every apply). Linux/Steam Deck: CDUMM starts under any Wine/Proton version (ICU bundled).
 - **[v3.16.6](https://github.com/faisalkindi/CrimsonDesert-UltimateModsManager/releases/tag/v3.16.6)** -- _2026-09-01_ -- Expanded Vendor Inventory Rebuilt V3 applies, with its Dye Addon and Bran's Specialty Store: DMM's add-to-list operation is accepted, shops can gain stock records and per-slot edits, Dyers can gain colour groups and texture sets, and the dye colour group table is writable.
 - **[v3.16.5](https://github.com/faisalkindi/CrimsonDesert-UltimateModsManager/releases/tag/v3.16.5)** -- _2026-08-31_ -- CDUMM no longer deletes installed 2.0 language packs (Steam's optional voice packs in slots 0036-0040); a scan, rescan or startup health check used to remove them.
 - **[v3.16.4](https://github.com/faisalkindi/CrimsonDesert-UltimateModsManager/releases/tag/v3.16.4)** -- _2026-08-31_ -- Dye Hard applies (new NPC dye-list writer). Greylight Special fully applies (store purchase-currency field pinned). README, CHANGELOG and Linux guide caught up.
