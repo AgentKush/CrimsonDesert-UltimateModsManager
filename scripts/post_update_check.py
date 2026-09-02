@@ -353,6 +353,78 @@ def check_equipslotinfo_records(body: bytes,
     return ok, detail
 
 
+def check_stringinfo_records(body: bytes, header: bytes) -> tuple[bool, str]:
+    """``apply_stringinfo`` with no intents -- the writer #224 needed
+    (Female Armor Module and the character-creator supplements).
+
+    stringinfo is a two-file table: every record is a length-prefixed
+    UTF-8 buffer, and editing one changes its length, so the companion
+    .pabgh offsets must be rebuilt. That makes the identity case a real
+    check rather than a trivial one -- ``apply_stringinfo`` documents a
+    ROUND-TRIP FLOOR ("when buffers_by_key is empty the output is
+    byte-identical to the input"), and reaching it means the pabgh
+    parsed, the record bounds were derived, every record was re-emitted
+    and the index was rebuilt. A layout change breaks that identity
+    without needing a single intent to drive it.
+
+    So this row drives the production entry point with an EMPTY intent
+    map and requires both files back unchanged, plus the pabgh to
+    survive parse_pabgh -> build_pabgh on its own.
+
+    The second gate is the share of records that match the
+    length-prefixed layout. This is the silent-no-op guard, and the
+    failure is in ``apply_stringinfo`` itself: a record whose declared
+    buffer length does not consume the rest of the record is logged at
+    WARNING and LEFT UNMODIFIED. The mod applies, reports no skips, and
+    the string never changes -- the same shape as the iteminfo opaque
+    fallback and #190's desynced record walk, reached a third way.
+
+    Unlike npcinfo there is no population that legitimately refuses:
+    every record in this table is a string record, so the gate is
+    completeness. Measured: vanilla110 30,940/30,940 and vanilla115
+    31,064/31,064, both byte-identical through the floor.
+
+    The 30,940 figure is also the one the writer's own docstring cites
+    for build 23831243, so the committed 1.10 table is that build and
+    the prose is confirmed rather than assumed.
+    """
+    from cdumm.engine.stringinfo_writer import (
+        _buffer_bytes_at,
+        _record_bounds,
+        apply_stringinfo,
+        build_pabgh,
+        parse_pabgh,
+    )
+    entries = parse_pabgh(header)
+    if not entries:
+        return False, ("pabgh index is empty or unparseable -- no record "
+                       "can be located, so every string intent is dropped")
+
+    index_rt = build_pabgh(entries) == header
+    new_body, new_header = apply_stringinfo(body, header, {})
+    body_rt = new_body == body
+    header_rt = new_header == header
+
+    bounds = _record_bounds(body, header)
+    match = sum(1 for _k, (st, en) in bounds.items()
+                if _buffer_bytes_at(body[st:en]) is not None)
+    total = len(bounds)
+
+    ok = index_rt and body_rt and header_rt and match == total
+    detail = (f"{total} records, {match}/{total} match the length-prefixed "
+              f"buffer layout, empty-intent round-trip "
+              f"{'byte-exact' if body_rt and header_rt else 'BROKEN'}, "
+              f"pabgh rebuild {'byte-exact' if index_rt else 'BROKEN'}")
+    if match != total:
+        detail += ("   [records that do not match are logged and left "
+                   "unmodified by apply_stringinfo, so string edits on "
+                   "them are silently dropped]")
+    elif not (body_rt and header_rt and index_rt):
+        detail += ("   [the no-op path does not reproduce the input, so "
+                   "the record framing or the index framing has moved]")
+    return ok, detail
+
+
 #: Ceiling on the share of iteminfo records carried opaque before this
 #: reads as breakage rather than the known tail.
 #:
@@ -540,6 +612,7 @@ _CHECKS = [
     ("dyecolorgroupinfo", "dyecolorgroupinfo",
      check_dyecolorgroupinfo_color_lists),
     ("equipslotinfo", "equipslotinfo", check_equipslotinfo_records),
+    ("stringinfo", "stringinfo", check_stringinfo_records),
 ]
 
 #: Tables with a verified field order, checked through select_order.
@@ -590,6 +663,9 @@ def fixture_versions() -> list[str]:
 #: #377's CD 2.0 layout and the b24934353 capture).
 _FIXTURE_GREEN = frozenset({
     ("vanilla110", "iteminfo"), ("vanilla110", "iteminfo-native"),
+    # #224's table, on both builds that have bytes. The pin is really
+    # "apply_stringinfo still reaches its documented round-trip floor".
+    ("vanilla110", "stringinfo"), ("vanilla115", "stringinfo"),
     ("vanilla113", "skill"), ("vanilla113", "storeinfo"),
     ("vanilla113", "iteminfo"), ("vanilla113", "iteminfo-native"),
     ("vanilla113", "characterinfo"),
