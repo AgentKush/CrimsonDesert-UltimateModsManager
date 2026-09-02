@@ -285,6 +285,74 @@ def check_dyecolorgroupinfo_color_lists(body: bytes,
     return ok, detail
 
 
+def check_equipslotinfo_records(body: bytes,
+                                header: bytes) -> tuple[bool, str]:
+    """``derive_fixed_block`` -> ``parse_entry_records`` ->
+    ``serialize_entry_payload`` -- the writer #190 needed (Character
+    Creator's Female Rapier and Shield Module).
+
+    This row exists for a reason the other table rows do not have: the
+    opaque per-record block size is NOT a constant. Pearl Abyss changed
+    it between versions -- 66 bytes on CD 1.10, 63 on CD 1.15 -- and the
+    writer derives it from the table rather than hardcoding it.
+
+    #190 is the worked example of getting that wrong. A hardcoded 66
+    desynced at the second record of every multi-record entry, so the
+    writer refused every intent and the mod applied nothing WHILE
+    REPORTING NO SKIPS. That is the same silent-no-op shape as the
+    iteminfo opaque fallback: the user installs a mod, sees no error,
+    and gets none of the content.
+
+    So the gate is threefold, and the first part is the one that matters:
+    the size must still be DERIVABLE (exactly one candidate re-serializes
+    every entry byte-exact), every entry must parse under it, and every
+    entry must round-trip. `derive_fixed_block` already refuses on zero
+    or several candidates, which is the correct behaviour -- this row
+    turns that refusal into a visible canary failure instead of a
+    surprise at apply time.
+
+    Measured on the committed CD 1.15 table: block 63, 17/17 entries,
+    223 records, 584 etl hashes, 0 mis-round-tripped.
+    """
+    from cdumm.engine.equipslotinfo_writer import (
+        EquipslotWriteRefused,
+        _entry_spans,
+        derive_fixed_block,
+        parse_entry_records,
+        serialize_entry_payload,
+    )
+    try:
+        block = derive_fixed_block(body, header)
+    except EquipslotWriteRefused as exc:
+        return False, (f"opaque block size is no longer derivable: {exc}"
+                       "   [the record walk cannot be positioned, so every "
+                       "etl_hashes intent will be refused and slot mods "
+                       "will apply nothing]")
+
+    spans = _entry_spans(body, header)
+    parsed = bad_rt = refused = records = hashes = 0
+    for key, payload, end in spans:
+        try:
+            unk, recs, footer = parse_entry_records(body, payload, end, block)
+        except EquipslotWriteRefused:
+            refused += 1
+            continue
+        parsed += 1
+        records += len(recs)
+        hashes += sum(len(h) for _c, h, _f in recs)
+        if serialize_entry_payload(unk, recs, footer, block) != body[payload:end]:
+            bad_rt += 1
+
+    ok = refused == 0 and bad_rt == 0 and parsed == len(spans)
+    detail = (f"block {block}, {parsed}/{len(spans)} entries parse, "
+              f"{refused} refused, {bad_rt} mis-round-tripped, "
+              f"{records} records, {hashes} etl hashes")
+    if refused or bad_rt:
+        detail += ("   [the derived block size no longer describes every "
+                   "entry; slot mods will be refused rather than applied]")
+    return ok, detail
+
+
 #: Ceiling on the share of iteminfo records carried opaque before this
 #: reads as breakage rather than the known tail.
 #:
@@ -471,6 +539,7 @@ _CHECKS = [
     ("npcinfo", "npcinfo", check_npcinfo_dye_lists),
     ("dyecolorgroupinfo", "dyecolorgroupinfo",
      check_dyecolorgroupinfo_color_lists),
+    ("equipslotinfo", "equipslotinfo", check_equipslotinfo_records),
 ]
 
 #: Tables with a verified field order, checked through select_order.
@@ -525,6 +594,10 @@ _FIXTURE_GREEN = frozenset({
     ("vanilla113", "iteminfo"), ("vanilla113", "iteminfo-native"),
     ("vanilla113", "characterinfo"),
     ("vanilla115", "statusgroupinfo"),
+    # #190's table. The opaque per-record block is 66 on CD 1.10 and 63
+    # here -- a version-dependent size the writer derives rather than
+    # hardcodes, so this pin is really "the size is still derivable".
+    ("vanilla115", "equipslotinfo"),
     ("vanilla116", "skill"), ("vanilla116", "storeinfo"),
     ("vanilla116", "iteminfo"), ("vanilla116", "iteminfo-native"),
     ("vanilla1161", "storeinfo"),
