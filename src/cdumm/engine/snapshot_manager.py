@@ -305,6 +305,26 @@ class SnapshotWorker(QObject):
             )
             return
 
+        # The mod dirs just removed may still be listed in meta/0.papgt
+        # (Steam verify does not touch entries it does not know). Strip
+        # every non-optional entry whose dir is gone BEFORE hashing, or
+        # the snapshot enshrines a dangling entry as 'vanilla', every
+        # later apply restores it, and the game refuses to start with
+        # 'There may be a problem with the game installation' (#393).
+        try:
+            from cdumm.archive.papgt_manager import strip_dangling_entries
+            n_stripped = strip_dangling_entries(self._game_dir)
+            if n_stripped:
+                logger.info("Pre-snapshot: stripped %d dangling PAPGT entries",
+                            n_stripped)
+                self.activity.emit(
+                    "cleanup",
+                    f"Removed {n_stripped} stale index entr"
+                    f"{'y' if n_stripped == 1 else 'ies'} from meta/0.papgt",
+                    "Pointed at mod folders that no longer exist")
+        except Exception as e:  # noqa: BLE001 - never block a snapshot
+            logger.warning("Pre-snapshot PAPGT strip failed: %s", e)
+
         self.progress_updated.emit(2, "Scanning game directories...")
 
         # Collect all files to hash

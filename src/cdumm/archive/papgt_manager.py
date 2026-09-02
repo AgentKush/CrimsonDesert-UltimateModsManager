@@ -155,6 +155,33 @@ def language_pack_dirs(game_dir: Path,
     return out
 
 
+def strip_dangling_entries(game_dir: Path) -> int:
+    """Remove non-optional PAPGT entries whose directory is gone.
+
+    Called right before a vanilla snapshot, after the rescan path has
+    deleted leftover mod dirs (#393). Uses the normal rebuild with no
+    snapshot as base, so optional language-pack placeholders survive
+    and every kept entry is rehashed from disk. Returns the number of
+    entries dropped; 0 when the file needed no change.
+    """
+    papgt = game_dir / "meta" / "0.papgt"
+    entries = read_papgt_entries(papgt)
+    if not entries:
+        return 0
+    dangling = [
+        n for n, f, _h in entries
+        if n.isdigit() and len(n) == 4 and int(n) >= 36
+        and not (game_dir / n).exists()
+        and not decode_papgt_entry_flags(f)[0]
+    ]
+    if not dangling:
+        return 0
+    rebuilt = PapgtManager(game_dir, None).rebuild()
+    papgt.write_bytes(rebuilt)
+    logger.info("PAPGT: stripped dangling entries before snapshot: %s", dangling)
+    return len(dangling)
+
+
 class PapgtManager:
     """Manages PAPGT rebuild from scratch."""
 
@@ -274,16 +301,24 @@ class PapgtManager:
                     is_vanilla_dir = int(dir_name) < 36
                 except (ValueError, TypeError):
                     is_vanilla_dir = True
-            # DANGLING entries (no dir on disk at all) are also kept,
-            # independent of the snapshot: CDUMM's own removals always
-            # go through ``exclude_dirs`` while the dir still exists
-            # (deletion is deferred to post-commit), so a dangling entry
-            # cannot be a CDUMM leftover — it is a vanilla placeholder
-            # (2.0 ships five: 0036-0040) or an external tool's entry.
-            # This keeps placeholders alive even when the vanilla
-            # snapshot is stale (snapshot only refreshes on apply, so a
-            # pre-2.0 snapshot is common right after the game update).
+            # DANGLING entries (no dir on disk) are kept ONLY when the
+            # entry itself says it is optional content — that is how
+            # 2.0's five language-pack placeholders (0036-0040) look, and
+            # it holds even when the vanilla snapshot is stale. A dangling
+            # NON-optional entry is a leftover: the rescan path deletes
+            # mod dirs before snapshotting without rebuilding the PAPGT,
+            # so the snapshot itself can carry one (#393, delichandelarosse:
+            # 'Missing directory 0052' after every apply, game refused to
+            # boot). Such an entry must be dropped, never kept or restored.
+            is_optional, _lt, _z = decode_papgt_entry_flags(flags)
             dir_missing = not (self._game_dir / dir_name).exists()
+            try:
+                _mod_range = int(dir_name) >= 36
+            except (ValueError, TypeError):
+                _mod_range = False
+            if dir_missing and _mod_range and not is_optional and not in_modified:
+                removed.append(dir_name)
+                continue
             if pamt_on_disk or in_modified or is_vanilla_dir or dir_missing:
                 live_entries.append((dir_name, flags, pamt_hash))
             else:
@@ -301,6 +336,20 @@ class PapgtManager:
                 continue
             if modified_pamts and _n in modified_pamts:
                 continue  # actively rewritten this apply; added below
+            # Only optional placeholders, or entries whose dir really
+            # exists, are worth restoring. A non-optional snapshot entry
+            # with no dir on disk is a mod leftover the snapshot captured
+            # (see above); restoring it references a dir the game cannot
+            # find and it refuses to start (#393).
+            _opt, _lt2, _z2 = decode_papgt_entry_flags(_f)
+            try:
+                _mod_range2 = int(_n) >= 36
+            except (ValueError, TypeError):
+                _mod_range2 = False
+            if _mod_range2 and not _opt and not (self._game_dir / _n).exists():
+                logger.info("PAPGT: not restoring dangling non-optional "
+                            "snapshot entry %s (mod leftover)", _n)
+                continue
             live_entries.append((_n, _f, _h))
             restored.append(_n)
         if restored:
