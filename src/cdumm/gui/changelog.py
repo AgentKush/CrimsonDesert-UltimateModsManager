@@ -21,6 +21,16 @@ _UNRELEASED_NOTES: list[str] = [
 
 CHANGELOG = [
     {
+        "version": "3.16.7",
+        "date": "2026-09-02",
+        "notes": [
+            "<b>Rescan then Apply no longer leaves the game unable to start.</b> Rescan deleted leftover mod folders before taking its snapshot but did not remove them from the game's archive index, so the snapshot recorded an index pointing at a folder that no longer existed. Every later Apply put that entry back (the repeated \"[PAPGT] Missing directory\" warning) until the game refused to launch with \"There may be a problem with the game installation\". Rescan now cleans the index first, and Apply never brings back an index entry for a mod folder that is gone. If you hit this: Steam file verify, then Rescan on this version.",
+            "<b>Linux / Steam Deck: CDUMM starts under any Wine or Proton version.</b> The UI toolkit needs a Windows system library (ICU) that Wine before 11.5 does not ship, so the app died at startup with a QtWidgets error. CDUMM now carries its own copy.",
+            "Checked against today's game patch (build 25050808): every table CDUMM edits still decodes.",
+            "Reported by <b>delichandelarosse</b> and <b>NonDScript</b>.",
+        ],
+    },
+    {
         "version": "3.16.6",
         "date": "2026-09-01",
         "notes": [
