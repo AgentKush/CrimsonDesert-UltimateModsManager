@@ -425,6 +425,74 @@ def check_stringinfo_records(body: bytes, header: bytes) -> tuple[bool, str]:
     return ok, detail
 
 
+def check_dropset_records(body: bytes, header: bytes) -> tuple[bool, str]:
+    """``parse_dropset_record`` -> ``serialize_dropset_record`` over
+    every record, the pair NattKh-exported drop mods go through.
+
+    The DropSet layout is the most variable of the tables checked here:
+    two embedded length-prefixed strings, a counted drops list whose
+    elements themselves carry optional trailing fields, and a trailer.
+    The parser is correspondingly strict -- it raises unless the walk
+    consumes the record EXACTLY -- so unlike stringinfo the parse itself
+    is the drift signal and does not need a separate layout-match gate.
+
+    That strictness is also why the round-trip matters here in a way it
+    does not for stringinfo's no-op path: serialize_dropset_record
+    rebuilds the record from decoded fields rather than re-emitting the
+    original bytes, so a byte-exact result means every field, including
+    the optional per-drop extras, was understood.
+
+    Both gates are completeness. Every record in this table is a
+    DropSet; there is no population that legitimately fails to parse, so
+    a single failure means the layout moved and drop mods will be
+    dropped -- build_drops_replacement_change returns None on a parse
+    failure, which the apply pipeline treats as "no change emitted".
+    Silent again, from a fourth mechanism.
+
+    Measured on the committed CD 1.13 table: 14,575/14,575 parse,
+    14,575 round-trip byte-exact, 17,920 drops. That 14,575 is the
+    figure build_drop_append_change's docstring cites, so the committed
+    table is the one the claim was verified against.
+    """
+    from cdumm.engine.dropset_writer import (
+        parse_dropset_record,
+        serialize_dropset_record,
+    )
+    from cdumm.semantic.parser import parse_pabgh_index
+    _key_size, offs = parse_pabgh_index(header, "dropsetinfo")
+    if not offs:
+        return False, "pabgh index has no entries"
+    starts = sorted(offs.values())
+    spans = starts + [len(body)]
+
+    parsed = failed = bad_rt = drops = 0
+    for off in offs.values():
+        rec = body[off:spans[spans.index(off) + 1]]
+        try:
+            ds = parse_dropset_record(rec)
+        except Exception:                       # noqa: BLE001
+            failed += 1
+            continue
+        parsed += 1
+        drops += len(ds.drops)
+        if serialize_dropset_record(ds) != rec:
+            bad_rt += 1
+
+    total = len(offs)
+    ok = failed == 0 and bad_rt == 0 and parsed == total
+    detail = (f"{parsed}/{total} records parse, {failed} failed, "
+              f"{bad_rt} mis-round-tripped, {drops} drops")
+    if failed:
+        detail += ("   [a record the parser cannot consume exactly means "
+                   "the layout moved; build_drops_replacement_change "
+                   "returns None for it and the drop edit is dropped]")
+    elif bad_rt:
+        detail += ("   [a record parses but does not rebuild to its own "
+                   "bytes, so a field is being decoded and re-encoded "
+                   "wrongly -- worse than failing to parse]")
+    return ok, detail
+
+
 #: Ceiling on the share of iteminfo records carried opaque before this
 #: reads as breakage rather than the known tail.
 #:
@@ -613,6 +681,7 @@ _CHECKS = [
      check_dyecolorgroupinfo_color_lists),
     ("equipslotinfo", "equipslotinfo", check_equipslotinfo_records),
     ("stringinfo", "stringinfo", check_stringinfo_records),
+    ("dropsetinfo", "dropsetinfo", check_dropset_records),
 ]
 
 #: Tables with a verified field order, checked through select_order.
@@ -669,6 +738,9 @@ _FIXTURE_GREEN = frozenset({
     ("vanilla113", "skill"), ("vanilla113", "storeinfo"),
     ("vanilla113", "iteminfo"), ("vanilla113", "iteminfo-native"),
     ("vanilla113", "characterinfo"),
+    # NattKh-derived drop mods. The parser consumes each record exactly
+    # or raises, so the parse is itself the drift signal.
+    ("vanilla113", "dropsetinfo"),
     ("vanilla115", "statusgroupinfo"),
     # #190's table. The opaque per-record block is 66 on CD 1.10 and 63
     # here -- a version-dependent size the writer derives rather than
