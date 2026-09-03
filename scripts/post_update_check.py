@@ -493,6 +493,124 @@ def check_dropset_records(body: bytes, header: bytes) -> tuple[bool, str]:
     return ok, detail
 
 
+#: Knowledge records a character must have from the start. Used as the
+#: SEMANTIC anchor for knowledgeinfo's is_default offset -- see
+#: check_knowledgeinfo_is_default for why a structural check is not
+#: enough on this table.
+_KNOWLEDGE_START_KNOWN = (
+    "Knowledge_Hp", "Knowledge_CriticalRate", "Knowledge_AttackSpeedRate",
+    "Knowledge_MoveSpeedRate", "Knowledge_Fatal", "Knowledge_KnockOut",
+)
+
+
+def check_knowledgeinfo_is_default(body: bytes,
+                                   header: bytes) -> tuple[bool, str]:
+    """``locate_is_default`` over every record, plus the evidence that
+    the offset still MEANS what the writer thinks it means.
+
+    This is the one table here where locating the field successfully is
+    not sufficient, and the distinction is the reason for the row.
+    ``locate_is_default`` refuses unless the record head matches a
+    structural shape: the key echoes the index, a plausible name length,
+    a zero byte at name_end, a 13 at name_end+6, and a value in {0,1}.
+    Every one of those could still hold after a layout change that moved
+    the field -- and then the writer would flip a DIFFERENT byte, on 166
+    records, with the mod reporting success.
+
+    ``is_default`` was never read off a schema. ``_isDefault`` is
+    declared ``direct_15B``, a tagged primitive whose value position the
+    schema does not give, so the offset was derived statistically: of
+    the offsets in ``name_end+0..+79``, exactly two are boolean AND
+    non-constant across all records -- +5 (true on 562) and +17 (true on
+    51). A statistic that can be re-derived can also silently move.
+
+    So the gate is threefold: every record must locate; the offset must
+    still be one of exactly two non-constant boolean offsets in the
+    window; and -- the check that actually pins the meaning -- the six
+    knowledges a character cannot start without must all read 1. If the
+    field moved, those named records stop reading true, whatever the
+    structural constants say.
+
+    Measured on the committed CD 1.15 table: 6,219/6,219 locate, 562
+    default-known, offsets {5, 17} boolean and non-constant, all six
+    anchors true.
+
+    One correction to the writer's own docstring, which this row now
+    pins: it says the 51 records at +17 "are
+    Knowledge_Skill_Farming/Ranching/Logging/Mining_I..III". That is
+    four skills over three tiers, which is twelve, not fifty-one. The
+    real set spans NINETEEN life skills (Banking, Building, Crafting,
+    Drawing, Engineering, Farming, Fishing, Foodprocessing, Forging,
+    Gathering, Logging, Mining, Ornamenting, Ranching, Refining,
+    Strengthening, SuperWorker, Weaving, Worker_Fighting). The count and
+    the conclusion -- +17 is a life-skill flag, not a start-known flag
+    -- are both correct; only the enumeration reads as exhaustive when
+    it is illustrative.
+    """
+    import struct as _struct
+
+    from cdumm.engine.knowledgeinfo_writer import (
+        IS_DEFAULT_OFFSET,
+        _record_bounds,
+        locate_is_default,
+    )
+    bounds = _record_bounds(header, body)
+    if not bounds:
+        return False, "pabgh index has no entries"
+
+    located = refused = ones = 0
+    names: dict[str, int] = {}
+    heads: list[tuple[int, int]] = []          # (name_end, hi)
+    for key, (lo, hi) in bounds.items():
+        pos = locate_is_default(body, lo, hi, key)
+        if pos is None:
+            refused += 1
+            continue
+        located += 1
+        if body[pos] == 1:
+            ones += 1
+        name_len = _struct.unpack_from("<I", body, lo + 4)[0]
+        names[body[lo + 8:lo + 8 + name_len].decode("ascii", "replace")] = pos
+        heads.append((lo + 8 + name_len, hi))
+
+    # Which offsets in the derivation window are boolean AND non-constant?
+    boolean_nonconst = []
+    for off in range(80):
+        true_count = 0
+        for name_end, hi in heads:
+            pos = name_end + off
+            if pos >= hi or body[pos] not in (0, 1):
+                break
+            true_count += body[pos]
+        else:
+            if true_count:
+                boolean_nonconst.append(off)
+
+    missing = [n for n in _KNOWLEDGE_START_KNOWN
+               if names.get(n) is None or body[names[n]] != 1]
+
+    total = len(bounds)
+    ok = (refused == 0 and located == total
+          and IS_DEFAULT_OFFSET in boolean_nonconst
+          and len(boolean_nonconst) == 2
+          and not missing)
+    detail = (f"{located}/{total} records locate, {refused} refused, "
+              f"{ones} default-known, boolean non-constant offsets "
+              f"{boolean_nonconst}, {len(_KNOWLEDGE_START_KNOWN) - len(missing)}"
+              f"/{len(_KNOWLEDGE_START_KNOWN)} start-known anchors true")
+    if missing:
+        detail += (f"   [offset +{IS_DEFAULT_OFFSET} no longer reads true on "
+                   f"{missing} -- it is not is_default any more, so the "
+                   f"unlock mods would flip an unrelated byte]")
+    elif IS_DEFAULT_OFFSET not in boolean_nonconst:
+        detail += (f"   [+{IS_DEFAULT_OFFSET} is no longer a non-constant "
+                   f"boolean; the field has moved or changed width]")
+    elif len(boolean_nonconst) != 2:
+        detail += ("   [the two-candidate derivation no longer holds; the "
+                   "offset needs re-deriving before it can be trusted]")
+    return ok, detail
+
+
 #: Ceiling on the share of iteminfo records carried opaque before this
 #: reads as breakage rather than the known tail.
 #:
@@ -682,6 +800,7 @@ _CHECKS = [
     ("equipslotinfo", "equipslotinfo", check_equipslotinfo_records),
     ("stringinfo", "stringinfo", check_stringinfo_records),
     ("dropsetinfo", "dropsetinfo", check_dropset_records),
+    ("knowledgeinfo", "knowledgeinfo", check_knowledgeinfo_is_default),
 ]
 
 #: Tables with a verified field order, checked through select_order.
@@ -746,6 +865,9 @@ _FIXTURE_GREEN = frozenset({
     # here -- a version-dependent size the writer derives rather than
     # hardcodes, so this pin is really "the size is still derivable".
     ("vanilla115", "equipslotinfo"),
+    # The unlock mods' table. Pinned on the SEMANTIC anchor, not just on
+    # locating the byte -- see the check's docstring.
+    ("vanilla115", "knowledgeinfo"),
     ("vanilla116", "skill"), ("vanilla116", "storeinfo"),
     ("vanilla116", "iteminfo"), ("vanilla116", "iteminfo-native"),
     ("vanilla1161", "storeinfo"),
