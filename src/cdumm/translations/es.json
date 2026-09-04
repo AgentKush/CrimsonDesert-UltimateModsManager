@@ -657,6 +657,7 @@
   "tools.rescan.requested": "Reescaneo Solicitado",
   "tools.rescan.requested_desc": "La actualización del snapshot ha sido iniciada. Puede tardar un momento según el tamaño de los archivos del juego.",
   "tools.rescan.enable_hint": "Marca la casilla de arriba para activar",
+  "tools.rescan.complete": "¡Reescaneo completo!",
   "tools.stat.never": "Never",
   "tools.error": "Error: {detail}",
   "tools.progress.checking": "Checking {name}...",
@@ -980,5 +981,7 @@
   "activity.msg_removed_stale_appdata": "AppData obsoleto eliminado ({size_mb} MB)",
   "stats.outdated": "Desactualizados",
   "mod_list.click_to_update": "Haz clic para actualizar",
-  "tooltip.update_available_with_version": "Actualización disponible. Instalado: {version}. Haz clic para actualizar."
+  "tooltip.update_available_with_version": "Actualización disponible. Instalado: {version}. Haz clic para actualizar.",
+  "settings.nexus_none_linked": "Ninguno de tus {count} mods está vinculado a una página de NexusMods, así que ninguno puede comprobarse. Los mods importados desde un archivo descargado manualmente no tienen enlace de Nexus; reimpórtalos mediante la descarga de Nexus o añade el enlace en la tarjeta del mod.",
+  "settings.nexus_up_to_date_partial": "{checked} mod(s) vinculados están al día. {unlinked} mod(s) no tienen enlace de NexusMods y no pudieron comprobarse."
 }

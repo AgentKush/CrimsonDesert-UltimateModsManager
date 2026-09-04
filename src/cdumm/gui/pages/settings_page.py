@@ -989,7 +989,8 @@ class SettingsPage(SmoothScrollArea):
     def _on_game_dir_browse(self) -> None:
         """Open a folder browser to change the game directory."""
         current = str(self._game_dir) if self._game_dir else ""
-        new_dir = QFileDialog.getExistingDirectory(
+        from cdumm.gui.file_dialogs import pick_directory
+        new_dir = pick_directory(
             self.window(), tr("settings.game_dir_picker_title"), current)
         if not new_dir:
             return
@@ -1396,6 +1397,18 @@ class SettingsPage(SmoothScrollArea):
             return
 
         combined = mods + asi_mods
+        # GitHub #379 (vizionblind on Nexus): mods without a Nexus id are
+        # invisible to check_mod_updates, and a result of "no outdated
+        # mods" was rendered as "All mods are up to date!" even when NOT
+        # ONE mod was actually checkable. Count them here (main thread)
+        # so the result slot can say what was really checked.
+        def _linked(m):
+            try:
+                return int(m.get("nexus_mod_id") or 0) > 0
+            except (TypeError, ValueError):
+                return False
+        self._pending_linked = sum(1 for m in combined if _linked(m))
+        self._pending_unlinked = len(combined) - self._pending_linked
         _db = self._db
 
         import threading
@@ -1484,7 +1497,27 @@ class SettingsPage(SmoothScrollArea):
         # outdated mods — filter them out or we claim every matched
         # mod has a newer version on Nexus, with local == latest.
         outdated = filter_outdated(getattr(self, "_pending_updates", []))
+        linked = getattr(self, "_pending_linked", 0)
+        unlinked = getattr(self, "_pending_unlinked", 0)
         if not outdated:
+            # "Up to date" is only an honest summary for mods that were
+            # actually checkable. A mod imported from a manually
+            # downloaded archive has no Nexus id, is skipped entirely by
+            # check_mod_updates, and used to be silently counted into
+            # "All mods are up to date!" -- a user whose whole library
+            # was imported that way got a green success with zero mods
+            # checked (GitHub #379).
+            if linked == 0 and unlinked > 0:
+                self._set_nexus_status(
+                    tr("settings.nexus_none_linked", count=unlinked),
+                    InfoLevel.WARNING)
+                return
+            if unlinked > 0:
+                self._set_nexus_status(
+                    tr("settings.nexus_up_to_date_partial",
+                       checked=linked, unlinked=unlinked),
+                    InfoLevel.SUCCESS)
+                return
             self._set_nexus_status(
                 tr("settings.nexus_all_up_to_date"), InfoLevel.SUCCESS)
             return
@@ -1578,11 +1611,9 @@ class SettingsPage(SmoothScrollArea):
         except Exception:
             start_dir = ""
 
-        picked = QFileDialog.getExistingDirectory(
-            self,
-            tr("settings.cdmods_path_picker_title"),
-            start_dir,
-        )
+        from cdumm.gui.file_dialogs import pick_directory
+        picked = pick_directory(
+            self, tr("settings.cdmods_path_picker_title"), start_dir)
         if not picked:
             return  # user cancelled
         picked_path = Path(picked)

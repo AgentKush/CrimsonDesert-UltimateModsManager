@@ -1752,6 +1752,50 @@ def _write_DropDefaultData_CD113(w: _Writer, v: dict) -> None:
     w.u8(v["use_socket"])
 
 
+# ── CD 2.0 (buildid 24934353, 26 Aug 2026): SubItem None tag 17 -> 18 ────
+# The 2.0 update renumbered the SubItem None sentinel: every record that
+# carried tag 17 on b24773079 carries tag 18 on 2.0 (6,569 of 6,573
+# shared records; the other 4 use tag 0, populated, and are unchanged).
+# 17 and 18 never co-occur in either build -- 18 does not exist in
+# pre-2.0 data and 17 does not exist in 2.0 data -- so keeping BOTH in
+# the None set would also parse; the set here matches only what 2.0
+# actually ships so a future reuse of 17 as a populated tag fails
+# loudly (exact tiling) instead of silently mis-parsing. GitHub #377.
+_SUBITEM_NONE_TAGS_CD20 = (14, 18)
+
+
+def _read_SubItem_CD20(r: _Reader) -> dict:
+    type_id = r.u8()
+    value = None if type_id in _SUBITEM_NONE_TAGS_CD20 else r.u32()
+    return {"type_id": type_id, "value": value}
+
+
+def _write_SubItem_CD20(w: _Writer, v: dict) -> None:
+    w.u8(v["type_id"])
+    if v["type_id"] not in _SUBITEM_NONE_TAGS_CD20:
+        w.u32(v["value"])
+
+
+def _read_DropDefaultData_CD20(r: _Reader) -> dict:
+    return {
+        "drop_enchant_level": r.u16(),
+        "socket_item_list": r.carray(_Reader.u32),
+        "add_socket_material_item_list": r.carray(_read_SocketMaterialItem),
+        "default_sub_item": _read_SubItem_CD20(r),
+        "socket_valid_count": r.u8(),
+        "use_socket": r.u8(),
+    }
+
+
+def _write_DropDefaultData_CD20(w: _Writer, v: dict) -> None:
+    w.u16(v["drop_enchant_level"])
+    w.carray(v["socket_item_list"], _Writer.u32)
+    w.carray(v["add_socket_material_item_list"], _write_SocketMaterialItem)
+    _write_SubItem_CD20(w, v["default_sub_item"])
+    w.u8(v["socket_valid_count"])
+    w.u8(v["use_socket"])
+
+
 def _read_EnchantData_CD113(r: _Reader) -> dict:
     """Pre-1.13 EnchantData plus the u32 CD 1.12 added to it."""
     v = _read_EnchantData(r)
@@ -2166,6 +2210,67 @@ def _write_PrefabData_CD113(w: _Writer, v: dict) -> None:
     w.u8(v["unk_flag_c"])
 
 
+def _read_PrefabData_CD116b(r: _Reader) -> dict:
+    """A later patch adds one u32 to each PrefabData element, right
+    after ``tribe_gender_list`` and before ``is_craft_material``.
+
+    On the exe fingerprinted SHA256 3416fdbf...c7 (2026-08-17 build):
+    ``cd116`` (:func:`_read_PrefabData_CD113`, no extra field) round-trips
+    only 81 of a 506-record sample; every other layout scores 0. Every
+    matched record's size grew over the committed CD 1.16 fixture by
+    EXACTLY ``4 * len(prefab_data_list)`` bytes -- 0 extra prefab
+    entries costs 0 bytes, 1 costs 4, 2 costs 8, ... 11 costs 44, with
+    no exceptions among the size buckets that aren't also explained by
+    an unrelated prefab-list edit between builds. That is a per-element
+    insertion, not a per-record one.
+
+    Placement (after tribe_gender_list, before is_craft_material) is
+    from the field VALUES, not the round-trip: reading the new u32
+    AFTER is_craft_material/unk_flag_b/unk_flag_c also round-trips
+    6,573/6,573 byte-exact (an empty/misplaced split can still
+    reproduce its own bytes), but under that placement the three u8s
+    read as the same non-boolean triple (115, 225, 197) on literally
+    every one of 12,274 prefab entries -- three ``unk_flag_*`` fields
+    that were 0 on almost every CD 1.16 record turning into one
+    constant non-zero byte triple table-wide is what a wrong split
+    looks like. Placed before them instead, the three read {0: 12205,
+    1: 69}, {0: 12184, 1: 90}, and {0: 6286, 3: 5631, 1: 353, 2: 4} --
+    back in the boolean/small-enum range the field names imply, and
+    matching the CD 1.16 fixture's own domain on entries whose byte
+    count didn't move.
+
+    The new field itself is a plain constant, 0xEAC5E173, on all
+    12,274 entries: a sentinel value (also seen elsewhere in this table
+    as the constant ``map_icon_path``), not per-item data, so it is
+    carried opaque as ``unk_prefab_hash`` rather than assigned meaning
+    it doesn't have evidence for yet.
+    """
+    return {
+        "scale": [r.f32(), r.f32(), r.f32()],
+        "prefab_names": r.carray(_Reader.u32),
+        "animation_path_list": r.carray(_Reader.u32),
+        "equip_slot_list": r.carray(_Reader.u16),
+        "tribe_gender_list": r.carray(_Reader.u32),
+        "unk_prefab_hash": r.u32(),
+        "is_craft_material": r.u8(),
+        "unk_flag_b": r.u8(),
+        "unk_flag_c": r.u8(),
+    }
+
+
+def _write_PrefabData_CD116b(w: _Writer, v: dict) -> None:
+    for f in v["scale"]:
+        w.f32(f)
+    w.carray(v["prefab_names"], _Writer.u32)
+    w.carray(v["animation_path_list"], _Writer.u32)
+    w.carray(v["equip_slot_list"], _Writer.u16)
+    w.carray(v["tribe_gender_list"], _Writer.u32)
+    w.u32(v["unk_prefab_hash"])
+    w.u8(v["is_craft_material"])
+    w.u8(v["unk_flag_b"])
+    w.u8(v["unk_flag_c"])
+
+
 def _with_cd113_prefab_tail(fields):
     """CD 1.13 relocated prefab_data_list to the end of the item record.
 
@@ -2365,6 +2470,46 @@ def _with_cd116_tail(fields, source):
 _ITEM_FIELDS_CD116 = _with_cd116_tail(
     _with_cd116(_ITEM_FIELDS_CD113_ENCHANT), _ITEM_FIELDS_CD113_ENCHANT)
 
+#: CD 1.16b: identical to CD 1.16 except each PrefabData element grew
+#: one u32 (see _read_PrefabData_CD116b). Same field list, just the
+#: prefab_data_list codec swapped -- everything ahead of the prefab
+#: tail is unaffected, so building from _ITEM_FIELDS_CD116 rather than
+#: re-deriving the whole tail keeps the two layouts from drifting apart
+#: on the fields they do share.
+_ITEM_FIELDS_CD116B = [
+    (spec[0], spec[1], _read_PrefabData_CD116b, _write_PrefabData_CD116b)
+    if spec[0] == "prefab_data_list" else spec
+    for spec in _ITEM_FIELDS_CD116
+]
+
+_ITEM_FIELDS_CD20 = []
+for _spec in _ITEM_FIELDS_CD116B:
+    if _spec[0] == "drop_default_data":
+        # 2.0 renumbered the SubItem None tag inside this struct
+        # (17 -> 18); everything else in it is unchanged.
+        _ITEM_FIELDS_CD20.append(
+            ("drop_default_data", "struct",
+             _read_DropDefaultData_CD20, _write_DropDefaultData_CD20))
+    elif _spec[0] == "repair_data_list":
+        # 2.0 inserted 4 bytes immediately before repair_data_list.
+        # Derived, not assumed: on the 4 records whose default_sub_item
+        # is populated (tag 0, so the sentinel renumber cannot confound
+        # the walk), every field position matches b24773079 byte-for-
+        # byte up to this boundary, and the new build carries exactly
+        # `00 00 ff ff` here before an otherwise identical tail.
+        # Read as two u16s because the table-wide value domain is a
+        # u16 pair, not one u32. Measured on all 6,810 live records:
+        # the first is a flag-like {0: 6055, 0xFFFF: 755}; the second
+        # is 0xFFFF on 6,688 with real small values on the rest
+        # (20 x77, 100 x25, 50 x11, 15, 30, ...) -- the same
+        # sentinel-plus-seconds shape as respawn_time_seconds. As one
+        # u32 the common value would be the nonsensical 0xFFFF0000.
+        _ITEM_FIELDS_CD20.append(("unk_pre_repair_20_a", "u16"))
+        _ITEM_FIELDS_CD20.append(("unk_pre_repair_20_b", "u16"))
+        _ITEM_FIELDS_CD20.append(_spec)
+    else:
+        _ITEM_FIELDS_CD20.append(_spec)
+
 # (label, fields) candidates, tried in order by detect_iteminfo_layout.
 # Most specific first: the enchant variant decodes 6508/6508 on live 1.13,
 # where the plain relocated variant only manages the 3167 non-equipment
@@ -2373,11 +2518,23 @@ _ITEM_LAYOUTS = (
     ("default", None),                       # None -> _ITEM_FIELDS
     ("cd113_prefab_relocated", _ITEM_FIELDS_CD113),
     ("cd113_enchant", _ITEM_FIELDS_CD113_ENCHANT),
-    # CD 1.16. Last = most specific: detect_iteminfo_layout keeps the
-    # later layout on a tie. cd116 scores 6,581/6,581 on live 1.16 where
-    # every earlier layout scores 0, and 0 on the 1.13 fixture where
-    # cd113_enchant scores 6,508/6,508 -- so the two never compete.
+    # CD 1.16. cd116 scores 6,581/6,581 on live 1.16 where every earlier
+    # layout scores 0, and 0 on the 1.13 fixture where cd113_enchant
+    # scores 6,508/6,508 -- so the two never compete.
     ("cd116", _ITEM_FIELDS_CD116),
+    # CD 1.16b (see _read_PrefabData_CD116b). Last = most specific:
+    # detect_iteminfo_layout keeps the later layout on a tie, and cd116b
+    # can only round-trip a superset of what cd116 does (a table with no
+    # extra-sized PrefabData elements decodes identically either way).
+    # Scores 6,573/6,573 on the live table fingerprinted there where
+    # cd116 manages 1,025, and 0 on the CD 1.16 fixture where cd116
+    # scores 6,581/6,581 -- so this one never wins on an older table.
+    ("cd116b", _ITEM_FIELDS_CD116B),
+    # CD 2.0 (buildid 24934353). Last = newest/most specific. Scores
+    # 6,810/6,810 on the live 2.0 table where cd116b scores 0, and 0 on
+    # the b24773079 fixture where cd116b scores 6,573/6,573 -- the two
+    # never compete. GitHub #377.
+    ("cd20", _ITEM_FIELDS_CD20),
 )
 
 

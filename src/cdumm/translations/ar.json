@@ -657,6 +657,7 @@
   "tools.rescan.requested": "تم طلب إعادة المسح",
   "tools.rescan.requested_desc": "تم بدء تحديث اللقطة. قد يستغرق هذا لحظة حسب حجم ملفات اللعبة.",
   "tools.rescan.enable_hint": "حدد المربع أعلاه للتفعيل",
+  "tools.rescan.complete": "اكتملت إعادة المسح!",
   "tools.stat.never": "Never",
   "tools.error": "Error: {detail}",
   "tools.progress.checking": "Checking {name}...",
@@ -980,5 +981,7 @@
   "activity.msg_removed_stale_appdata": "تمت إزالة AppData القديمة ({size_mb} م.ب)",
   "stats.outdated": "قديمة",
   "mod_list.click_to_update": "انقر للتحديث",
-  "tooltip.update_available_with_version": "يتوفر تحديث. المثبَّت: {version}. انقر للتحديث."
+  "tooltip.update_available_with_version": "يتوفر تحديث. المثبَّت: {version}. انقر للتحديث.",
+  "settings.nexus_none_linked": "لا يرتبط أيٌّ من تعديلاتك ({count}) بصفحة NexusMods، لذا لا يمكن فحص أيٍّ منها. التعديلات المستوردة من أرشيف منزَّل يدويًا لا تحمل رابط Nexus؛ أعد استيرادها عبر تنزيل Nexus أو أضف الرابط من بطاقة التعديل ليصبح فحصها ممكنًا.",
+  "settings.nexus_up_to_date_partial": "{checked} تعديل مرتبط محدث. {unlinked} تعديل بلا رابط NexusMods ولم يتسنَّ فحصه."
 }

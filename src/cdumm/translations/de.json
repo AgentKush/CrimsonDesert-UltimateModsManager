@@ -774,6 +774,7 @@
   "tools.rescan.requested": "Scan angefordert",
   "tools.rescan.requested_desc": "Der Snapshot wird aktualisiert. Das kann je nach Dateigröße etwas dauern.",
   "tools.rescan.enable_hint": "Oben aktivieren, um fortzufahren",
+  "tools.rescan.complete": "Scan abgeschlossen!",
   "tools.stat.never": "Nie",
   "tools.error": "Fehler: {detail}",
   "tools.progress.checking": "Prüfe {name}...",
@@ -1318,5 +1319,7 @@
   "recovery.all_skipped_msg": "Deine Mods wurden deaktiviert, da ihre Originaldateien fehlen. Füge die Archive erneut hinzu, um sie zu importieren.",
   "recovery.partial_skipped_msg": "{count} Mod(s) wurden deaktiviert, da ihre Originaldateien fehlen: {names}",
   "recovery.complete_msg": "Wiederherstellung abgeschlossen. Starte das Spiel. Falls es weiterhin abstürzt, prüfe Nexus auf Updates deiner Mods.",
-  "settings.steam_launch_method_exe": "Spiel-Exe (Steam überspringen)"
+  "settings.steam_launch_method_exe": "Spiel-Exe (Steam überspringen)",
+  "settings.nexus_none_linked": "Keiner deiner {count} Mods ist mit einer NexusMods-Seite verknüpft, daher kann keiner geprüft werden. Aus manuell heruntergeladenen Archiven importierte Mods haben keinen Nexus-Link; importiere sie über den Nexus-Download neu oder ergänze den Link auf der Mod-Karte.",
+  "settings.nexus_up_to_date_partial": "{checked} verknüpfte Mod(s) sind aktuell. {unlinked} Mod(s) haben keinen NexusMods-Link und konnten nicht geprüft werden."
 }

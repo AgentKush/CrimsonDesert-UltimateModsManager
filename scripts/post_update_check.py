@@ -107,15 +107,25 @@ def check_storeinfo(body: bytes, header: bytes) -> tuple[bool, str]:
     # Takes the ENTRY OFFSETS, not the header bytes. Passing the header
     # here silently picks a wrong layout instead of raising.
     layout = detect_storeinfo_layout(body, starts)
-    located = records = empty = not_found = bad_rt = 0
+    located = records = empty = not_found = ambiguous = bad_rt = 0
+    # Widest and narrowest failing entries, to say whether the failures
+    # track list size -- the difference between "a few odd stores" and
+    # "every store past N records".
+    amb_span: list[int] = []
     for key, off in offs.items():
         end = spans[spans.index(off) + 1]
         try:
             recs, s, e = locate_stock_list(
                 body, _entry_payload(body, off), end, key, layout)
         except StoreListNotFound as exc:
-            if "too" in str(exc) or "provably" in str(exc):
+            # Read the flags, never the message. Substring-matching the
+            # text bucketed "ambiguous, refusing" as not-found, which
+            # hid the one distinction that decides what the fix is.
+            if exc.provably_empty:
                 empty += 1
+            elif exc.ambiguous:
+                ambiguous += 1
+                amb_span.append(end - _entry_payload(body, off))
             else:
                 not_found += 1
             continue
@@ -126,11 +136,779 @@ def check_storeinfo(body: bytes, header: bytes) -> tuple[bool, str]:
         records += len(recs)
         if serialize_stock_list(recs, layout) != body[s:e]:
             bad_rt += 1
-    ok = not_found == 0 and bad_rt == 0 and located + empty == len(offs)
-    return ok, (f"layout {layout.label!r}: {located} located + {empty} "
-                f"provably empty = {located + empty}/{len(offs)}, "
-                f"{records} stock records, {not_found} not-found, "
-                f"{bad_rt} mis-round-tripped")
+    ok = (not_found == 0 and ambiguous == 0 and bad_rt == 0
+          and located + empty == len(offs))
+    msg = (f"layout {layout.label!r}: {located} located + {empty} "
+           f"provably empty = {located + empty}/{len(offs)}, "
+           f"{records} stock records, {not_found} not-found, "
+           f"{ambiguous} ambiguous, {bad_rt} mis-round-tripped")
+    if ambiguous:
+        msg += (f" [ambiguous entries span {min(amb_span)}-{max(amb_span)} "
+                f"payload bytes; the shape parses and round-trips, so "
+                f"narrow the scan rather than re-derive the record]")
+    return ok, msg
+
+
+def check_npcinfo_dye_lists(body: bytes, header: bytes) -> tuple[bool, str]:
+    """``locate_dye_lists`` -> ``serialize_dye_lists`` -- the writer the
+    Dye Hard class of mod goes through (#393).
+
+    npcinfo has no field order and no native record schema; the dye lists
+    are found by walking to the four tagged condition blobs every Dyer
+    carries and then tiling two counted lists that must land exactly on
+    the trailing bytes. Tiling is the whole safety property: an entry
+    that does not tile is REFUSED, never best-effort patched, so a moved
+    layout costs applied intents rather than a corrupted table.
+
+    Most entries refusing is therefore correct and expected -- the great
+    majority of NPCs are not Dyers and do not carry the anchor blobs.
+    What must not happen is a tiled entry that fails to reproduce its own
+    bytes, or the anchor vanishing so that NOTHING tiles. Those are the
+    two gates.
+
+    Measured on the committed CD 2.0 table: 462 of 542 entries tile, 80
+    refuse, 0 mis-round-trip, and 11 entries carry non-empty lists
+    (20 groups and 20 texture sets between them).
+
+    Worth writing down because the counts disagree: #393's commit message
+    reports "452 of 542 NPCs tile". Driving the production path over the
+    committed bytes gives 462, and no upstream test pins either figure --
+    a table-wide rate that lives only in prose goes stale without anyone
+    noticing. This row is that rate, asserted against the bytes.
+    """
+    from cdumm.engine.npcinfo_writer import (
+        locate_dye_lists,
+        serialize_dye_lists,
+    )
+    from cdumm.semantic.parser import _parse_entry_header, parse_pabgh_index
+    key_size, offs = parse_pabgh_index(header, "npcinfo")
+    starts = sorted(offs.values())
+    spans = starts + [len(body)]
+
+    tiled = refused = bad_rt = non_empty = 0
+    for key, off in offs.items():
+        end = spans[spans.index(off) + 1]
+        # The payload offset, not the entry offset. Passing `off` here is
+        # the PRODUCTION ENTRY POINTS mistake in miniature: the walk
+        # self-anchors so it still returns a plausible answer.
+        _eid, _name, payload = _parse_entry_header(body, off, key_size)
+        try:
+            dye = locate_dye_lists(body, payload, end, key)
+        except Exception:                       # noqa: BLE001
+            refused += 1
+            continue
+        tiled += 1
+        if dye.groups or dye.texsets:
+            non_empty += 1
+        if (serialize_dye_lists(dye.groups, dye.texsets)
+                != body[dye.list_start:dye.list_end]):
+            bad_rt += 1
+
+    ok = bad_rt == 0 and tiled > 0
+    detail = (f"{tiled}/{len(offs)} entries tile, {refused} refused, "
+              f"{bad_rt} mis-round-tripped, {non_empty} carry dye lists")
+    if tiled == 0:
+        detail += ("   [nothing tiles: the four-blob anchor has moved, so "
+                   "every dye-list intent will be refused and Dyer mods "
+                   "will apply nothing]")
+    elif bad_rt:
+        detail += ("   [a tiled entry cannot reproduce its own bytes -- "
+                   "the element widths are wrong, which is worse than "
+                   "refusing]")
+    return ok, detail
+
+
+def check_dyecolorgroupinfo_color_lists(body: bytes,
+                                        header: bytes) -> tuple[bool, str]:
+    """``locate_color_list`` -> ``serialize_color_list`` -- the writer the
+    dye-addon class of mod goes through (#191 / #397).
+
+    Same shape of table as npcinfo's dye lists, with one difference that
+    makes the gate strictly stronger: npcinfo is 542 NPCs of which only a
+    handful are Dyers, so most entries refusing is correct. This table is
+    ten entries and every one of them IS a colour group. There is no
+    population that legitimately refuses, so ANY refusal means the layout
+    moved and the gate is completeness, not "something tiled".
+
+    That distinction matters because the failure is silent in the usual
+    way. A refused entry is never best-effort patched -- the append is
+    dropped -- so a dye addon installs cleanly, validates cleanly, and
+    the player sees the vanilla ten swatches with none of the 22 the mod
+    adds. Nothing errors.
+
+    Measured on the committed b24994088 table: 10/10 groups tile, 0
+    refused, 0 mis-round-tripped, 109 colours each (1,090 total), tails
+    33-37 bytes -- the variation being the length of each group's name
+    string, exactly as the writer's LAYOUT note predicts. Unlike npcinfo,
+    where the commit message and the bytes disagreed, here the prose and
+    the production path agree; this row is what keeps that true.
+
+    The colour count is printed but NOT gated. A patch that adds swatches
+    to a group is content, not breakage -- what would be breakage is a
+    count that stops tiling the payload, which is the refusal path.
+    """
+    from cdumm.engine.dyecolorgroupinfo_writer import (
+        locate_color_list,
+        serialize_color_list,
+    )
+    from cdumm.semantic.parser import _parse_entry_header, parse_pabgh_index
+    key_size, offs = parse_pabgh_index(header, "dyecolorgroupinfo")
+    starts = sorted(offs.values())
+    spans = starts + [len(body)]
+
+    tiled = refused = bad_rt = colours = 0
+    for key, off in offs.items():
+        end = spans[spans.index(off) + 1]
+        # Payload offset, not entry offset -- see the note on npcinfo above.
+        _eid, _name, payload = _parse_entry_header(body, off, key_size)
+        try:
+            start, stop, elems = locate_color_list(body, payload, end, key)
+        except Exception:                       # noqa: BLE001
+            refused += 1
+            continue
+        tiled += 1
+        colours += len(elems)
+        if serialize_color_list(elems) != body[start:stop]:
+            bad_rt += 1
+
+    total = len(offs)
+    ok = bad_rt == 0 and refused == 0 and tiled == total
+    detail = (f"{tiled}/{total} groups tile, {refused} refused, "
+              f"{bad_rt} mis-round-tripped, {colours} colours")
+    if refused:
+        detail += ("   [every entry in this table is a colour group, so a "
+                   "refusal is a moved layout -- dye-addon appends will be "
+                   "dropped and the mod will apply nothing]")
+    elif bad_rt:
+        detail += ("   [a tiled group cannot reproduce its own bytes -- the "
+                   "element width is wrong, which is worse than refusing]")
+    return ok, detail
+
+
+def check_equipslotinfo_records(body: bytes,
+                                header: bytes) -> tuple[bool, str]:
+    """``derive_fixed_block`` -> ``parse_entry_records`` ->
+    ``serialize_entry_payload`` -- the writer #190 needed (Character
+    Creator's Female Rapier and Shield Module).
+
+    This row exists for a reason the other table rows do not have: the
+    opaque per-record block size is NOT a constant. Pearl Abyss changed
+    it between versions -- 66 bytes on CD 1.10, 63 on CD 1.15 -- and the
+    writer derives it from the table rather than hardcoding it.
+
+    #190 is the worked example of getting that wrong. A hardcoded 66
+    desynced at the second record of every multi-record entry, so the
+    writer refused every intent and the mod applied nothing WHILE
+    REPORTING NO SKIPS. That is the same silent-no-op shape as the
+    iteminfo opaque fallback: the user installs a mod, sees no error,
+    and gets none of the content.
+
+    So the gate is threefold, and the first part is the one that matters:
+    the size must still be DERIVABLE (exactly one candidate re-serializes
+    every entry byte-exact), every entry must parse under it, and every
+    entry must round-trip. `derive_fixed_block` already refuses on zero
+    or several candidates, which is the correct behaviour -- this row
+    turns that refusal into a visible canary failure instead of a
+    surprise at apply time.
+
+    Measured on the committed CD 1.15 table: block 63, 17/17 entries,
+    223 records, 584 etl hashes, 0 mis-round-tripped.
+    """
+    from cdumm.engine.equipslotinfo_writer import (
+        EquipslotWriteRefused,
+        _entry_spans,
+        derive_fixed_block,
+        parse_entry_records,
+        serialize_entry_payload,
+    )
+    try:
+        block = derive_fixed_block(body, header)
+    except EquipslotWriteRefused as exc:
+        return False, (f"opaque block size is no longer derivable: {exc}"
+                       "   [the record walk cannot be positioned, so every "
+                       "etl_hashes intent will be refused and slot mods "
+                       "will apply nothing]")
+
+    spans = _entry_spans(body, header)
+    parsed = bad_rt = refused = records = hashes = 0
+    for key, payload, end in spans:
+        try:
+            unk, recs, footer = parse_entry_records(body, payload, end, block)
+        except EquipslotWriteRefused:
+            refused += 1
+            continue
+        parsed += 1
+        records += len(recs)
+        hashes += sum(len(h) for _c, h, _f in recs)
+        if serialize_entry_payload(unk, recs, footer, block) != body[payload:end]:
+            bad_rt += 1
+
+    ok = refused == 0 and bad_rt == 0 and parsed == len(spans)
+    detail = (f"block {block}, {parsed}/{len(spans)} entries parse, "
+              f"{refused} refused, {bad_rt} mis-round-tripped, "
+              f"{records} records, {hashes} etl hashes")
+    if refused or bad_rt:
+        detail += ("   [the derived block size no longer describes every "
+                   "entry; slot mods will be refused rather than applied]")
+    return ok, detail
+
+
+def check_stringinfo_records(body: bytes, header: bytes) -> tuple[bool, str]:
+    """``apply_stringinfo`` with no intents -- the writer #224 needed
+    (Female Armor Module and the character-creator supplements).
+
+    stringinfo is a two-file table: every record is a length-prefixed
+    UTF-8 buffer, and editing one changes its length, so the companion
+    .pabgh offsets must be rebuilt. That makes the identity case a real
+    check rather than a trivial one -- ``apply_stringinfo`` documents a
+    ROUND-TRIP FLOOR ("when buffers_by_key is empty the output is
+    byte-identical to the input"), and reaching it means the pabgh
+    parsed, the record bounds were derived, every record was re-emitted
+    and the index was rebuilt. A layout change breaks that identity
+    without needing a single intent to drive it.
+
+    So this row drives the production entry point with an EMPTY intent
+    map and requires both files back unchanged, plus the pabgh to
+    survive parse_pabgh -> build_pabgh on its own.
+
+    The second gate is the share of records that match the
+    length-prefixed layout. This is the silent-no-op guard, and the
+    failure is in ``apply_stringinfo`` itself: a record whose declared
+    buffer length does not consume the rest of the record is logged at
+    WARNING and LEFT UNMODIFIED. The mod applies, reports no skips, and
+    the string never changes -- the same shape as the iteminfo opaque
+    fallback and #190's desynced record walk, reached a third way.
+
+    Unlike npcinfo there is no population that legitimately refuses:
+    every record in this table is a string record, so the gate is
+    completeness. Measured: vanilla110 30,940/30,940 and vanilla115
+    31,064/31,064, both byte-identical through the floor.
+
+    The 30,940 figure is also the one the writer's own docstring cites
+    for build 23831243, so the committed 1.10 table is that build and
+    the prose is confirmed rather than assumed.
+    """
+    from cdumm.engine.stringinfo_writer import (
+        _buffer_bytes_at,
+        _record_bounds,
+        apply_stringinfo,
+        build_pabgh,
+        parse_pabgh,
+    )
+    entries = parse_pabgh(header)
+    if not entries:
+        return False, ("pabgh index is empty or unparseable -- no record "
+                       "can be located, so every string intent is dropped")
+
+    index_rt = build_pabgh(entries) == header
+    new_body, new_header = apply_stringinfo(body, header, {})
+    body_rt = new_body == body
+    header_rt = new_header == header
+
+    bounds = _record_bounds(body, header)
+    match = sum(1 for _k, (st, en) in bounds.items()
+                if _buffer_bytes_at(body[st:en]) is not None)
+    total = len(bounds)
+
+    ok = index_rt and body_rt and header_rt and match == total
+    detail = (f"{total} records, {match}/{total} match the length-prefixed "
+              f"buffer layout, empty-intent round-trip "
+              f"{'byte-exact' if body_rt and header_rt else 'BROKEN'}, "
+              f"pabgh rebuild {'byte-exact' if index_rt else 'BROKEN'}")
+    if match != total:
+        detail += ("   [records that do not match are logged and left "
+                   "unmodified by apply_stringinfo, so string edits on "
+                   "them are silently dropped]")
+    elif not (body_rt and header_rt and index_rt):
+        detail += ("   [the no-op path does not reproduce the input, so "
+                   "the record framing or the index framing has moved]")
+    return ok, detail
+
+
+def check_dropset_records(body: bytes, header: bytes) -> tuple[bool, str]:
+    """``parse_dropset_record`` -> ``serialize_dropset_record`` over
+    every record, the pair NattKh-exported drop mods go through.
+
+    The DropSet layout is the most variable of the tables checked here:
+    two embedded length-prefixed strings, a counted drops list whose
+    elements themselves carry optional trailing fields, and a trailer.
+    The parser is correspondingly strict -- it raises unless the walk
+    consumes the record EXACTLY -- so unlike stringinfo the parse itself
+    is the drift signal and does not need a separate layout-match gate.
+
+    That strictness is also why the round-trip matters here in a way it
+    does not for stringinfo's no-op path: serialize_dropset_record
+    rebuilds the record from decoded fields rather than re-emitting the
+    original bytes, so a byte-exact result means every field, including
+    the optional per-drop extras, was understood.
+
+    Both gates are completeness. Every record in this table is a
+    DropSet; there is no population that legitimately fails to parse, so
+    a single failure means the layout moved and drop mods will be
+    dropped -- build_drops_replacement_change returns None on a parse
+    failure, which the apply pipeline treats as "no change emitted".
+    Silent again, from a fourth mechanism.
+
+    Measured on the committed CD 1.13 table: 14,575/14,575 parse,
+    14,575 round-trip byte-exact, 17,920 drops. That 14,575 is the
+    figure build_drop_append_change's docstring cites, so the committed
+    table is the one the claim was verified against.
+    """
+    from cdumm.engine.dropset_writer import (
+        parse_dropset_record,
+        serialize_dropset_record,
+    )
+    from cdumm.semantic.parser import parse_pabgh_index
+    _key_size, offs = parse_pabgh_index(header, "dropsetinfo")
+    if not offs:
+        return False, "pabgh index has no entries"
+    starts = sorted(offs.values())
+    spans = starts + [len(body)]
+
+    parsed = failed = bad_rt = drops = 0
+    for off in offs.values():
+        rec = body[off:spans[spans.index(off) + 1]]
+        try:
+            ds = parse_dropset_record(rec)
+        except Exception:                       # noqa: BLE001
+            failed += 1
+            continue
+        parsed += 1
+        drops += len(ds.drops)
+        if serialize_dropset_record(ds) != rec:
+            bad_rt += 1
+
+    total = len(offs)
+    ok = failed == 0 and bad_rt == 0 and parsed == total
+    detail = (f"{parsed}/{total} records parse, {failed} failed, "
+              f"{bad_rt} mis-round-tripped, {drops} drops")
+    if failed:
+        detail += ("   [a record the parser cannot consume exactly means "
+                   "the layout moved; build_drops_replacement_change "
+                   "returns None for it and the drop edit is dropped]")
+    elif bad_rt:
+        detail += ("   [a record parses but does not rebuild to its own "
+                   "bytes, so a field is being decoded and re-encoded "
+                   "wrongly -- worse than failing to parse]")
+    return ok, detail
+
+
+#: The only four statusinfo stats that carry stat_level_data. Every
+#: other stat has a short tail and no ramp at all, so this set is the
+#: semantic anchor for the DIRECT SPEED presets.
+_STATUSINFO_RATE_STATS = frozenset({
+    "MoveSpeedRate", "AttackSpeedRate", "CriticalRate", "DHIT",
+})
+
+
+def check_statusinfo_stat_levels(body: bytes, header: bytes) -> tuple[bool, str]:
+    """The ``stat_level_data`` ramps the DIRECT SPEED presets write.
+
+    This table needs a different row shape from the others: there is no
+    locate/serialize pair to drive, because the writer places elements
+    arithmetically inside a fixed-size tail. So the row checks the four
+    properties that make that arithmetic safe, and every one of them is
+    a statement about the bytes rather than about the code.
+
+    **The shape split.** Exactly four stats carry a 212-byte tail and
+    the other 71 carry 84 bytes with no ramp at all. Writing into a
+    short tail would corrupt a regular stat, so the writer refuses any
+    record that is not 212 -- and this row asserts the four are the four
+    NAMED rate stats, not merely that there are four of them.
+
+    **The ramps are monotonic from zero.** This is the part worth
+    keeping, because it independently checks an offset the writer's
+    docstring says could only be settled with an external artefact.
+    68 and 76 both partition the tail into whole uint64s and both leave
+    every element's low 24 bits zero, so neither a boundary argument nor
+    the fixed-point scale separates them -- the derivation needed mod
+    2511's PAZ overlay. But the committed table separates them anyway:
+    at 68 all four ramps start at 0 and rise monotonically, and at 76
+    the window slides one element onto the terminator so every ramp ends
+    in a drop to zero. 4/4 against 0/4. That gives the canary a way to
+    re-check the offset from the fixture alone, which the overlay-based
+    derivation cannot do on a future build.
+
+    **The fixed-point scale.** Every element is a multiple of 2**24,
+    because a mod's asked-for integer is stored shifted left by 24. A
+    build that changed the scale would break every DIRECT SPEED preset
+    silently -- the write would land, at the wrong magnitude.
+
+    **The trailer.** The last 8 bytes are byte-identical on all four
+    records. The first attempt at this layout used offset 80, which ran
+    the array off the end into exactly those bytes; asserting they are
+    constant is what makes that misreading visible.
+
+    Measured on the committed CD 1.13 table: 75 records, 4 rate stats
+    (all named), 71 short tails, 64/64 elements scaled, 4/4 ramps
+    monotonic from zero, trailer constant.
+    """
+    import itertools
+    import struct as _struct
+
+    from cdumm.engine.statusinfo_writer import (
+        _FRACTION_BITS,
+        _RATE_TAIL_LEN,
+        _SLD_COUNT,
+        _SLD_TAIL_OFFSET,
+    )
+    from cdumm.semantic.parser import parse_pabgh_index
+    _key_size, offs = parse_pabgh_index(header, "statusinfo")
+    if not offs:
+        return False, "pabgh index has no entries"
+    starts = sorted(offs.values())
+    spans = starts + [len(body)]
+
+    scale = 1 << _FRACTION_BITS
+    rate: dict[str, bytes] = {}
+    short = 0
+    for off in offs.values():
+        end = spans[spans.index(off) + 1]
+        name_len = _struct.unpack_from("<I", body, off + 4)[0]
+        name = body[off + 8:off + 8 + name_len].decode("ascii", "replace")
+        tail = body[off + 8 + name_len:end]
+        if len(tail) == _RATE_TAIL_LEN:
+            rate[name] = tail
+        else:
+            short += 1
+
+    def _ramp(tail: bytes) -> list[int]:
+        return [_struct.unpack_from("<Q", tail,
+                                    _SLD_TAIL_OFFSET + i * 8)[0]
+                for i in range(_SLD_COUNT)]
+
+    elements = scaled = 0
+    monotonic = 0
+    for tail in rate.values():
+        vals = _ramp(tail)
+        elements += len(vals)
+        scaled += sum(1 for v in vals if v % scale == 0)
+        decoded = [v >> _FRACTION_BITS for v in vals]
+        if decoded[0] == 0 and all(a <= b for a, b in
+                                   itertools.pairwise(decoded)):
+            monotonic += 1
+
+    trailers = {t[204:212] for t in rate.values()}
+    wrong_names = set(rate) ^ _STATUSINFO_RATE_STATS
+
+    ok = (not wrong_names
+          and elements > 0
+          and scaled == elements
+          and monotonic == len(rate)
+          and len(trailers) == 1)
+    detail = (f"{len(offs)} records, {len(rate)} carry stat_level_data, "
+              f"{short} short tails, {scaled}/{elements} elements scaled by "
+              f"2**{_FRACTION_BITS}, {monotonic}/{len(rate)} ramps monotonic "
+              f"from zero, trailer "
+              f"{'constant' if len(trailers) == 1 else 'DIVERGED'}")
+    if wrong_names:
+        detail += (f"   [the set of stats carrying a ramp changed: "
+                   f"{sorted(wrong_names)} -- a DIRECT SPEED preset would "
+                   f"write into a stat whose tail is not a ramp]")
+    elif monotonic != len(rate):
+        detail += ("   [a ramp is no longer monotonic from zero, which is "
+                   "what separates the correct element offset from the "
+                   "one-element-late reading that hits the terminator]")
+    elif scaled != elements:
+        detail += (f"   [elements stopped being multiples of 2**"
+                   f"{_FRACTION_BITS}; the fixed-point scale has changed "
+                   f"and every preset would write the wrong magnitude]")
+    return ok, detail
+
+
+#: The five interaction records "Fast Pickup - Increase Range" targets,
+#: with the ranges the CD 1.15 table carries. Used as the SEMANTIC
+#: anchor for interactioninfo -- see check_interactioninfo_pivot_pair.
+_INTERACTION_ANCHORS = {
+    "Gimmick_PickUp": (2.5, 2.5),
+    "SmallAnimal_Skin": (1.5, 2.0),
+    "Animal_Skin": (1.7, 2.0),
+    "Gimmick_Collect": (2.5, 3.0),
+    "Insect_Catch": (2.5, 2.6),
+}
+
+
+def check_interactioninfo_pivot_pair(body: bytes,
+                                     header: bytes) -> tuple[bool, str]:
+    """``locate_pivot_pair`` over every record -- the Fast Pickup path.
+
+    ``_interactionPivotList`` is field #26 of InteractionInfo with type
+    ``None`` in the schema: no descriptor, so the generic walker reaches
+    zero records on this table. The pair is found positionally instead,
+    by scanning for a spot where the preceding 16 bytes are zero (an
+    all-zero ``_interactionUpperHeight`` plus ``_targetGotoOffset``) and
+    the next two f32 are a sane range.
+
+    That is a heuristic over bytes, so unlike the schema-driven tables
+    a *plausible* answer is always available and being green means very
+    little on its own. Two things make the row meaningful:
+
+    **Ambiguity is refused, not resolved.** A record with several
+    qualifying positions is skipped rather than patched at the first
+    one, because writing at an unproven position corrupts an unrelated
+    float. So the refusal count is expected to be large and is NOT
+    gated; what is gated is that the five records the mod actually
+    targets each resolve uniquely AND still carry the ranges this table
+    is known to have. If the layout shifts, the scan will keep finding
+    *some* pair -- the anchors are what notice it is the wrong one.
+
+    **The values are quantised and the rule never said so.** Every
+    located value is exactly f32(n * 0.05). The locator only tests a
+    [0.01, 100.0] range, so quantisation is a property of the data, not
+    of the filter -- independent evidence the pair really is the range
+    field rather than bytes that happen to pass. Gated, because losing
+    it means the scan has drifted onto something else.
+
+    Measured on the committed CD 1.15 table: 393 records, 295 resolve
+    uniquely, 98 refused, all 590 located values quantised, 5/5 anchors
+    at their documented ranges.
+    """
+    import struct as _struct
+
+    from cdumm.engine.interactioninfo_writer import (
+        _record_bounds,
+        locate_pivot_pair,
+    )
+    bounds = _record_bounds(header, body)
+    if not bounds:
+        return False, "pabgh index has no entries"
+
+    def _f32(x: float) -> float:
+        return _struct.unpack("<f", _struct.pack("<f", x))[0]
+
+    unique = refused = quantised = values = 0
+    found: dict[str, tuple[float, float]] = {}
+    for lo, hi in bounds.values():
+        name_len = _struct.unpack_from("<I", body, lo + 4)[0]
+        name = body[lo + 8:lo + 8 + name_len].decode("ascii", "replace")
+        pos = locate_pivot_pair(body, lo, hi)
+        if pos is None:
+            refused += 1
+            continue
+        unique += 1
+        pair = _struct.unpack_from("<ff", body, pos)
+        found[name] = pair
+        for v in pair:
+            values += 1
+            if _f32(round(v / 0.05) * 0.05) == v:
+                quantised += 1
+
+    missing = [n for n, want in _INTERACTION_ANCHORS.items()
+               if found.get(n) is None
+               or any(abs(g - w) > 1e-6 for g, w in zip(found[n], want))]
+
+    ok = (unique > 0 and quantised == values and not missing)
+    detail = (f"{unique}/{len(bounds)} records resolve uniquely, "
+              f"{refused} refused (ambiguous or unframed), "
+              f"{quantised}/{values} located values quantised to 0.05, "
+              f"{len(_INTERACTION_ANCHORS) - len(missing)}"
+              f"/{len(_INTERACTION_ANCHORS)} anchors at their known ranges")
+    if missing:
+        detail += (f"   [{missing} no longer resolve to the ranges this "
+                   f"table is known to carry -- the scan is finding a "
+                   f"different pair of floats, and a Fast Pickup write "
+                   f"would land on an unrelated field]")
+    elif quantised != values:
+        detail += ("   [located values stopped being multiples of 0.05, "
+                   "which the locator never tested for -- the evidence "
+                   "that this is the range field has gone]")
+    elif unique == 0:
+        detail += ("   [nothing resolves: the 16-zero frame has moved, so "
+                   "every Fast Pickup intent will be refused]")
+    return ok, detail
+
+
+#: Knowledge records a character must have from the start. Used as the
+#: SEMANTIC anchor for knowledgeinfo's is_default offset -- see
+#: check_knowledgeinfo_is_default for why a structural check is not
+#: enough on this table.
+_KNOWLEDGE_START_KNOWN = (
+    "Knowledge_Hp", "Knowledge_CriticalRate", "Knowledge_AttackSpeedRate",
+    "Knowledge_MoveSpeedRate", "Knowledge_Fatal", "Knowledge_KnockOut",
+)
+
+
+def check_knowledgeinfo_is_default(body: bytes,
+                                   header: bytes) -> tuple[bool, str]:
+    """``locate_is_default`` over every record, plus the evidence that
+    the offset still MEANS what the writer thinks it means.
+
+    This is the one table here where locating the field successfully is
+    not sufficient, and the distinction is the reason for the row.
+    ``locate_is_default`` refuses unless the record head matches a
+    structural shape: the key echoes the index, a plausible name length,
+    a zero byte at name_end, a 13 at name_end+6, and a value in {0,1}.
+    Every one of those could still hold after a layout change that moved
+    the field -- and then the writer would flip a DIFFERENT byte, on 166
+    records, with the mod reporting success.
+
+    ``is_default`` was never read off a schema. ``_isDefault`` is
+    declared ``direct_15B``, a tagged primitive whose value position the
+    schema does not give, so the offset was derived statistically: of
+    the offsets in ``name_end+0..+79``, exactly two are boolean AND
+    non-constant across all records -- +5 (true on 562) and +17 (true on
+    51). A statistic that can be re-derived can also silently move.
+
+    So the gate is threefold: every record must locate; the offset must
+    still be one of exactly two non-constant boolean offsets in the
+    window; and -- the check that actually pins the meaning -- the six
+    knowledges a character cannot start without must all read 1. If the
+    field moved, those named records stop reading true, whatever the
+    structural constants say.
+
+    Measured on the committed CD 1.15 table: 6,219/6,219 locate, 562
+    default-known, offsets {5, 17} boolean and non-constant, all six
+    anchors true.
+
+    One correction to the writer's own docstring, which this row now
+    pins: it says the 51 records at +17 "are
+    Knowledge_Skill_Farming/Ranching/Logging/Mining_I..III". That is
+    four skills over three tiers, which is twelve, not fifty-one. The
+    real set spans NINETEEN life skills (Banking, Building, Crafting,
+    Drawing, Engineering, Farming, Fishing, Foodprocessing, Forging,
+    Gathering, Logging, Mining, Ornamenting, Ranching, Refining,
+    Strengthening, SuperWorker, Weaving, Worker_Fighting). The count and
+    the conclusion -- +17 is a life-skill flag, not a start-known flag
+    -- are both correct; only the enumeration reads as exhaustive when
+    it is illustrative.
+    """
+    import struct as _struct
+
+    from cdumm.engine.knowledgeinfo_writer import (
+        IS_DEFAULT_OFFSET,
+        _record_bounds,
+        locate_is_default,
+    )
+    bounds = _record_bounds(header, body)
+    if not bounds:
+        return False, "pabgh index has no entries"
+
+    located = refused = ones = 0
+    names: dict[str, int] = {}
+    heads: list[tuple[int, int]] = []          # (name_end, hi)
+    for key, (lo, hi) in bounds.items():
+        pos = locate_is_default(body, lo, hi, key)
+        if pos is None:
+            refused += 1
+            continue
+        located += 1
+        if body[pos] == 1:
+            ones += 1
+        name_len = _struct.unpack_from("<I", body, lo + 4)[0]
+        names[body[lo + 8:lo + 8 + name_len].decode("ascii", "replace")] = pos
+        heads.append((lo + 8 + name_len, hi))
+
+    # Which offsets in the derivation window are boolean AND non-constant?
+    boolean_nonconst = []
+    for off in range(80):
+        true_count = 0
+        for name_end, hi in heads:
+            pos = name_end + off
+            if pos >= hi or body[pos] not in (0, 1):
+                break
+            true_count += body[pos]
+        else:
+            if true_count:
+                boolean_nonconst.append(off)
+
+    missing = [n for n in _KNOWLEDGE_START_KNOWN
+               if names.get(n) is None or body[names[n]] != 1]
+
+    total = len(bounds)
+    ok = (refused == 0 and located == total
+          and IS_DEFAULT_OFFSET in boolean_nonconst
+          and len(boolean_nonconst) == 2
+          and not missing)
+    detail = (f"{located}/{total} records locate, {refused} refused, "
+              f"{ones} default-known, boolean non-constant offsets "
+              f"{boolean_nonconst}, {len(_KNOWLEDGE_START_KNOWN) - len(missing)}"
+              f"/{len(_KNOWLEDGE_START_KNOWN)} start-known anchors true")
+    if missing:
+        detail += (f"   [offset +{IS_DEFAULT_OFFSET} no longer reads true on "
+                   f"{missing} -- it is not is_default any more, so the "
+                   f"unlock mods would flip an unrelated byte]")
+    elif IS_DEFAULT_OFFSET not in boolean_nonconst:
+        detail += (f"   [+{IS_DEFAULT_OFFSET} is no longer a non-constant "
+                   f"boolean; the field has moved or changed width]")
+    elif len(boolean_nonconst) != 2:
+        detail += ("   [the two-candidate derivation no longer holds; the "
+                   "offset needs re-deriving before it can be trusted]")
+    return ok, detail
+
+
+#: Ceiling on the share of iteminfo records carried opaque before this
+#: reads as breakage rather than the known tail.
+#:
+#: Some opacity is correct and permanent: the 1.12 "*_Flag_I" guild flags
+#: have never had a schema (#219), which is 64 records on vanilla110 and
+#: 14 on vanilla116. Measured across every committed table the figure is
+#: 1.0% or lower. The Steam buildid 24773079 break was 84.4%. Nothing
+#: observed sits between, so the ceiling is set well clear of the tail and
+#: nowhere near the failure -- the count is printed either way, so a rise
+#: inside the band is still visible without failing a healthy build.
+_ITEM_OPAQUE_CEILING = 0.05
+
+
+def check_iteminfo_native(body: bytes, header: bytes) -> tuple[bool, str]:
+    """``detect_iteminfo_layout`` -> ``parse_iteminfo_from_bytes`` -- the
+    reader the item editor writes through.
+
+    This is NOT the same check as the ``iteminfo`` row further down, and
+    the difference is the point. That one scores the ``select_order``
+    schema walk; this one drives the native parser. Two readers over one
+    table, and they fail independently.
+
+    On the Steam buildid 24773079 table the ordered walk reports a
+    perfectly healthy "median 109/109 fields, 88% of 6,573 records
+    complete" -- while this path carried 5,548 of those 6,573 items
+    (84.4%) opaque, because PrefabData had gained a trailing u32 (#369).
+    An opaque record can only be patched for ``is_blocked`` and
+    ``max_stack_count``, so a mod editing prices imported cleanly,
+    validated cleanly, and then silently dropped its edits at apply time.
+    The canary said iteminfo was fine throughout.
+
+    So the gate is the opaque share, under ``_ITEM_OPAQUE_CEILING``, plus
+    a byte-exact round-trip. Round-trip alone cannot catch this: the
+    opaque fallback carries bytes verbatim, which is precisely what keeps
+    the round-trip green while the table stops being editable.
+
+    Note what is deliberately NOT gated. ``detect_iteminfo_layout``
+    returning ``None`` means *use the default schema*, not *detection
+    failed* -- on the CD 1.10 table that is the correct answer, and it
+    decodes 6,419 of 6,483 records with the other 64 being the #219 guild
+    flags. The genuine "nothing round-trips" case also returns ``None``,
+    but it is not told apart by the return value; it is told apart by
+    every record going opaque, which the ceiling already catches.
+    """
+    from cdumm.engine.iteminfo_native_parser import (
+        detect_iteminfo_layout,
+        parse_iteminfo_from_bytes,
+        serialize_iteminfo,
+    )
+    from cdumm.semantic.parser import parse_pabgh_index
+    _ks, offs = parse_pabgh_index(header, "iteminfo")
+    starts = sorted(offs.values())
+    fields = detect_iteminfo_layout(body, starts)
+    items = parse_iteminfo_from_bytes(body, starts, fields=fields)
+    total = len(items)
+    opaque = sum(1 for it in items if it.get("_opaque_record"))
+    frac = opaque / max(total, 1)
+    rt = serialize_iteminfo(items, fields=fields) == body
+
+    ok = rt and frac <= _ITEM_OPAQUE_CEILING
+    shape = ("default schema" if fields is None
+             else f"{len(fields)}-field variant")
+    detail = (f"{total - opaque}/{total} items decoded structurally, "
+              f"{opaque} opaque ({frac:.1%}), "
+              f"round-trip {'byte-exact' if rt else 'MISMATCH'}, "
+              f"layout {shape}")
+    if frac > _ITEM_OPAQUE_CEILING:
+        detail += (f"   [over the {_ITEM_OPAQUE_CEILING:.0%} ceiling: a "
+                   f"patch has almost certainly moved a field inside a "
+                   f"list element. Opaque items accept only is_blocked "
+                   f"and max_stack_count, so price/stat mods will apply "
+                   f"as no-ops]")
+    return ok, detail
 
 
 def check_statusgroupinfo(body: bytes, header: bytes) -> tuple[bool, str]:
@@ -158,7 +936,7 @@ def check_statusgroupinfo(body: bytes, header: bytes) -> tuple[bool, str]:
 #:
 #: Pinned deliberately, because the useful question is "did this CHANGE",
 #: not "is this complete". Several of these tables have never walked to the
-#: end -- StageInfo reaches 25 of 81 fields and RegionInfo stalls on
+#: end -- StageInfo reaches 24 of 81 fields and RegionInfo stalls on
 #: ``_gimmickAliasPointerList`` -- and those are open modelling gaps, not
 #: patch damage. An absolute threshold would print three failures on a
 #: perfectly healthy build, and a check that is red every run is one people
@@ -173,7 +951,14 @@ _ORDER_BASELINE: dict[str, tuple[str, float]] = {
     "ItemInfo": ("cd116", 109),
     "CharacterInfo": ("base", 14),
     "RegionInfo": ("base", 21),
-    "StageInfo": ("base", 25),
+    # Was 25. The 26 Aug 2026 patch (b24934353) moved something in the
+    # never-fully-modelled region: the stall shifted from _playCondition
+    # to _closeCondition and the median slipped one field. Investigated
+    # under GitHub #377 -- StageInfo has never reached a usable depth
+    # (0% of records complete either way), is not editable, and no mod
+    # targets it, so this is a modelling-gap shift rather than a
+    # capability loss. Re-pinned so the canary guards the NEXT drop.
+    "StageInfo": ("base", 24),
     "VehicleInfo": ("base", 20),
     "FieldInfo": ("base", 19),
     # Was 2. #362's derived layouts took it to 3/3 on 100% of 35 records,
@@ -183,13 +968,21 @@ _ORDER_BASELINE: dict[str, tuple[str, float]] = {
 }
 
 
-def check_ordered_table(table: str, body: bytes,
-                        header: bytes) -> tuple[bool, str]:
+def check_ordered_table(table: str, body: bytes, header: bytes,
+                        want: tuple[str, float] | None) -> tuple[bool, str]:
     """``select_order`` -- which applies the per-build variant.
 
-    Judged against ``_ORDER_BASELINE`` rather than an absolute bar: a
-    regression means a patch moved something, while a table that has always
-    stalled early is a known gap and must not read as breakage.
+    Judged against a pinned ``(order label, median fields)`` rather than an
+    absolute bar: a regression means a patch moved something, while a table
+    that has always stalled early is a known gap and must not read as
+    breakage.
+
+    The pin is passed in rather than looked up, because the live install and
+    a committed fixture are pinned to different numbers. ``_ORDER_BASELINE``
+    describes the build the game is on; a 1.10 fixture legitimately reads
+    shallower than a 1.16 one, and judging it against the live figure would
+    print a regression on a table that has never changed. ``None`` means
+    unpinned: reported, not gated.
     """
     from cdumm.engine.schema_verify import decode_score, select_order
     label, order = select_order(table, body, header)
@@ -200,7 +993,6 @@ def check_ordered_table(table: str, body: bytes,
               + (f", stalls on {s.first_bail_field}"
                  if s.first_bail_field else ""))
 
-    want = _ORDER_BASELINE.get(table)
     if want is None:
         return True, detail + "   [no baseline pinned]"
     want_label, want_median = want
@@ -222,6 +1014,20 @@ _CHECKS = [
     ("skill", "skill", check_skill),
     ("storeinfo", "storeinfo", check_storeinfo),
     ("statusgroupinfo", "statusgroupinfo", check_statusgroupinfo),
+    # Label deliberately differs from the loader name: iteminfo is read by
+    # two independent readers and both get a row. "iteminfo-native" is the
+    # editor's parser; the plain "iteminfo" row below is the select_order
+    # schema walk. #369 broke one while the other stayed green.
+    ("iteminfo-native", "iteminfo", check_iteminfo_native),
+    ("npcinfo", "npcinfo", check_npcinfo_dye_lists),
+    ("dyecolorgroupinfo", "dyecolorgroupinfo",
+     check_dyecolorgroupinfo_color_lists),
+    ("equipslotinfo", "equipslotinfo", check_equipslotinfo_records),
+    ("stringinfo", "stringinfo", check_stringinfo_records),
+    ("dropsetinfo", "dropsetinfo", check_dropset_records),
+    ("knowledgeinfo", "knowledgeinfo", check_knowledgeinfo_is_default),
+    ("interactioninfo", "interactioninfo", check_interactioninfo_pivot_pair),
+    ("statusinfo", "statusinfo", check_statusinfo_stat_levels),
 ]
 
 #: Tables with a verified field order, checked through select_order.
@@ -229,6 +1035,167 @@ _ORDERED = [("iteminfo", "ItemInfo"), ("characterinfo", "CharacterInfo"),
             ("regioninfo", "RegionInfo"), ("stageinfo", "StageInfo"),
             ("vehicleinfo", "VehicleInfo"), ("fieldinfo", "FieldInfo"),
             ("wantedinfo", "WantedInfo")]
+
+
+# ── the same checks, against the bytes committed to the repo ──────────────
+#
+# The live pass above needs a game install. This one needs nothing, which
+# is the point: it separates "the patch moved the bytes" from "we broke the
+# reader", and it is the only half that can run in CI.
+#
+# It used to walk a hardcoded ("vanilla113", "vanilla115", "vanilla116")
+# and only the three hand-written checks -- so vanilla110 was never read,
+# vanilla1161 was never read (the NEWEST table we have, frozen for the
+# 15 Aug patch that #365/#366 turned on), and no ordered table was ever
+# scored against a fixture at all. Five of the eleven decodes we have bytes
+# for were being exercised.
+#
+# Discovering the directories instead means the next capture is covered by
+# dropping it in: `make_table_fixture.py --version 1162 --all` writes
+# tests/fixtures/vanilla1162/, and this reads it without an edit here.
+
+
+def fixture_versions() -> list[str]:
+    """Every committed fixture directory. Sorted so runs are comparable."""
+    return sorted(p.name for p in (_REPO / "tests" / "fixtures").glob("vanilla*")
+                  if p.is_dir())
+
+
+#: ``(fixture version, table)`` pairs verified to decode with the code as
+#: it stands. A pair listed here GATES: it decoded once, so a failure is a
+#: regression in this repo and nothing else.
+#:
+#: A pair absent from this set is reported and does not gate, because a
+#: fixture nobody has verified yet is exactly what a fresh capture is --
+#: and a brand-new table failing to decode is the game patch this canary
+#: exists to report, not a code regression. Add the pair once its numbers
+#: have been looked at.
+#:
+#: The second element is the ROW LABEL, not the loader name -- iteminfo
+#: contributes both "iteminfo-native" and "iteminfo" off one pair of files.
+#:
+#: Verified 2026-08-26, after merging upstream v3.16.0 (which carries
+#: #377's CD 2.0 layout and the b24934353 capture).
+_FIXTURE_GREEN = frozenset({
+    ("vanilla110", "iteminfo"), ("vanilla110", "iteminfo-native"),
+    # #224's table, on both builds that have bytes. The pin is really
+    # "apply_stringinfo still reaches its documented round-trip floor".
+    ("vanilla110", "stringinfo"), ("vanilla115", "stringinfo"),
+    ("vanilla113", "skill"), ("vanilla113", "storeinfo"),
+    ("vanilla113", "iteminfo"), ("vanilla113", "iteminfo-native"),
+    ("vanilla113", "characterinfo"),
+    # NattKh-derived drop mods. The parser consumes each record exactly
+    # or raises, so the parse is itself the drift signal.
+    ("vanilla113", "dropsetinfo"),
+    # The DIRECT SPEED presets' table. Monotonicity is what re-checks the
+    # element offset without the PAZ overlay the derivation needed.
+    ("vanilla113", "statusinfo"),
+    ("vanilla115", "statusgroupinfo"),
+    # #190's table. The opaque per-record block is 66 on CD 1.10 and 63
+    # here -- a version-dependent size the writer derives rather than
+    # hardcodes, so this pin is really "the size is still derivable".
+    ("vanilla115", "equipslotinfo"),
+    # The unlock mods' table. Pinned on the SEMANTIC anchor, not just on
+    # locating the byte -- see the check's docstring.
+    ("vanilla115", "knowledgeinfo"),
+    # Fast Pickup's table. A positional scan, so the pin is on the five
+    # named records' known ranges, not on "something was found".
+    ("vanilla115", "interactioninfo"),
+    ("vanilla116", "skill"), ("vanilla116", "storeinfo"),
+    ("vanilla116", "iteminfo"), ("vanilla116", "iteminfo-native"),
+    ("vanilla1161", "storeinfo"),
+    # The 17 Aug build. iteminfo-native reads 6,573/6,573 with the cd116b
+    # layout #369 added; under cd116 it was 5,548 opaque (84.4%).
+    ("vanilla_b24773079", "iteminfo"),
+    ("vanilla_b24773079", "iteminfo-native"),
+    # CD 2.0, the 26 Aug build. Every pre-2.0 layout carries this table
+    # 100% opaque; cd20 (#377) reads 6,810/6,810.
+    ("vanilla_b24934353", "iteminfo"),
+    ("vanilla_b24934353", "iteminfo-native"),
+    # #393 added storeinfo and npcinfo, first labelled b24934353. #397
+    # RENAMED both to b24994088 -- git records pure renames, the blobs
+    # are byte-identical, so the capture was simply mislabelled and the
+    # newer buildid is the true provenance. The pins move with the bytes.
+    #
+    # storeinfo is the notable one: the 2.0-era engine did NOT move it.
+    # The CD 1.16.1 layout reads 397 located + 39 provably empty =
+    # 436/436 with zero not-found and zero ambiguous. CD 1.13 gets 319
+    # located but leaves 78 unaccounted; CD 1.16 gets 3; CD 1.11 and
+    # CD 1.10 get 0.
+    ("vanilla_b24994088", "storeinfo"),
+    ("vanilla_b24994088", "npcinfo"),
+    # #397 also brought dyecolorgroupinfo, which had a writer but no row
+    # -- the same gap npcinfo was in before. Ten groups, all ten tile,
+    # 109 colours each. Gated on completeness rather than "something
+    # tiled": every entry here IS a colour group, so nothing legitimately
+    # refuses.
+    ("vanilla_b24994088", "dyecolorgroupinfo"),
+})
+
+#: Per-fixture pins for the ordered tables, measured 2026-08-26.
+#:
+#: These are NOT ``_ORDER_BASELINE``. That one tracks the installed build;
+#: these track a specific frozen table, and they differ -- 1.10's iteminfo
+#: reads 64 of 113 fields on the base order and bails at
+#: ``_enchantDataList``, while 1.16's reads 109 of 109 on the ``cd116``
+#: order. Both are correct for their build. Pinning them separately is
+#: what lets an old fixture be a regression test rather than noise.
+_FIXTURE_ORDER_BASELINE: dict[tuple[str, str], tuple[str, float]] = {
+    ("vanilla110", "ItemInfo"): ("base", 64),
+    ("vanilla113", "ItemInfo"): ("base", 110),
+    ("vanilla113", "CharacterInfo"): ("base", 14),
+    ("vanilla116", "ItemInfo"): ("cd116", 109),
+    # Identical to vanilla116's, and that is the finding, not a typo: the
+    # ordered walk did not move at all across the patch that made 84% of
+    # this same table opaque to the native parser. See
+    # check_iteminfo_native.
+    ("vanilla_b24773079", "ItemInfo"): ("cd116", 109),
+    # Also unchanged at 109 -- but unlike b24773079 this is NOT a case of
+    # the ordered walk being blind. Driven with a pre-2.0 layout it drops
+    # to median 10/113 and stalls on _itemUseInfoList, so it does fire on
+    # this break. The 109 here is what it reads once #377's cd20 layout is
+    # present, i.e. the healthy figure.
+    ("vanilla_b24934353", "ItemInfo"): ("cd116", 109),
+}
+
+
+def run_fixture_checks(
+        versions: list[str] | None = None) -> list[tuple[str, bool, str, bool]]:
+    """Every check that has committed bytes to run against.
+
+    Returns ``(label, ok, detail, gating)`` rows in fixture order. Nothing
+    is printed and nothing is skipped silently: a table with no fixture on
+    a given build simply has no row.
+
+    ``versions`` narrows the sweep to named fixture directories. The canary
+    always wants all of them; it is there so a caller checking the *shape*
+    of a row does not have to pay for a full decode to get one -- the 1.10
+    iteminfo walk alone is 25 seconds.
+    """
+    rows: list[tuple[str, bool, str, bool]] = []
+    for ver in (versions if versions is not None else fixture_versions()):
+        # (row label, loader name, fn). The two are not the same thing:
+        # iteminfo is read by two different readers, so it contributes two
+        # rows off one pair of files, and the label is what keeps them
+        # apart in _FIXTURE_GREEN.
+        todo: list[tuple[str, str, object]] = list(_CHECKS)
+        todo += [
+            (name, name, lambda b, h, _c=cls, _v=ver: check_ordered_table(
+                _c, b, h, _FIXTURE_ORDER_BASELINE.get((_v, _c))))
+            for name, cls in _ORDERED]
+        for label, name, fn in todo:
+            body = _fixture(ver, f"{name}.pabgb")
+            header = _fixture(ver, f"{name}.pabgh")
+            if body is None or header is None:
+                continue
+            gating = (ver, label) in _FIXTURE_GREEN
+            try:
+                ok, detail = fn(body, header)
+            except Exception as exc:            # noqa: BLE001
+                ok = False
+                detail = f"{type(exc).__name__}: {str(exc)[:70]}"
+            rows.append((f"{ver}/{label}", ok, detail, gating))
+    return rows
 
 
 def build_stamp(game_dir: Path) -> str:
@@ -291,19 +1258,29 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  {name:<18} ERROR  cannot load: {str(e)[:60]}")
             problems.append(f"{name}: load failed")
             continue
-        run(name, lambda b, h, _c=cls: check_ordered_table(_c, b, h),
+        run(name,
+            lambda b, h, _c=cls: check_ordered_table(
+                _c, b, h, _ORDER_BASELINE.get(_c)),
             body, header)
 
     if args.baseline:
         print("\ncommitted fixtures (a failure here is a CODE regression, "
               "not a game patch):")
-        for ver in ("vanilla113", "vanilla115", "vanilla116"):
-            for label, name, fn in _CHECKS:
-                b = _fixture(ver, f"{name}.pabgb")
-                h = _fixture(ver, f"{name}.pabgh")
-                if b is None or h is None:
-                    continue
-                run(f"{ver}/{label}", fn, b, h)
+        unpinned = 0
+        for label, ok, detail, gating in run_fixture_checks():
+            if not gating:
+                unpinned += 1
+                mark = "NEW "
+                detail += "   [unpinned -- add to _FIXTURE_GREEN once read]"
+            else:
+                mark = "ok  " if ok else "FAIL"
+            print(f"  {label:<34} {mark}  {detail}")
+            if gating and not ok:
+                problems.append(f"{label}: {detail}")
+        if unpinned:
+            print(f"\n  {unpinned} fixture check(s) are new and did not gate. "
+                  f"A fresh capture failing here is the game patch, not a "
+                  f"code regression -- read the numbers, then pin them.")
 
     print()
     if problems:

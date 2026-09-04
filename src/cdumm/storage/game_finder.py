@@ -125,6 +125,59 @@ def _drive_letters_for_scan() -> str:
     return "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 
 
+def _wine_host_steam_roots() -> list[Path]:
+    """Steam roots on the HOST filesystem when running under Wine/Proton.
+
+    GitHub #386 (NonDScript, Bazzite): CDUMM.exe run inside a Proton
+    prefix found nothing, because the Windows scan probes drive ROOTS
+    (``Z:/Steam``) and registry-era default paths — but the host's
+    Steam lives at ``/home/<user>/.local/share/Steam``. Proton always
+    symlinks ``dosdevices/z:`` to ``/`` (Proton source, setup_prefix),
+    so every host location is reachable under ``Z:/``. Probe the same
+    per-user locations the native Linux build uses, for every user
+    under ``Z:/home``.
+    """
+    from cdumm.platform import is_wine
+    if not is_wine():
+        return []
+    roots: list[Path] = []
+    rels = [
+        Path(".local/share/Steam"),
+        Path(".steam/steam"),
+        Path(".steam/root"),
+        Path(".var/app/com.valvesoftware.Steam/data/Steam"),
+        Path(".var/app/com.valvesoftware.Steam/.local/share/Steam"),
+        Path("snap/steam/common/.local/share/Steam"),
+    ]
+    home_base = Path("Z:/home")
+    try:
+        homes = [d for d in home_base.iterdir() if d.is_dir()]
+    except OSError:
+        homes = []
+    for home in homes:
+        for rel in rels:
+            p = home / rel
+            try:
+                if p.is_dir():
+                    roots.append(p)
+            except OSError:
+                continue
+    if roots:
+        logger.info("Wine: found host Steam roots via Z:: %s",
+                    [str(r) for r in roots])
+    return roots
+
+
+def _map_host_library_path(raw: Path) -> Path:
+    """Map a POSIX library path from a host libraryfolders.vdf (e.g.
+    ``/run/media/deck/SSD``) onto the Wine ``Z:`` drive. Paths that
+    already carry a drive letter pass through unchanged."""
+    s = str(raw).replace("\\", "/")  # WindowsPath renders '/x' as '\\x'
+    if s.startswith("/"):
+        return Path("Z:" + s)
+    return raw
+
+
 def _find_steam_root() -> Path | None:
     for p in STEAM_DEFAULT_PATHS:
         if p.exists():
@@ -563,6 +616,22 @@ def find_game_directories() -> list[Path]:
                 logger.info("Found Crimson Desert (Steam VDF) at %s", game_dir)
     else:
         logger.info("No Steam root found in default locations")
+
+    # Wine/Proton: also probe the HOST's Steam roots through Z:
+    # (GitHub #386 — the checks above only see Windows-side paths).
+    for wine_root in _wine_host_steam_roots():
+        wine_libs = [wine_root]
+        vdf = wine_root / LIBRARY_FOLDERS_VDF
+        if vdf.exists():
+            wine_libs.extend(
+                _map_host_library_path(p)
+                for p in _parse_library_folders(vdf))
+        for lib_dir in wine_libs:
+            game_dir = lib_dir / "steamapps" / "common" / "Crimson Desert"
+            if (game_dir / GAME_EXE).exists():
+                candidates.append(game_dir)
+                logger.info(
+                    "Found Crimson Desert (Wine host Steam) at %s", game_dir)
 
     # Steam detection — fallback: direct drive scan for common library
     # paths. Catches Steam libraries the primary install's VDF doesn't

@@ -93,8 +93,14 @@ class StoreinfoParseError(ValueError):
     """Raised when bytes do not match any known disc-0 layout."""
 
 
-#: Bytes of the value-struct interior we carry verbatim. Constant across
-#: every layout so far: the inserted fields all landed BEFORE it.
+#: Bytes of the value-struct interior we carry verbatim.
+#:
+#: This was constant from CD 1.10 through CD 1.16 because every field the
+#: game inserted landed BEFORE it. The 15 August 2026 patch broke that: it
+#: took four bytes out of the interior itself, 71 -> 67, leaving every
+#: field ahead of it in place (GitHub #365). So it is per-layout now, and
+#: this name remains only as the pre-1.16.1 default for the dataclass and
+#: for callers that never had a layout to hand.
 VGAP_SIZE = 71
 
 #: Size of one ``StockOrderCountData`` element (``_orderCountDataList``).
@@ -140,6 +146,35 @@ class StoreLayout:
     #: CD 1.16 inserted a u32 after ``raw_c`` -- ``_lowPriceThresholdCount``
     #: in the binary's own field names.
     low_price_threshold: bool = False
+    #: Bytes of the opaque value interior. 71 up to CD 1.16; the 15 Aug
+    #: 2026 patch cut it to 67 without moving anything ahead of it, which
+    #: is why ``const_off`` is unchanged on that build (GitHub #365).
+    vgap_size: int = VGAP_SIZE
+    #: vgap-relative offsets of the three fields the writer maps INSIDE
+    #: the opaque interior for a NEW record: raw_e (u32), raw_g (u16),
+    #: raw_q (u32). Constant at 41/57/59 from CD 1.10 through CD 1.16.
+    #:
+    #: On CD 1.16.1 these move to 37/53/55. Naive first-divergence against
+    #: CD 1.16 lands at index 37 for 4,749 of the 6,376 shared records and
+    #: at 53 for the other 1,627 -- which is what first made this look
+    #: like two different removal points needing two different mappings.
+    #: It isn't: for literally all 6,376, re-derived by SHIFT (not first
+    #: difference) -- keep vgap[:37], drop 4, keep the rest -- reproduces
+    #: the CD 1.16 interior byte-exact. The 53-only-look records are not a
+    #: second layout; every one of them has vgap[37:57] == 0 in both
+    #: builds, so shifting at 53 instead is *also* consistent for them by
+    #: coincidence of zero-padding, never because shifting at 37 is wrong.
+    #: No record in the shared table ever contradicts 37. See
+    #: ``test_vgap_shift_is_uniformly_at_37`` for the check across the
+    #: committed fixtures.
+    raw_e_off: int = 41
+    raw_g_off: int = 57
+    raw_q_off: int = 59
+    #: Whether ``raw_e_off`` / ``raw_g_off`` / ``raw_q_off`` are known to
+    #: be correct for this build, i.e. safe to write a NEW record with.
+    #: Reading is unaffected by this flag either way: the interior is
+    #: always carried through verbatim for records that already exist.
+    vgap_map_verified: bool = True
 
     @property
     def body_off(self) -> int:
@@ -151,12 +186,36 @@ class StoreLayout:
 
     @property
     def head_size(self) -> int:
-        return self.vgap_off + VGAP_SIZE
+        return self.vgap_off + self.vgap_size
 
 
 #: Newest first -- detection prefers the current game, and an older build
 #: only wins if it actually decodes better.
 LAYOUTS: tuple[StoreLayout, ...] = (
+    # CD 1.16.1 (15 Aug 2026 patch): the first change that did NOT insert
+    # or remove a field ahead of the const tripwire. Everything up to and
+    # including the const byte is identical to CD 1.16 -- record 0 of a
+    # failing store still reads 01 at offset 42 -- and the four bytes came
+    # out of the opaque interior instead, 71 -> 67.
+    #
+    # That is why the const tripwire did not catch it as a shift: it was
+    # never misaligned at the const. The failure surfaced one record later,
+    # when the next record started four bytes early and ITS const read 0.
+    #
+    # Measured on buildid fingerprint 7b103b0202b606fd (exe 2026-08-15):
+    # every one of the 397 entries that decode on 1.16 shrank by exactly
+    # 4 x record_count bytes, with zero exceptions, and this layout reads
+    # 398 located + 39 provably empty = 437/437, 6378 records, 0 not-found
+    # and 0 mis-round-tripped.
+    #
+    # The interior's removed 4 bytes are at vgap offset 37 for every one
+    # of those records (see raw_e_off's docstring and
+    # test_vgap_shift_is_uniformly_at_37) -- so raw_e/raw_g/raw_q move to
+    # 37/53/55 and adding a stock record is safe again.
+    StoreLayout("CD 1.16.1", 44, 34, 38, 41, 42,
+                low_price_threshold=True, vgap_size=67,
+                raw_e_off=37, raw_g_off=53, raw_q_off=55,
+                vgap_map_verified=True),
     # CD 1.16: a u32 (_lowPriceThresholdCount) inserted after raw_c pushed
     # everything below it down another four bytes. Under the CD 1.13 shape
     # the live 1.16 table decodes ZERO entries; under this one, 397 of 432
@@ -304,7 +363,7 @@ def read_stock_record(r: _Reader,
             f"not the verified disc-0 shape for layout {layout.label!r} "
             f"or the layout has drifted again")
     rec.body = r.u32()
-    rec.vgap = r.raw(VGAP_SIZE)
+    rec.vgap = r.raw(layout.vgap_size)
 
     sub_flag = r.u8()
     if sub_flag == 1:
@@ -340,9 +399,18 @@ def write_stock_record(w: _Writer, rec: StockRecord,
             raise StoreinfoParseError(
                 f"effect_list[{i}] must be exactly {ORDER_ELEM_SIZE} "
                 f"opaque bytes, got {el!r}")
-    if len(rec.vgap) != VGAP_SIZE:
+    if len(rec.vgap) != layout.vgap_size and not any(rec.vgap):
+        # An all-zero interior of the wrong length is the dataclass
+        # placeholder on a record built from nothing, not data: it carries
+        # no information to lose, so size it to the layout rather than
+        # refuse. A non-zero interior of the wrong length IS data from
+        # another build and still refuses below. (GitHub #365, where the
+        # interior stopped being one fixed size across builds.)
+        rec.vgap = b"\x00" * layout.vgap_size
+    if len(rec.vgap) != layout.vgap_size:
         raise StoreinfoParseError(
-            f"vgap must be exactly {VGAP_SIZE} bytes, got {len(rec.vgap)}")
+            f"vgap must be exactly {layout.vgap_size} bytes, got "
+            f"{len(rec.vgap)}")
     w.u16(rec.lookup_a)
     w.u64(rec.raw_a)
     w.u64(rec.raw_b)
@@ -419,11 +487,24 @@ class StoreListNotFound(StoreinfoParseError):
     one record at any offset -- i.e. the store really has no stock, and
     the failure to locate a list is the correct answer rather than a
     gap in our understanding.
+
+    ``ambiguous`` is True when the opposite happened: two or more spans
+    each satisfied all four acceptance conditions, so the entry was
+    refused for having too many answers rather than none. Callers must
+    be able to tell these apart without reading the message, because
+    they mean opposite things about the layout. Nothing is wrong with
+    the record shape when a scan comes out ambiguous -- the shape parsed
+    and round-tripped, twice -- so the fix is to narrow the search,
+    whereas a plain not-found means the shape itself is wrong and needs
+    re-deriving. Upstream #365 reports 78 entries in one bucket labelled
+    "not-found"; which of these two it is decides the entire fix.
     """
 
-    def __init__(self, msg: str, *, provably_empty: bool = False) -> None:
+    def __init__(self, msg: str, *, provably_empty: bool = False,
+                 ambiguous: bool = False) -> None:
         super().__init__(msg)
         self.provably_empty = provably_empty
+        self.ambiguous = ambiguous
 
 
 def _min_list_bytes(layout: StoreLayout) -> int:
@@ -431,7 +512,7 @@ def _min_list_bytes(layout: StoreLayout) -> int:
     return 4 + (2 + 8 + 8 + 4 + (4 if layout.low_price_threshold else 0)
                 + 4 + 4 + (4 if layout.order_index_off is not None else 0)
                 + 3 + (1 if layout.is_restore_off is not None else 0)
-                + 1 + 4 + VGAP_SIZE + 1 + 4)
+                + 1 + 4 + layout.vgap_size + 1 + 4)
 
 
 def locate_stock_list(body: bytes, payload: int, entry_end: int, key: int,
@@ -501,7 +582,7 @@ def locate_stock_list(body: bytes, payload: int, entry_end: int, key: int,
         raise StoreListNotFound(
             f"store {key}: {len(found)} distinct spans each parse as a "
             f"byte-exact stock list ({[f[1] - payload for f in found]}); "
-            f"ambiguous, refusing")
+            f"ambiguous, refusing", ambiguous=True)
     return found[0]
 
 
@@ -547,6 +628,38 @@ def _score_layout(body: bytes, entry_offsets: list[int],
     return entries, records
 
 
+def _unreadable_entries(body: bytes, entry_offsets: list[int],
+                        layout: StoreLayout) -> int:
+    """Entries that neither decode nor are *provably empty* under ``layout``.
+
+    The count of decoded entries alone stopped separating layouts on the
+    CD 1.16.1 table (GitHub #365): CD 1.13 byte-exactly decodes 320 of its
+    437 entries against CD 1.16.1's 398, a margin of 1.24x where every
+    earlier build gave 100x or more. Ranking on that alone is one bad
+    build away from picking a layout that reads two thirds of a table and
+    silently abandons the rest.
+
+    An entry that is neither decodable nor provably empty is a hole in the
+    explanation, and the right layout has none. On that same table CD 1.13
+    leaves 78 and CD 1.16.1 leaves 0, which is decisive where 320 vs 398
+    is not.
+    """
+    holes = 0
+    ordered = sorted(entry_offsets)
+    for i, off in enumerate(ordered):
+        end = ordered[i + 1] if i + 1 < len(ordered) else len(body)
+        try:
+            key = struct.unpack_from("<H", body, off)[0]
+            locate_stock_list(
+                body, _entry_payload(body, off), end, key, layout)
+        except StoreListNotFound as exc:
+            if not exc.provably_empty:
+                holes += 1
+        except (StoreinfoParseError, struct.error, IndexError):
+            holes += 1
+    return holes
+
+
 def detect_storeinfo_layout(body: bytes,
                             entry_offsets: list[int]) -> StoreLayout:
     """Pick the layout that actually decodes this table.
@@ -559,13 +672,23 @@ def detect_storeinfo_layout(body: bytes,
     integrity check is the game crashing on store open.
     """
     best: StoreLayout | None = None
-    best_score = (0, 0)
+    best_rank: tuple[int, int, int] | None = None
     for cand in LAYOUTS:
-        score = _score_layout(body, entry_offsets, cand)
-        logger.debug("storeinfo layout %s: %d entries, %d records",
-                     cand.label, score[0], score[1])
-        if score > best_score:
-            best, best_score = cand, score
+        entries, records = _score_layout(body, entry_offsets, cand)
+        if not entries:
+            logger.debug("storeinfo layout %s: decodes nothing", cand.label)
+            continue
+        # Fewest unexplained entries first, then the old
+        # (entries, records) ordering. A layout that reads more records
+        # while abandoning entries the other one reads has not understood
+        # the table better -- see `_unreadable_entries`.
+        holes = _unreadable_entries(body, entry_offsets, cand)
+        rank = (-holes, entries, records)
+        logger.debug(
+            "storeinfo layout %s: %d entries, %d records, %d unreadable",
+            cand.label, entries, records, holes)
+        if best_rank is None or rank > best_rank:
+            best, best_rank = cand, rank
 
     # Nothing decoded at all -> either every store is empty (fine, and
     # unknowable by construction) or the shape is one we don't model.
@@ -575,7 +698,7 @@ def detect_storeinfo_layout(body: bytes,
     # us under any layout, so a table made only of those is a valid
     # degenerate table rather than an unreadable one. Without that
     # distinction an all-empty table would be a hard error.
-    if best is None or best_score[0] == 0:
+    if best is None or best_rank is None:
         if entry_offsets and all(
                 _is_provably_empty(body, entry_offsets, off)
                 for off in entry_offsets):
@@ -592,6 +715,7 @@ def detect_storeinfo_layout(body: bytes,
 
     logger.info(
         "storeinfo: detected layout %s (%d/%d entries, %d records "
-        "round-trip byte-exact)",
-        best.label, best_score[0], len(entry_offsets), best_score[1])
+        "round-trip byte-exact, %d unreadable)",
+        best.label, best_rank[1], len(entry_offsets), best_rank[2],
+        -best_rank[0])
     return best

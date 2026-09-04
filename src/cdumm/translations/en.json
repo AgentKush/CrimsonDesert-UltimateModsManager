@@ -774,6 +774,7 @@
   "tools.rescan.requested": "Rescan Requested",
   "tools.rescan.requested_desc": "The snapshot refresh has been initiated. This may take a moment depending on game file sizes.",
   "tools.rescan.enable_hint": "Check the box above to enable",
+  "tools.rescan.complete": "Rescan complete!",
   "tools.stat.never": "Never",
   "tools.error": "Error: {detail}",
   "tools.progress.checking": "Checking {name}...",
@@ -1318,5 +1319,7 @@
   "recovery.all_skipped_msg": "Your mods were disabled because their original files are gone. Drop the archives back in CDUMM to re-import them.",
   "recovery.partial_skipped_msg": "{count} mod(s) were disabled because their original files are gone: {names}",
   "recovery.complete_msg": "Recovery complete. Launch the game. If it still crashes, check Nexus for newer versions of your mods.",
-  "settings.steam_launch_method_exe": "Game exe (skip Steam)"
+  "settings.steam_launch_method_exe": "Game exe (skip Steam)",
+  "settings.nexus_none_linked": "None of your {count} mods are linked to a NexusMods page, so none of them can be checked. Mods imported from a manually downloaded archive have no Nexus link; re-import via the Nexus download or add the link on the mod's card to make them checkable.",
+  "settings.nexus_up_to_date_partial": "{checked} linked mod(s) are up to date. {unlinked} mod(s) have no NexusMods link and could not be checked."
 }

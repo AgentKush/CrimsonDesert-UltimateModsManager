@@ -11,21 +11,27 @@ Safety model (the value-struct interior is only partially mapped, see
 storeinfo_native_parser):
 
 * Records in the intent that MATCH a vanilla record (same
-  ``value.payload.body``, which doubles as ``raw_q``) keep the vanilla
-  bytes verbatim, reordered per the intent. Their pinned fields were
-  validated identical across the whole ground-truth entry; interior
-  diffs observed in real mods are stale-export noise from older game
-  versions, which must NOT be written over current vanilla data.
+  ``value.payload.body``, which doubles as ``raw_q``) take the mod's
+  per-slot fields (quantity, flags, restock/sort order -- everything
+  the head maps), falling back to the vanilla value for any field the
+  mod's JSON omits (GitHub #365 residual: a matched record used to keep
+  100% vanilla bytes, so a mod bumping the stock of an item a store
+  already carried had no effect). The value-struct interior (``vgap``)
+  and ``effect_list`` stay vanilla unconditionally: interior diffs
+  observed in real mods are stale-export noise from older game
+  versions.
 * NEW records are built from the pinned fields plus sub_data, with the
   unmapped value interior zeroed. If a new record carries a NON-zero
   value in any unmapped interior field, the whole intent is refused,
   we cannot place the value, and a wrong placement corrupts the table
   (the game crashes on store open).
-* Non-empty ``effect_list`` refuses (element layout not decoded).
+* A new record's non-empty ``effect_list`` refuses (element layout not
+  decoded); a matched record's carries over from vanilla verbatim.
 """
 from __future__ import annotations
 
 import logging
+import re
 import struct
 
 from cdumm.engine.storeinfo_native_parser import (
@@ -37,7 +43,12 @@ from cdumm.engine.storeinfo_native_parser import (
     locate_stock_list,
     serialize_stock_list,
 )
-from cdumm.semantic.parser import parse_pabgh_index, _parse_entry_header
+from cdumm.semantic.parser import _parse_entry_header, parse_pabgh_index
+
+# ``stock_data_list[N].raw_c`` / ``stock_data_list[N].sub_data`` -- the
+# per-slot edits Expanded Vendor Inventory Rebuilt V3 (#191) makes on
+# existing vanilla stock slots before appending its own records.
+_SLOT_RE = re.compile(r"^stock_data_list\[(\d+)\]\.(raw_c|sub_data)$")
 
 logger = logging.getLogger(__name__)
 
@@ -98,8 +109,74 @@ def _check_new_record_buildable(j: dict, idx: int) -> None:
                 f"ground-truth record they are the same value")
 
 
-def _build_new_record(j: dict, idx: int) -> StockRecord:
+def _build_matched_record(j: dict, van: StockRecord) -> StockRecord:
+    """A mod record whose item id matches an existing vanilla stock
+    entry at this store.
+
+    Applies the mod's per-slot fields (quantity, flags, restock/sort
+    order) -- they are exactly as mapped as they are for a brand-new
+    record, and a Format 3 'set' intent means them as an authoritative
+    replacement, not noise. A field the mod's JSON omits falls back to
+    the vanilla value instead of a hardcoded default, since a vanilla
+    record to fall back to actually exists here (unlike the new-record
+    case).
+
+    Keeps vanilla's value-struct interior (``vgap``) and ``effect_list``
+    verbatim rather than trusting the mod's ``value.*`` -- this is the
+    #183 protection, unchanged: interior diffs seen in real mods are
+    stale-export noise from an older layout, and the interior encodes
+    the ITEM's own definition (price/type), which does not vary by
+    which store sells it.
+    """
+    def field(name: str) -> int:
+        v = j.get(name)
+        return int(v) if v is not None else getattr(van, name)
+
+    order_index = j.get("order_index_113", j.get("order_index"))
+    order_index = (int(order_index) & 0xFFFFFFFF if order_index is not None
+                   else van.order_index)
+    low_thr = j.get("low_price_threshold_count")
+    low_thr = (int(low_thr) & 0xFFFFFFFF if low_thr is not None
+               else van.low_price_threshold_count)
+
+    return StockRecord(
+        lookup_a=field("lookup_a"),
+        raw_a=field("raw_a"),
+        raw_b=field("raw_b"),
+        raw_c=field("raw_c"),
+        low_price_threshold_count=low_thr,
+        raw_d=field("raw_d"),
+        raw_e=field("raw_e"),
+        order_index=order_index,
+        flag_a=field("flag_a"),
+        flag_b=field("flag_b"),
+        flag_c=field("flag_c"),
+        is_restore_item=field("is_restore_item"),
+        const33=van.const33,
+        body=van.body,
+        vgap=van.vgap,
+        sub_data=van.sub_data,
+        effect_list=van.effect_list,
+    )
+
+
+def _build_new_record(j: dict, idx: int,
+                      layout: StoreLayout) -> StockRecord:
     _check_new_record_buildable(j, idx)
+    # The three fields mapped below live INSIDE the opaque interior at
+    # fixed indices. On a build whose interior CDUMM has not re-derived
+    # them for, writing there lands in the wrong bytes, so refuse the
+    # record rather than write a plausible-looking wrong one.
+    #
+    # Editing an EXISTING record is unaffected: nothing else touches the
+    # interior, it is carried through verbatim. (GitHub #365.)
+    if not layout.vgap_map_verified:
+        raise StoreinfoWriteRefused(
+            f"new stock record [{idx}]: the {layout.label} value "
+            f"interior has not been re-derived, so raw_e / raw_g / raw_q "
+            f"would be written at indices measured on an older build. "
+            f"Editing existing stock records still works on this game "
+            f"version; only ADDING one is refused")
     v = j.get("value") or {}
     rec = StockRecord(
         lookup_a=int(j.get("lookup_a") or 0),
@@ -134,15 +211,23 @@ def _build_new_record(j: dict, idx: int) -> StockRecord:
         body=int(_record_identity(j) or 0),
     )
     # Mapped interior fields live inside the opaque value-struct blob
-    # (vgap). These indices are vgap-relative and stay stable across the
-    # CD 1.11 layout shift: is_restore_item was inserted before the vgap,
-    # so the blob's contents and internal offsets did not move (only the
-    # vgap's record-relative start did, 38 -> 39). raw_e -> vgap[41],
-    # raw_g u16 -> vgap[57], raw_q u32 -> vgap[59].
-    vgap = bytearray(rec.vgap)
-    struct.pack_into("<I", vgap, 41, int(v.get("raw_e") or 0))
-    struct.pack_into("<H", vgap, 57, int(v.get("raw_g") or 0) & 0xFFFF)
-    struct.pack_into("<I", vgap, 59, int(v.get("raw_q") or 0))
+    # (vgap), at the layout's raw_e_off / raw_g_off / raw_q_off. These
+    # stayed at 41/57/59 across the CD 1.11 layout shift (is_restore_item
+    # was inserted before the vgap, so the blob's contents and internal
+    # offsets did not move, only the vgap's record-relative start did,
+    # 38 -> 39) but moved to 37/53/55 on CD 1.16.1 (GitHub #365) -- see
+    # StoreLayout.raw_e_off for how that was derived.
+    #
+    # Sized from the layout, not from the StockRecord dataclass default
+    # (71, the pre-1.16.1 VGAP_SIZE): that default only ever matched by
+    # coincidence, because every layout before 1.16.1 also happened to be
+    # 71 bytes. On a shorter interior it silently built an oversized
+    # vgap that write_stock_record then refused outright.
+    vgap = bytearray(layout.vgap_size)
+    struct.pack_into("<I", vgap, layout.raw_e_off, int(v.get("raw_e") or 0))
+    struct.pack_into("<H", vgap, layout.raw_g_off,
+                     int(v.get("raw_g") or 0) & 0xFFFF)
+    struct.pack_into("<I", vgap, layout.raw_q_off, int(v.get("raw_q") or 0))
     rec.vgap = bytes(vgap)
     sd = j.get("sub_data")
     if sd is not None:
@@ -188,24 +273,48 @@ def build_storeinfo_changes(
         if ename:
             name_to_key.setdefault(ename, k)
 
-    # One rebuild per entry key; later intents on the same key win
-    # (matching 'set' semantics).
-    per_key: dict[int, list] = {}
+    # One rebuild per entry key. Intents are applied IN ORDER to a
+    # working list that starts as the vanilla stock list (#191,
+    # Expanded Vendor Inventory Rebuilt V3 does, per store: edit a
+    # vanilla slot, append 59 records, then set a scalar):
+    #   ("set", records)        replace the whole list (matched/new)
+    #   ("append", record)      add one record built from JSON
+    #   ("slot", N, field, v)   edit field of existing slot N
+    per_key: dict[int, list[tuple]] = {}
     name_resolved = 0
     for it in intents:
         field = (getattr(it, "field", "") or "").strip()
-        if field not in ("stock_data_list", "_exchangeItemInfoListForSell"):
-            logger.warning(
-                "storeinfo writer: unsupported field %r, skipping", field)
-            continue
-        if (getattr(it, "op", "set") or "set") != "set":
-            logger.warning(
-                "storeinfo writer: unsupported op %r, skipping",
-                getattr(it, "op", None))
-            continue
+        op = (getattr(it, "op", "set") or "set")
         new = getattr(it, "new", None)
         key = getattr(it, "key", None)
-        if not isinstance(new, list) or not isinstance(key, int):
+        slot_m = _SLOT_RE.match(field)
+        if field in ("stock_data_list", "_exchangeItemInfoListForSell"):
+            if op == "set":
+                if not isinstance(new, list):
+                    logger.warning(
+                        "storeinfo writer: malformed intent (key=%r), "
+                        "skipping", key)
+                    continue
+                item = ("set", new)
+            elif op == "array_append":
+                if not isinstance(new, dict):
+                    logger.warning(
+                        "storeinfo writer: array_append element on key=%r "
+                        "is not an object, skipping", key)
+                    continue
+                item = ("append", new)
+            else:
+                logger.warning(
+                    "storeinfo writer: unsupported op %r, skipping", op)
+                continue
+        elif slot_m is not None and op == "set":
+            item = ("slot", int(slot_m.group(1)), slot_m.group(2), new)
+        else:
+            logger.warning(
+                "storeinfo writer: unsupported field %r / op %r, skipping",
+                field, op)
+            continue
+        if not isinstance(key, int):
             logger.warning(
                 "storeinfo writer: malformed intent (key=%r), skipping",
                 key)
@@ -225,7 +334,7 @@ def build_storeinfo_changes(
                     "storeinfo writer: store key %d / entry %r not in "
                     "table, skipping", key, entry_name)
                 continue
-        per_key[key] = new
+        per_key.setdefault(key, []).append(item)
 
     if name_resolved:
         logger.info(
@@ -286,9 +395,12 @@ def build_storeinfo_changes(
         # sub_data, the always-zero effect_list count) is written back
         # verbatim by write_stock_record, and any byte pattern outside
         # the verified disc-0 shape raises StoreinfoParseError above
-        # (caught as a refusal) instead of parsing lossily. Matched
-        # vanilla records therefore reproduce their bytes exactly;
-        # tests/test_storeinfo_writer.py pins this on the real table.
+        # (caught as a refusal) instead of parsing lossily. A matched
+        # record whose mod JSON reproduces vanilla's head fields
+        # therefore round-trips byte-exact too (see
+        # _build_matched_record for the fields that always stay
+        # vanilla); tests/test_storeinfo_writer.py pins this on the
+        # real table.
         if list_end > entry_end:
             raise StoreinfoWriteRefused(
                 f"store entry {key}: parsed list overruns the entry "
@@ -296,16 +408,52 @@ def build_storeinfo_changes(
         by_body = {}
         for rec in van_records:
             by_body.setdefault(rec.body, rec)
-        out_records: list[StockRecord] = []
+        out_records: list[StockRecord] = list(van_records)
         n_new = 0
-        for idx, j in enumerate(json_records):
-            ident = _record_identity(j)
-            van = by_body.get(ident) if ident is not None else None
-            if van is not None:
-                out_records.append(van)
-            else:
-                out_records.append(_build_new_record(j, idx))
+        for item in json_records:
+            if item[0] == "set":
+                out_records = []
+                for idx, j in enumerate(item[1]):
+                    ident = _record_identity(j)
+                    van = by_body.get(ident) if ident is not None else None
+                    if van is not None:
+                        out_records.append(_build_matched_record(j, van))
+                    else:
+                        out_records.append(
+                            _build_new_record(j, idx, layout))
+                        n_new += 1
+            elif item[0] == "append":
+                out_records.append(
+                    _build_new_record(item[1], len(out_records), layout))
                 n_new += 1
+            else:  # ("slot", N, field, value)
+                _, n, fname, value = item
+                if not 0 <= n < len(out_records):
+                    raise StoreinfoWriteRefused(
+                        f"store entry {key}: stock_data_list[{n}].{fname} "
+                        f"targets a slot that does not exist (list has "
+                        f"{len(out_records)} records); refusing")
+                rec = out_records[n]
+                if fname == "raw_c":
+                    if isinstance(value, bool) or not isinstance(value, int):
+                        raise StoreinfoWriteRefused(
+                            f"store entry {key}: stock_data_list[{n}].raw_c "
+                            f"must be an integer, got {value!r}")
+                    rec.raw_c = value & 0xFFFFFFFF
+                elif fname == "sub_data":
+                    if value is None:
+                        rec.sub_data = None
+                    elif isinstance(value, dict):
+                        rec.sub_data = {
+                            "flag": int(value.get("flag") or 0),
+                            "lookup_a": int(value.get("lookup_a") or 0) & 0xFFFFFFFF,
+                            "lookup_b": int(value.get("lookup_b") or 0) & 0xFFFFFFFF,
+                            "lookup_c": int(value.get("lookup_c") or 0) & 0xFFFFFFFF,
+                        }
+                    else:
+                        raise StoreinfoWriteRefused(
+                            f"store entry {key}: stock_data_list[{n}]"
+                            f".sub_data must be null or an object")
         new_list = serialize_stock_list(out_records, layout)
         replacements[key] = (list_start, list_end, new_list)
         logger.info(

@@ -99,6 +99,25 @@ expected JSON) was verified on Ubuntu 24.04.3 LTS with WineHQ 11.0 stable,
 `vcrun2022`, and `corefonts`. Choose this path if you need ASI plugin
 support.
 
+### Finding the game under Wine / Proton (v3.16.3+)
+
+CDUMM detects when it is running inside a Wine or Proton prefix and
+scans the **host's** Steam libraries through the `Z:` drive (Proton
+always maps `Z:` to `/`): `~/.local/share/Steam`, the `~/.steam`
+symlinks, the Flatpak and Snap installs, plus every extra library in
+`libraryfolders.vdf`. The folder picker also switches to one that can
+show hidden folders such as `.local`, which Wine's own picker cannot.
+
+If auto-detect still misses, paste the path straight into the game
+folder box in this form:
+
+```
+Z:\home\<you>\.local\share\Steam\steamapps\common\Crimson Desert
+```
+
+Bug reports generated under Wine label the always-on "running as
+administrator" state as a Wine artifact; it is not a problem.
+
 ### Wine quick start
 
 Use the bundled launcher in `scripts/cdumm-linux.sh`:

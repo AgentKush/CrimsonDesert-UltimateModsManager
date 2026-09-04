@@ -1923,7 +1923,25 @@ class ApplyWorker(QObject):
             "SELECT 1 FROM mods WHERE enabled = 1 "
             "AND json_source IS NOT NULL AND json_source != '' "
             "LIMIT 1").fetchone() is not None
-        if not file_deltas and not revert_files and not has_enabled_json:
+        # _get_files_to_revert only tracks mod_type='paz' deltas, so it's
+        # blind to json_source mods entirely (they never write a
+        # mod_deltas row — their overlay is built fresh at mount time).
+        # Disabling every json_source mod at once made file_deltas,
+        # revert_files, AND has_enabled_json all empty, so Apply bailed
+        # out here before reaching Phase 4's orphan-cleanup, leaving the
+        # previous overlay (built by the mods that are now disabled)
+        # mounted forever (report 2026-08-26). If a CDUMM-managed overlay
+        # dir is still on disk, there's real cleanup work to do even with
+        # nothing to apply or revert -- don't bail, let the normal apply
+        # flow reach orphan-cleanup so it can remove it.
+        has_stale_overlay = any(
+            (d / "_cdumm_overlay.marker").exists()
+            for d in self._game_dir.iterdir()
+            if d.is_dir() and d.name.isdigit() and len(d.name) == 4
+            and int(d.name) >= 36
+        )
+        if (not file_deltas and not revert_files and not has_enabled_json
+                and not has_stale_overlay):
             self.error_occurred.emit("No mod changes to apply or revert.")
             return
 
@@ -5060,6 +5078,17 @@ class ApplyWorker(QObject):
                 num = int(d)
                 if num > max_num:
                     max_num = num
+        # Never collide with dir numbers the live or vanilla PAPGT
+        # already claims. Crimson Desert 2.0 ships placeholder entries
+        # 0036-0040 (optional language-pack slots with NO dir on disk);
+        # squatting one hands the overlay the placeholder's
+        # is_optional=1 flags and the game silently never mounts it
+        # (GitHub #383). Both indexes are scanned because a pre-fix
+        # apply may have stripped the placeholders from the live one.
+        from cdumm.archive.papgt_manager import reserved_papgt_dir_numbers
+        for num in reserved_papgt_dir_numbers(self._game_dir, self._vanilla_dir):
+            if num > max_num:
+                max_num = num
         overlay_num = max_num + 1
         return f"{overlay_num:04d}"
 

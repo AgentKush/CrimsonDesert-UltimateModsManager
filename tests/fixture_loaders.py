@@ -129,6 +129,109 @@ def has_vanilla116(name: str) -> bool:
         return False
 
 
+def load_vanilla1161(name: str) -> bytes:
+    """Load a CD 1.16.1 vanilla extract (the 15 August 2026 patch).
+
+    Added for storeinfo (GitHub #365). That patch is the first storeinfo
+    change that did not move a field ahead of the const tripwire: the
+    four bytes came out of the opaque ``vgap`` interior instead, 71 -> 67,
+    so the record shrank while everything up to the const stayed put.
+
+    Both this and the vanilla116 extract have to be present to test it.
+    The 1.16 table needs vgap 71 and this one needs 67, and each decodes
+    0 not-found under its own layout and hundreds under the other's, so
+    one table alone cannot show that detection picks correctly.
+    """
+    packed = _TESTS_DIR / "fixtures" / "vanilla1161" / (name + ".zlib")
+    if packed.exists():
+        return zlib.decompress(packed.read_bytes())
+    raise FileNotFoundError(
+        f"vanilla1161 fixture {name!r} absent from tests/fixtures")
+
+
+def has_vanilla1161(name: str) -> bool:
+    try:
+        load_vanilla1161(name)
+        return True
+    except FileNotFoundError:
+        return False
+
+
+def load_vanilla_b24773079(name: str) -> bytes:
+    """Load a vanilla extract from Steam buildid 24773079.
+
+    Added for iteminfo's PrefabData: each ``prefab_data_list`` element
+    grew one u32 (``unk_prefab_hash``, see
+    ``_read_PrefabData_CD116b``), which the committed vanilla116 fixture
+    predates. Named by Steam buildid rather than a game version string
+    because, unlike storeinfo's CD 1.16.1 fixture, no in-app version
+    label for this build was available to cite with the same
+    confidence -- the buildid is machine-checkable instead of guessed.
+    """
+    packed = _TESTS_DIR / "fixtures" / "vanilla_b24773079" / (name + ".zlib")
+    if packed.exists():
+        return zlib.decompress(packed.read_bytes())
+    raise FileNotFoundError(
+        f"vanilla_b24773079 fixture {name!r} absent from tests/fixtures")
+
+
+def has_vanilla_b24773079(name: str) -> bool:
+    try:
+        load_vanilla_b24773079(name)
+        return True
+    except FileNotFoundError:
+        return False
+
+def load_vanilla_b24934353(name: str) -> bytes:
+    """Load a CD 2.0 (buildid 24934353, 26 Aug 2026) vanilla extract.
+
+    Added for iteminfo (GitHub #377): 2.0 inserted a u16 pair before
+    ``repair_data_list`` and renumbered the SubItem None tag 17 -> 18,
+    so every pre-2.0 layout decodes 0 of its 6,810 records. Committing
+    the bytes is what lets CI hold the cd20 layout to exact tiling, and
+    lets the next drift be diffed against a known-good build the way
+    this one was diffed against b24773079.
+    """
+    packed = _TESTS_DIR / "fixtures" / "vanilla_b24934353" / (name + ".zlib")
+    if packed.exists():
+        return zlib.decompress(packed.read_bytes())
+    raise FileNotFoundError(
+        f"vanilla_b24934353 fixture {name!r} absent from tests/fixtures")
+
+
+def has_vanilla_b24934353(name: str) -> bool:
+    try:
+        load_vanilla_b24934353(name)
+        return True
+    except FileNotFoundError:
+        return False
+
+
+def load_vanilla_b24994088(name: str) -> bytes:
+    """Load a CD 2.00.01 (buildid 24994088, 29 Aug 2026) vanilla extract.
+
+    npcinfo + storeinfo were captured for GitHub #393 (donr484's Dye
+    Hard and Greylight Special): the npcinfo dye-list layout and the
+    storeinfo exchange-item field are held to these bytes.
+    dyecolorgroupinfo was captured for AerowynX's Expanded Vendor
+    Inventory Rebuilt V3 Dye Addon (#191): its colour list layout.
+    """
+    packed = _TESTS_DIR / "fixtures" / "vanilla_b24994088" / (name + ".zlib")
+    if packed.exists():
+        return zlib.decompress(packed.read_bytes())
+    raise FileNotFoundError(
+        f"vanilla_b24994088 fixture {name!r} absent from tests/fixtures")
+
+
+def has_vanilla_b24994088(name: str) -> bool:
+    try:
+        load_vanilla_b24994088(name)
+        return True
+    except FileNotFoundError:
+        return False
+
+
+
 def has_vanilla115(name: str) -> bool:
     try:
         load_vanilla115(name)

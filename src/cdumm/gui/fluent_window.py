@@ -121,6 +121,117 @@ def _papgt_dir_owners(conn):
     return owners
 
 
+def _load_pamt_hash_cache(cache_path) -> dict:
+    """``{abs_path: [mtime_ns, size, hash]}``, or ``{}`` on any read
+    problem (missing file, corrupt JSON) -- a cache miss just means
+    the affected entries get rehashed, never a hard failure."""
+    import json
+    try:
+        return json.loads(cache_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def _save_pamt_hash_cache(cache_path, cache: dict) -> None:
+    import json
+    try:
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        cache_path.write_text(json.dumps(cache), encoding="utf-8")
+    except OSError as e:
+        logger.debug("post-apply PAMT hash cache write failed: %s", e)
+
+
+def _cached_pamt_hash(pamt_path, cache: dict, compute_pamt_hash) -> int:
+    """PAMT hash for ``pamt_path``, reusing ``cache`` when the file's
+    (mtime, size) fingerprint still matches what was last hashed.
+
+    Almost every mounted directory is untouched between one Apply and
+    the next -- only the CDUMM overlay dir(s) actually change -- so
+    this turns a full rehash of every directory into a full rehash of
+    the one or two that changed, plus a stat() for everything else.
+    """
+    st = pamt_path.stat()
+    key = str(pamt_path)
+    cached = cache.get(key)
+    if cached is not None and cached[0] == st.st_mtime_ns and cached[1] == st.st_size:
+        return cached[2]
+    h = compute_pamt_hash(pamt_path.read_bytes())
+    cache[key] = [st.st_mtime_ns, st.st_size, h]
+    return h
+
+
+def _compute_post_apply_issues(game_dir, conn) -> list[tuple[str, str]]:
+    """PAPGT/PAMT integrity check used after Apply. Runs on the GUI
+    thread (deliberately -- see ``_post_apply_verify``), so it has to
+    stay fast: PAMT hashes for directories whose (mtime, size) haven't
+    changed since the last run are served from a small on-disk cache
+    instead of rehashing every mounted directory every single Apply.
+    """
+    import struct
+
+    from cdumm.archive.hashlittle import compute_pamt_hash, compute_papgt_hash
+    from cdumm.archive.papgt_manager import decode_papgt_entry_flags
+    from cdumm.engine.cdmods_paths import get_cdmods_root
+
+    issues: list[tuple[str, str]] = []
+    dir_owners = _papgt_dir_owners(conn)
+
+    cache_path = get_cdmods_root(None, game_dir) / ".post_apply_hash_cache.json"
+    hash_cache = _load_pamt_hash_cache(cache_path)
+
+    papgt_path = game_dir / "meta" / "0.papgt"
+    if papgt_path.exists():
+        data = papgt_path.read_bytes()
+        if len(data) >= 12:
+            stored = struct.unpack_from('<I', data, 4)[0]
+            computed = compute_papgt_hash(data)
+            if stored != computed:
+                issues.append(("PAPGT", "PAPGT hash is invalid"))
+
+            entry_count = data[8]
+            entry_start = 12
+            str_table_off = entry_start + entry_count * 12 + 4
+            for i in range(entry_count):
+                pos = entry_start + i * 12
+                flags = struct.unpack_from('<I', data, pos)[0]
+                name_off = struct.unpack_from('<I', data, pos + 4)[0]
+                papgt_hash = struct.unpack_from('<I', data, pos + 8)[0]
+                abs_off = str_table_off + name_off
+                if abs_off < len(data):
+                    end = data.index(0, abs_off) if 0 in data[abs_off:] else len(data)
+                    dir_name = data[abs_off:end].decode('ascii', errors='replace')
+                    pamt_path = game_dir / dir_name / "0.pamt"
+                    if pamt_path.exists():
+                        actual = _cached_pamt_hash(pamt_path, hash_cache, compute_pamt_hash)
+                        if actual != papgt_hash:
+                            issues.append(("PAPGT", f"{dir_name} PAMT hash mismatch"))
+                    elif not (game_dir / dir_name).exists():
+                        # GitHub #390: CD 2.0 ships reserved/optional
+                        # placeholder entries (0036-0040 -- language-pack
+                        # slots) that have no folder on disk by design.
+                        # The entry's own is_optional flag is the real,
+                        # version-independent signal for that -- not a
+                        # hardcoded dir-number range, which is exactly
+                        # what false-positived here after #384 taught
+                        # the rest of CDUMM to leave these entries alone.
+                        is_optional, _lang_type, _zero = decode_papgt_entry_flags(flags)
+                        if is_optional:
+                            continue
+                        _owners = dir_owners.get(dir_name)
+                        _src = ", ".join(sorted(_owners)) if _owners else "PAPGT"
+                        try:
+                            if int(dir_name) >= 36:
+                                issues.append((_src, f"Missing directory {dir_name}"))
+                        except (ValueError, TypeError):
+                            issues.append((_src, f"Missing directory {dir_name}"))
+
+    # PAMT bounds checking skipped, too slow for large installations. The
+    # apply engine already ensures correct offsets/sizes during PAZ
+    # composition.
+    _save_pamt_hash_cache(cache_path, hash_cache)
+    return issues
+
+
 def _quiet_qprocess(proc) -> None:
     """Suppress the brief console window flash when ``QProcess`` spawns
     a Windows subprocess.
@@ -1712,6 +1823,17 @@ class CdummWindow(FluentWindow):
 
     def _deferred_startup(self) -> None:
         """Run after window is visible. Heavy checks happen here."""
+        # Sweep leftover import-extraction folders (GitHub #371: crashed
+        # or force-killed imports leave the extracted archive under
+        # CDMods/_import_staging/ and users accumulated 25+ GB). Safe
+        # here: the single-instance .gui_lock is held, so no import is
+        # in flight.
+        if self._game_dir:
+            try:
+                from cdumm.engine.import_handler import cleanup_import_staging
+                cleanup_import_staging(self._game_dir)
+            except Exception as e:
+                logger.warning("Import-staging cleanup failed (non-fatal): %s", e)
         # Retroactive configurable-mod scan: covers imports that predate the
         # configurable-detection logic. Cheap for mods whose source_path is
         # already a directory; rescues old ZIP-backed entries by extracting
@@ -1872,6 +1994,11 @@ class CdummWindow(FluentWindow):
             if not snap:
                 return
             actual_size = papgt_path.stat().st_size
+            # Steam language packs live in the optional 0036-0040
+            # slots and are not in an older snapshot; they are not
+            # orphans and must never be deleted here (Nexus, Dante1963).
+            from cdumm.archive.papgt_manager import language_pack_dirs
+            _lang_dirs = language_pack_dirs(self._game_dir, self._vanilla_dir)
             if actual_size == snap[0]:
                 has_orphans = False
                 for d in self._game_dir.iterdir():
@@ -1880,6 +2007,7 @@ class CdummWindow(FluentWindow):
                         and d.name.isdigit()
                         and len(d.name) == 4
                         and int(d.name) >= 36
+                        and d.name not in _lang_dirs
                     ):
                         orphan_check = self._db.connection.execute(
                             "SELECT COUNT(*) FROM snapshots WHERE file_path LIKE ?",
@@ -1897,7 +2025,7 @@ class CdummWindow(FluentWindow):
             for d in sorted(self._game_dir.iterdir()):
                 if not d.is_dir() or not d.name.isdigit() or len(d.name) != 4:
                     continue
-                if int(d.name) < 36:
+                if int(d.name) < 36 or d.name in _lang_dirs:
                     continue
                 orphan_check = self._db.connection.execute(
                     "SELECT COUNT(*) FROM snapshots WHERE file_path LIKE ?",
@@ -6473,74 +6601,21 @@ class CdummWindow(FluentWindow):
     def _post_apply_verify(self) -> None:
         """Deep verification after Apply -- checks PAPGT/PAMT integrity.
 
-        Runs on the GUI thread, keep it fast or skip heavy checks.
+        Deliberately synchronous and blocking: this is the gate between
+        "Apply reported success" and "it's safe to Launch". Running it in
+        the background would let the user launch the game before it's
+        cleared the install, which defeats the point of checking at all.
+        Runs on the GUI thread, so the check itself (`_compute_post_apply_
+        issues`) has to stay fast -- see that function's docstring for the
+        cache that keeps repeated PAMT hashing cheap.
         """
         if not self._game_dir or not self._db:
             return
         import time as _t
         _t0 = _t.perf_counter()
-        import struct
-        from cdumm.archive.hashlittle import compute_pamt_hash, compute_papgt_hash
-
-        issues = []
-        # GitHub #225: map dirs -> owning mod so a 'Missing directory'
-        # issue can name the mod (the dialog promises a mod name).
-        dir_owners = _papgt_dir_owners(self._db.connection)
-
-        # 1. Check PAPGT hash
-        papgt_path = self._game_dir / "meta" / "0.papgt"
-        if papgt_path.exists():
-            data = papgt_path.read_bytes()
-            if len(data) >= 12:
-                stored = struct.unpack_from('<I', data, 4)[0]
-                computed = compute_papgt_hash(data)
-                if stored != computed:
-                    issues.append(("PAPGT", "PAPGT hash is invalid"))
-
-                entry_count = data[8]
-                entry_start = 12
-                str_table_off = entry_start + entry_count * 12 + 4
-                for i in range(entry_count):
-                    pos = entry_start + i * 12
-                    name_off = struct.unpack_from('<I', data, pos + 4)[0]
-                    papgt_hash = struct.unpack_from('<I', data, pos + 8)[0]
-                    abs_off = str_table_off + name_off
-                    if abs_off < len(data):
-                        end = data.index(0, abs_off) if 0 in data[abs_off:] else len(data)
-                        dir_name = data[abs_off:end].decode('ascii', errors='replace')
-                        pamt_path = self._game_dir / dir_name / "0.pamt"
-                        if pamt_path.exists():
-                            actual = compute_pamt_hash(pamt_path.read_bytes())
-                            if actual != papgt_hash:
-                                issues.append(("PAPGT", f"{dir_name} PAMT hash mismatch"))
-                        elif not (self._game_dir / dir_name).exists():
-                            # Skip vanilla placeholder dirs (< 0036) that don't exist on disk
-                            _owners = dir_owners.get(dir_name)
-                            _src = ", ".join(sorted(_owners)) if _owners else "PAPGT"
-                            try:
-                                if int(dir_name) >= 36:
-                                    issues.append((_src, f"Missing directory {dir_name}"))
-                            except (ValueError, TypeError):
-                                issues.append((_src, f"Missing directory {dir_name}"))
-
-        # 2. Get all files modified by enabled mods
-        modded_files = self._db.connection.execute(
-            "SELECT DISTINCT md.file_path, m.name "
-            "FROM mod_deltas md JOIN mods m ON md.mod_id = m.id "
-            "WHERE m.enabled = 1 AND md.file_path NOT LIKE 'meta/%'"
-        ).fetchall()
-
-        mod_by_file = {}
-        modded_dirs = set()
-        for fp, mod_name in modded_files:
-            parts = fp.split("/")
-            if len(parts) >= 2 and parts[0].isdigit():
-                modded_dirs.add(parts[0])
-            mod_by_file.setdefault(fp, []).append(mod_name)
-
-        # 3. PAMT bounds checking skipped, runs on GUI thread and is too slow
-        #    for large installations. The apply engine already ensures correct
-        #    offsets/sizes during PAZ composition.
+        issues = _compute_post_apply_issues(self._game_dir, self._db.connection)
+        _dt = _t.perf_counter() - _t0
+        logger.info("Post-apply verify took %.1fs, found %d issue(s)", _dt, len(issues))
 
         # F3: the version-hash comparison used to live here and
         # append "may be outdated" to every mod that was imported on
@@ -6552,9 +6627,6 @@ class CdummWindow(FluentWindow):
         # surfaced as apply errors). Successful apply now auto-stamps
         # mods with the current fingerprint so the orange "outdated"
         # badge self-heals (see stamp_enabled_mods_as_current).
-
-        _dt = _t.perf_counter() - _t0
-        logger.info("Post-apply verify took %.1fs, found %d issue(s)", _dt, len(issues))
 
         if issues:
             issue_lines = []

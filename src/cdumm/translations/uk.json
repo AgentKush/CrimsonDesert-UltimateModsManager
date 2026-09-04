@@ -662,6 +662,7 @@
   "tools.rescan.requested": "Пересканування запитано",
   "tools.rescan.requested_desc": "Оновлення знімка розпочато. Це може зайняти деякий час залежно від розміру файлів гри.",
   "tools.rescan.enable_hint": "Поставте прапорець вище для увімкнення",
+  "tools.rescan.complete": "Пересканування завершено!",
   "tools.stat.never": "Ніколи",
   "tools.error": "Помилка: {detail}",
   "tools.progress.checking": "Перевірка {name}...",
@@ -980,5 +981,7 @@
   "activity.msg_removed_stale_appdata": "Видалено застарілі AppData ({size_mb} МБ)",
   "stats.outdated": "Застарілі",
   "mod_list.click_to_update": "Натисніть для оновлення",
-  "tooltip.update_available_with_version": "Доступне оновлення. Встановлено: {version}. Натисніть для оновлення."
+  "tooltip.update_available_with_version": "Доступне оновлення. Встановлено: {version}. Натисніть для оновлення.",
+  "settings.nexus_none_linked": "Жоден із ваших {count} модів не пов'язаний зі сторінкою NexusMods, тому перевірити нічого. Моди, імпортовані з завантаженого вручну архіву, не мають посилання на Nexus; імпортуйте їх повторно через завантаження з Nexus або додайте посилання в картці мода.",
+  "settings.nexus_up_to_date_partial": "{checked} пов'язаних модів актуальні. {unlinked} модів без посилання на NexusMods перевірити не вдалося."
 }

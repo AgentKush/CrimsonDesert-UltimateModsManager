@@ -21,6 +21,103 @@ _UNRELEASED_NOTES: list[str] = [
 
 CHANGELOG = [
     {
+        "version": "3.16.7",
+        "date": "2026-09-02",
+        "notes": [
+            "<b>Rescan then Apply no longer leaves the game unable to start.</b> Rescan deleted leftover mod folders before taking its snapshot but did not remove them from the game's archive index, so the snapshot recorded an index pointing at a folder that no longer existed. Every later Apply put that entry back (the repeated \"[PAPGT] Missing directory\" warning) until the game refused to launch with \"There may be a problem with the game installation\". Rescan now cleans the index first, and Apply never brings back an index entry for a mod folder that is gone. If you hit this: Steam file verify, then Rescan on this version.",
+            "<b>Linux / Steam Deck: CDUMM starts under any Wine or Proton version.</b> The UI toolkit needs a Windows system library (ICU) that Wine before 11.5 does not ship, so the app died at startup with a QtWidgets error. CDUMM now carries its own copy.",
+            "Checked against today's game patch (build 25050808): every table CDUMM edits still decodes.",
+            "Reported by <b>delichandelarosse</b> and <b>NonDScript</b>.",
+        ],
+    },
+    {
+        "version": "3.16.6",
+        "date": "2026-09-01",
+        "notes": [
+            "<b>Expanded Vendor Inventory Rebuilt V3 applies, with its Dye Addon and Bran's Specialty Store.</b> The mod was refused at import because it uses DMM's way of adding items to a list, and past that it needed three things CDUMM could not do: add new stock records to a shop and edit existing slots, add colour groups and texture sets to the Dyers, and write the dye colour group table at all. All of that is in. Checked on a clean 2.00.01 install: every one of the 3,619 shop edits, 2,128 price edits and 400 dye colour additions applies, and the rebuilt tables read back byte-exact.",
+            "Any mod built with DMM's add-to-list operation now imports instead of failing with a missing-value error.",
+            "Requested by <b>Damascinas</b>; mod by <b>AerowynX</b>.",
+        ],
+    },
+    {
+        "version": "3.16.5",
+        "date": "2026-08-31",
+        "notes": [
+            "<b>CDUMM no longer deletes your installed language packs.</b> The 26 August update added voice packs for German, French, Spanish, Brazilian Portuguese and Japanese, and Steam downloads the one you pick into one of the game's five reserved data slots (0036 to 0040). CDUMM treated anything in those slots as a mod folder, so the first scan, a Rescan, or the startup health check removed the language pack and the game silently went back to English. Those slots are now recognised as Steam-owned content: left alone, included in the vanilla snapshot, and no longer reported as extra folders.",
+            "<b>If a language already went missing:</b> run a Steam file verify (or re-select the language in Steam) once after updating CDUMM and it downloads again.",
+            "Reported by <b>Dante1963</b> on Nexus.",
+        ],
+    },
+    {
+        "version": "3.16.4",
+        "date": "2026-08-31",
+        "notes": [
+            "<b>Dye Hard applies.</b> The mod unlocks every dye colour group and material at all ten world Dyers by editing two lists on each Dyer's NPC record, and CDUMM had no way to write that table, so all of it was skipped. CDUMM can now rebuild those lists. The layout was worked out from the game's own files: the Camp Dyer is the one NPC that ships with all ten groups, and its record was the proof.",
+            "<b>Greylight Special fully applies.</b> Its price edits already worked, but the part that makes the bond and contribution shops take copper (the store's purchase-currency field) was refused because CDUMM did not know that field. It does now, pinned across all 436 stores.",
+            "Shop Smart. Shop H-Mart and Refined Life were checked in the same pass and already applied in full.",
+            "README, CHANGELOG and the Linux guide caught up: every release from 3.8 to 3.16.3 is listed, and the Wine/Proton auto-detect from 3.16.3 is documented.",
+            "Reported by <b>delichandelarosse</b>; mods by <b>donr484</b>.",
+        ],
+    },
+    {
+        "version": "3.16.3",
+        "date": "2026-08-29",
+        "notes": [
+            "<b>No more false \"5 issues that may crash the game\" after every Apply on 2.0.</b> The post-apply check was flagging the game's five reserved language-pack slots (0036-0040) as missing folders. They are supposed to have no folder; 3.16.1 taught Apply to leave them alone but this check still used the old rule. It now reads each entry's own optional flag. Reported by <b>MaldronM</b>, fixed by <b>Gleb Kogtev</b>.",
+            "<b>Rescan no longer sits on \"Initiating rescan...\" forever.</b> The scan finished fine underneath, but the Rescan page never learned it had, so the button stayed dead and users kicked off a second scan by clicking again. Fixed by <b>Gleb Kogtev</b>.",
+            "<b>Linux / Steam Deck / Bazzite: CDUMM now finds the game when run under Proton or Wine.</b> Auto-detect only looked at Windows-side locations, and Wine's folder browser cannot enter hidden folders like .local, so there was no way to reach a Steam library under /home. CDUMM now detects it is running under Wine, scans the host's Steam libraries through the Z: drive, and uses a folder picker that shows hidden folders. Reported by <b>NonDScript</b>.",
+            "Bug reports generated under Wine no longer lead with a bogus \"running as administrator\" warning (Wine always reports that).",
+        ],
+    },
+    {
+        "version": "3.16.2",
+        "date": "2026-08-26",
+        "notes": [
+            "<b>CDUMM now cleans up after interrupted imports.</b> Every mod import extracts its archive into a working folder and deletes it when done -- but if an import crashed or CDUMM was force-closed mid-way, the extracted files stayed behind forever. One user found 25 GB of these leftovers. CDUMM now sweeps them out automatically at startup. Reported by <b>SyDant</b>.",
+        ],
+    },
+    {
+        "version": "3.16.1",
+        "date": "2026-08-26",
+        "notes": [
+            "<b>Mods actually load in game on 2.0.</b> The 26 August game update added five reserved slots (0036-0040) to the game's archive index -- placeholder entries for optional language packs, with no folder on disk. CDUMM mistook four of them for leftover mod folders and deleted them from the index on every Apply, and parked its own mod overlay in the fifth, which the game treats as a not-installed language pack and silently never loads. So Apply reported success and verified clean, while not a single mod had any effect in game. Mod overlays now go in slot 0041 and up, the reserved slots are left alone, and an index damaged by an earlier version repairs itself on the next Apply -- no Steam file verify needed.",
+            "Thanks to <b>EnefFlow</b>, whose bug report contained the one log line that gave this away.",
+        ],
+    },
+    {
+        "version": "3.16.0",
+        "date": "2026-08-26",
+        "notes": [
+            "<b>Item mods work again on the 26 August game update (2.0).</b> The update changed the item table's layout and CDUMM could not read a single one of its 6,810 records, so every item mod -- stack sizes, prices, durability, gear stats -- was accepted, validated, and then applied nothing. The new layout is decoded, checked byte-for-byte against every record, and mods apply again.",
+            "<b>Reset and Rescan work on 2.0.</b> Both were permanently refused with \"game files appear to be modded\" on a completely clean install, because a version check was pinned to the old game's file count. The check now reads the file's own structure instead of assuming a count.",
+            "<b>Disabling all your mods now actually removes them from the game.</b> Turning every mod off and hitting Apply used to report \"nothing to do\" while the game kept loading the old mod data from disk -- which after a game update is exactly the state that crashes the game at launch. The leftover data is now cleaned up properly.",
+            "<b>Apply no longer sits at 100% looking hung.</b> The verification step after Apply was re-checking every part of the game install every single time; it now only re-checks what actually changed.",
+            "<b>\"Check for Mod Updates\" tells you what it actually checked.</b> Mods imported from a manually downloaded archive have no NexusMods link and cannot be checked -- but the summary still said \"All mods are up to date!\", even when not one mod was checkable. It now says how many mods were checked and how many could not be, and warns instead of celebrating when the answer is none.",
+            "Also: apply no longer logs a scary error on game versions whose item layout is unknown, and the Game Data grid reads the 2.0 item table at full depth again.",
+            "Thanks to <b>Gleb Kogtev</b> for four of these fixes, and to <b>CoryFT</b>, <b>vizionblind</b>, <b>DikiDR</b> and <b>delakula123</b> on Nexus, whose reports shaped this release.",
+        ],
+    },
+    {
+        "version": "3.15.1",
+        "date": "2026-08-24",
+        "notes": [
+            "<b>Store mods no longer apply only part of their edits.</b> When a mod changed an item a store already sold, CDUMM discarded the mod's values for that item and wrote the vanilla ones back, silently. On one mod's shop this dropped 5 of 41 edits while the other 36 went through, so the mod looked like it was working. Changing an item already on sale now works the same as adding a new one.",
+            "Thanks to <b>Gleb Kogtev</b> for finding and fixing this.",
+        ],
+    },
+    {
+        "version": "3.15.0",
+        "date": "2026-08-20",
+        "notes": [
+            "<b>Item price mods work again.</b> A game update added four bytes to part of the item table, and CDUMM could no longer read 5,548 of the game's 6,573 items. Those items fell back to a limited mode that only supports two fields, so a mod editing anything else, a price above all, was accepted when you imported it, passed every check, and then changed nothing when applied. It reported success. That is the worst way for this to fail and it is fixed.",
+            "<b>Store mods can add stock again.</b> The August 15 update moved four bytes inside each stock record. CDUMM could read and edit existing stock after the first fix, but adding a new item to a shop was still refused because the layout inside that record was not pinned down. It is now, checked against every one of the 6,376 records in the table.",
+            "<b>Mods that identify a record by number alone now import.</b> Some mods name the record they change, some give its number, and CDUMM only accepted the first. The second was rejected at import with a missing-field error, before it ever reached the part of CDUMM that has always understood numbers perfectly well.",
+            "<b>The Game Data grid says when it cannot read a table.</b> Instead of one vague note, it now tells you whether the layout accounts for every byte of every record, reads most of them, or cannot frame the records at all on your build.",
+            "Three more of the game's tables are readable, taking it to 55. Readable, not editable, as before.",
+            "Thanks to <b>Gleb Kogtev</b> for the first three fixes above, all found by chasing a single broken mod down to three separate causes rather than special-casing it, and for correcting a conclusion of mine that was wrong. Thanks to <b>AgentKush</b> for the table work and for the post-update check that caught the store break the day the patch landed, before anyone had to report it. And thanks to <b>lupo1190</b> and <b>Srimk1</b>, who reported the mod that led to all of it.",
+        ],
+    },
+    {
         "version": "3.14.0",
         "date": "2026-08-13",
         "notes": [

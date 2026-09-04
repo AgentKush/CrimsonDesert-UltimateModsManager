@@ -326,6 +326,8 @@ def _iteminfo_layout_roots(body: bytes, header: bytes) -> frozenset | None:
         if not off:
             return None
         fields = detect_iteminfo_layout(body, sorted(off.values()))
+        if not fields:
+            return None
         return frozenset(f[0] for f in fields)
     except Exception:  # noqa: BLE001 - never break apply over a guard
         logger.exception("iteminfo: could not resolve the layout's fields")
@@ -716,6 +718,11 @@ def expand_format3_into_aggregated(
         "storeinfo.pabgb", "equipslotinfo.pabgb", "stringinfo.pabgb",
         "inventory.pabgb", "statusinfo.pabgb", "knowledgeinfo.pabgb",
         "interactioninfo.pabgb",
+        # npcinfo.pabgb: dye-list writer (GitHub #393) rebuilds lists
+        # that grow, so it needs the .pabgh rebuild this branch provides.
+        "npcinfo.pabgb",
+        # dyecolorgroupinfo.pabgb: colour-list writer (#191), same shape.
+        "dyecolorgroupinfo.pabgb",
         # statusgroupinfo.pabgb is whole-table because the writer walks each
         # record's list grammar itself (statusgroupinfo has no CDUMM schema).
         # The writes are length-preserving, so no .pabgh rebuild.
@@ -1563,8 +1570,18 @@ def expand_format3_into_aggregated(
             # in the entry head before the record list, and the apply
             # pipeline's cumulative shift covers offsets after a grown
             # entry, same as multichangeinfo's per-record growth.
-            if target in ("storeinfo.pabgb", "equipslotinfo.pabgb"):
-                if target == "equipslotinfo.pabgb":
+            if target in ("storeinfo.pabgb", "equipslotinfo.pabgb",
+                          "npcinfo.pabgb", "dyecolorgroupinfo.pabgb"):
+                if target == "dyecolorgroupinfo.pabgb":
+                    # #191: Expanded Vendor Inventory Rebuilt V3 Dye Addon.
+                    from cdumm.engine.dyecolorgroupinfo_writer import (
+                        SUPPORTED_FIELDS as _DCG_FIELDS,
+                        DyecolorgroupinfoWriteRefused as StoreinfoWriteRefused,
+                        build_dyecolorgroupinfo_changes as build_storeinfo_changes,
+                    )
+                    def _writer_supported(i):
+                        return (getattr(i, "field", "") or "").strip() in _DCG_FIELDS
+                elif target == "equipslotinfo.pabgb":
                     from cdumm.engine.equipslotinfo_writer import (
                         EquipslotWriteRefused as StoreinfoWriteRefused,
                         build_equipslotinfo_changes as build_storeinfo_changes,
@@ -1574,13 +1591,27 @@ def expand_format3_into_aggregated(
                         return _re.match(
                             r"^entries\[\d+\]\.etl_hashes$",
                             (getattr(i, "field", "") or "")) is not None
+                elif target == "npcinfo.pabgb":
+                    # GitHub #393: Dye Hard's dye lists. Same writer
+                    # shape as storeinfo (list rebuild + .pabgh shift).
+                    from cdumm.engine.npcinfo_writer import (
+                        SUPPORTED_FIELDS as _NPC_FIELDS,
+                        NpcinfoWriteRefused as StoreinfoWriteRefused,
+                        build_npcinfo_changes as build_storeinfo_changes,
+                    )
+                    def _writer_supported(i):
+                        return (getattr(i, "field", "") or "").strip() in _NPC_FIELDS
                 else:
                     from cdumm.engine.storeinfo_writer import (
                         StoreinfoWriteRefused, build_storeinfo_changes,
                     )
+                    from cdumm.engine.format3_handler import (
+                        _STOREINFO_SLOT_RE as _slot_re)
                     def _writer_supported(i):
-                        return (getattr(i, "field", "") or "").strip() in (
-                            "stock_data_list", "_exchangeItemInfoListForSell")
+                        _f = (getattr(i, "field", "") or "").strip()
+                        return (_f in ("stock_data_list",
+                                       "_exchangeItemInfoListForSell")
+                                or _slot_re.match(_f) is not None)
                 _companion = target.replace(".pabgb", ".pabgh")
                 # Per-intent mod attribution (index-aligned with the
                 # original batched list, built BEFORE any filtering).

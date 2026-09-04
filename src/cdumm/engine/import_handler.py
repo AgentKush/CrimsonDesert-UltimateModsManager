@@ -195,6 +195,48 @@ def import_staging_dir(game_dir: Path, config: "Config | None" = None):
                 staging, e)
 
 
+def cleanup_import_staging(game_dir: Path,
+                           config: "Config | None" = None) -> int:
+    """Delete leftover extraction folders under CDMods/_import_staging/.
+
+    Each import extracts into a fresh <uuid> subfolder there and removes
+    it when done — but a crash or force-kill mid-import leaves the
+    extracted archive behind, and repeated experimenting accumulates
+    tens of GB (GitHub #371, SyDant: +25 GB). Nothing ever reads a
+    staging folder after its import ends, and the GUI holds the
+    single-instance .gui_lock when this runs at startup, so no import
+    can be in flight.
+
+    Returns the number of bytes freed (0 when there was nothing).
+    """
+    try:
+        base = get_cdmods_root(config, game_dir) / "_import_staging"
+    except Exception:
+        return 0
+    if not base.is_dir():
+        return 0
+    freed = 0
+    for child in base.iterdir():
+        try:
+            if child.is_dir():
+                size = sum(f.stat().st_size for f in child.rglob("*")
+                           if f.is_file())
+            else:
+                size = child.stat().st_size
+            if child.is_dir():
+                shutil.rmtree(child, ignore_errors=True)
+            else:
+                child.unlink(missing_ok=True)
+            if not child.exists():
+                freed += size
+        except OSError as e:
+            logger.debug("cleanup_import_staging: skipping %s: %s", child, e)
+    if freed:
+        logger.info("cleanup_import_staging: freed %.1f MB from %s",
+                    freed / 1048576, base)
+    return freed
+
+
 def _validate_modified_pamt(modified_bytes: bytes, rel_path: str) -> None:
     """Parse ``modified_bytes`` as a PAMT to validate it before import.
 
@@ -2272,6 +2314,18 @@ def _next_paz_directory(game_dir: Path, db=None) -> str:
         if d.is_dir() and d.name.isdigit() and len(d.name) == 4:
             existing.add(int(d.name))
     existing |= _assigned_dirs
+
+    # Dir numbers claimed by the live/vanilla PAPGT even with no dir on
+    # disk: Crimson Desert 2.0 ships placeholder entries 0036-0040
+    # (optional language-pack slots). A standalone mod remapped onto one
+    # of those numbers inherits the placeholder's is_optional flags at
+    # PAPGT rebuild and the game never mounts it (GitHub #383).
+    from cdumm.archive.papgt_manager import reserved_papgt_dir_numbers
+    try:
+        vanilla_root = get_cdmods_root(None, game_dir) / "vanilla"
+    except Exception:
+        vanilla_root = None
+    existing |= reserved_papgt_dir_numbers(game_dir, vanilla_root)
 
     if db is not None:
         try:
@@ -4427,7 +4481,15 @@ def import_from_script(
         if suffix == ".bat":
             cmd = ["cmd.exe", "/c", script_path.name]
         elif suffix == ".py":
-            cmd = ["py", "-3", script_path.name]
+            from cdumm.platform import python_script_command
+            interp = python_script_command()
+            if interp is None:
+                result.error = (
+                    "No Python 3 interpreter found to run this mod's "
+                    "script. Install python3 and make sure it is on PATH."
+                )
+                return result
+            cmd = [*interp, script_path.name]
         else:
             result.error = f"Unsupported script type: {suffix}"
             return result
@@ -5943,7 +6005,15 @@ def import_script_live(
         # Never pass this through ``shell=True`` as well -- see the Popen call.
         cmd = ["cmd", "/c", f'"{script_path}" & pause']
     elif suffix == ".py":
-        cmd = ["py", "-3", str(script_path)]
+        from cdumm.platform import python_script_command
+        interp = python_script_command()
+        if interp is None:
+            result.error = (
+                "No Python 3 interpreter found to run this mod's script. "
+                "Install python3 and make sure it is on PATH."
+            )
+            return result
+        cmd = [*interp, str(script_path)]
     else:
         result.error = f"Unsupported script type: {suffix}"
         return result
