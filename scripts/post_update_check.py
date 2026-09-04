@@ -493,6 +493,129 @@ def check_dropset_records(body: bytes, header: bytes) -> tuple[bool, str]:
     return ok, detail
 
 
+#: The only four statusinfo stats that carry stat_level_data. Every
+#: other stat has a short tail and no ramp at all, so this set is the
+#: semantic anchor for the DIRECT SPEED presets.
+_STATUSINFO_RATE_STATS = frozenset({
+    "MoveSpeedRate", "AttackSpeedRate", "CriticalRate", "DHIT",
+})
+
+
+def check_statusinfo_stat_levels(body: bytes, header: bytes) -> tuple[bool, str]:
+    """The ``stat_level_data`` ramps the DIRECT SPEED presets write.
+
+    This table needs a different row shape from the others: there is no
+    locate/serialize pair to drive, because the writer places elements
+    arithmetically inside a fixed-size tail. So the row checks the four
+    properties that make that arithmetic safe, and every one of them is
+    a statement about the bytes rather than about the code.
+
+    **The shape split.** Exactly four stats carry a 212-byte tail and
+    the other 71 carry 84 bytes with no ramp at all. Writing into a
+    short tail would corrupt a regular stat, so the writer refuses any
+    record that is not 212 -- and this row asserts the four are the four
+    NAMED rate stats, not merely that there are four of them.
+
+    **The ramps are monotonic from zero.** This is the part worth
+    keeping, because it independently checks an offset the writer's
+    docstring says could only be settled with an external artefact.
+    68 and 76 both partition the tail into whole uint64s and both leave
+    every element's low 24 bits zero, so neither a boundary argument nor
+    the fixed-point scale separates them -- the derivation needed mod
+    2511's PAZ overlay. But the committed table separates them anyway:
+    at 68 all four ramps start at 0 and rise monotonically, and at 76
+    the window slides one element onto the terminator so every ramp ends
+    in a drop to zero. 4/4 against 0/4. That gives the canary a way to
+    re-check the offset from the fixture alone, which the overlay-based
+    derivation cannot do on a future build.
+
+    **The fixed-point scale.** Every element is a multiple of 2**24,
+    because a mod's asked-for integer is stored shifted left by 24. A
+    build that changed the scale would break every DIRECT SPEED preset
+    silently -- the write would land, at the wrong magnitude.
+
+    **The trailer.** The last 8 bytes are byte-identical on all four
+    records. The first attempt at this layout used offset 80, which ran
+    the array off the end into exactly those bytes; asserting they are
+    constant is what makes that misreading visible.
+
+    Measured on the committed CD 1.13 table: 75 records, 4 rate stats
+    (all named), 71 short tails, 64/64 elements scaled, 4/4 ramps
+    monotonic from zero, trailer constant.
+    """
+    import itertools
+    import struct as _struct
+
+    from cdumm.engine.statusinfo_writer import (
+        _FRACTION_BITS,
+        _RATE_TAIL_LEN,
+        _SLD_COUNT,
+        _SLD_TAIL_OFFSET,
+    )
+    from cdumm.semantic.parser import parse_pabgh_index
+    _key_size, offs = parse_pabgh_index(header, "statusinfo")
+    if not offs:
+        return False, "pabgh index has no entries"
+    starts = sorted(offs.values())
+    spans = starts + [len(body)]
+
+    scale = 1 << _FRACTION_BITS
+    rate: dict[str, bytes] = {}
+    short = 0
+    for off in offs.values():
+        end = spans[spans.index(off) + 1]
+        name_len = _struct.unpack_from("<I", body, off + 4)[0]
+        name = body[off + 8:off + 8 + name_len].decode("ascii", "replace")
+        tail = body[off + 8 + name_len:end]
+        if len(tail) == _RATE_TAIL_LEN:
+            rate[name] = tail
+        else:
+            short += 1
+
+    def _ramp(tail: bytes) -> list[int]:
+        return [_struct.unpack_from("<Q", tail,
+                                    _SLD_TAIL_OFFSET + i * 8)[0]
+                for i in range(_SLD_COUNT)]
+
+    elements = scaled = 0
+    monotonic = 0
+    for tail in rate.values():
+        vals = _ramp(tail)
+        elements += len(vals)
+        scaled += sum(1 for v in vals if v % scale == 0)
+        decoded = [v >> _FRACTION_BITS for v in vals]
+        if decoded[0] == 0 and all(a <= b for a, b in
+                                   itertools.pairwise(decoded)):
+            monotonic += 1
+
+    trailers = {t[204:212] for t in rate.values()}
+    wrong_names = set(rate) ^ _STATUSINFO_RATE_STATS
+
+    ok = (not wrong_names
+          and elements > 0
+          and scaled == elements
+          and monotonic == len(rate)
+          and len(trailers) == 1)
+    detail = (f"{len(offs)} records, {len(rate)} carry stat_level_data, "
+              f"{short} short tails, {scaled}/{elements} elements scaled by "
+              f"2**{_FRACTION_BITS}, {monotonic}/{len(rate)} ramps monotonic "
+              f"from zero, trailer "
+              f"{'constant' if len(trailers) == 1 else 'DIVERGED'}")
+    if wrong_names:
+        detail += (f"   [the set of stats carrying a ramp changed: "
+                   f"{sorted(wrong_names)} -- a DIRECT SPEED preset would "
+                   f"write into a stat whose tail is not a ramp]")
+    elif monotonic != len(rate):
+        detail += ("   [a ramp is no longer monotonic from zero, which is "
+                   "what separates the correct element offset from the "
+                   "one-element-late reading that hits the terminator]")
+    elif scaled != elements:
+        detail += (f"   [elements stopped being multiples of 2**"
+                   f"{_FRACTION_BITS}; the fixed-point scale has changed "
+                   f"and every preset would write the wrong magnitude]")
+    return ok, detail
+
+
 #: The five interaction records "Fast Pickup - Increase Range" targets,
 #: with the ranges the CD 1.15 table carries. Used as the SEMANTIC
 #: anchor for interactioninfo -- see check_interactioninfo_pivot_pair.
@@ -904,6 +1027,7 @@ _CHECKS = [
     ("dropsetinfo", "dropsetinfo", check_dropset_records),
     ("knowledgeinfo", "knowledgeinfo", check_knowledgeinfo_is_default),
     ("interactioninfo", "interactioninfo", check_interactioninfo_pivot_pair),
+    ("statusinfo", "statusinfo", check_statusinfo_stat_levels),
 ]
 
 #: Tables with a verified field order, checked through select_order.
@@ -963,6 +1087,9 @@ _FIXTURE_GREEN = frozenset({
     # NattKh-derived drop mods. The parser consumes each record exactly
     # or raises, so the parse is itself the drift signal.
     ("vanilla113", "dropsetinfo"),
+    # The DIRECT SPEED presets' table. Monotonicity is what re-checks the
+    # element offset without the PAZ overlay the derivation needed.
+    ("vanilla113", "statusinfo"),
     ("vanilla115", "statusgroupinfo"),
     # #190's table. The opaque per-record block is 66 on CD 1.10 and 63
     # here -- a version-dependent size the writer derives rather than
