@@ -493,6 +493,108 @@ def check_dropset_records(body: bytes, header: bytes) -> tuple[bool, str]:
     return ok, detail
 
 
+#: The five interaction records "Fast Pickup - Increase Range" targets,
+#: with the ranges the CD 1.15 table carries. Used as the SEMANTIC
+#: anchor for interactioninfo -- see check_interactioninfo_pivot_pair.
+_INTERACTION_ANCHORS = {
+    "Gimmick_PickUp": (2.5, 2.5),
+    "SmallAnimal_Skin": (1.5, 2.0),
+    "Animal_Skin": (1.7, 2.0),
+    "Gimmick_Collect": (2.5, 3.0),
+    "Insect_Catch": (2.5, 2.6),
+}
+
+
+def check_interactioninfo_pivot_pair(body: bytes,
+                                     header: bytes) -> tuple[bool, str]:
+    """``locate_pivot_pair`` over every record -- the Fast Pickup path.
+
+    ``_interactionPivotList`` is field #26 of InteractionInfo with type
+    ``None`` in the schema: no descriptor, so the generic walker reaches
+    zero records on this table. The pair is found positionally instead,
+    by scanning for a spot where the preceding 16 bytes are zero (an
+    all-zero ``_interactionUpperHeight`` plus ``_targetGotoOffset``) and
+    the next two f32 are a sane range.
+
+    That is a heuristic over bytes, so unlike the schema-driven tables
+    a *plausible* answer is always available and being green means very
+    little on its own. Two things make the row meaningful:
+
+    **Ambiguity is refused, not resolved.** A record with several
+    qualifying positions is skipped rather than patched at the first
+    one, because writing at an unproven position corrupts an unrelated
+    float. So the refusal count is expected to be large and is NOT
+    gated; what is gated is that the five records the mod actually
+    targets each resolve uniquely AND still carry the ranges this table
+    is known to have. If the layout shifts, the scan will keep finding
+    *some* pair -- the anchors are what notice it is the wrong one.
+
+    **The values are quantised and the rule never said so.** Every
+    located value is exactly f32(n * 0.05). The locator only tests a
+    [0.01, 100.0] range, so quantisation is a property of the data, not
+    of the filter -- independent evidence the pair really is the range
+    field rather than bytes that happen to pass. Gated, because losing
+    it means the scan has drifted onto something else.
+
+    Measured on the committed CD 1.15 table: 393 records, 295 resolve
+    uniquely, 98 refused, all 590 located values quantised, 5/5 anchors
+    at their documented ranges.
+    """
+    import struct as _struct
+
+    from cdumm.engine.interactioninfo_writer import (
+        _record_bounds,
+        locate_pivot_pair,
+    )
+    bounds = _record_bounds(header, body)
+    if not bounds:
+        return False, "pabgh index has no entries"
+
+    def _f32(x: float) -> float:
+        return _struct.unpack("<f", _struct.pack("<f", x))[0]
+
+    unique = refused = quantised = values = 0
+    found: dict[str, tuple[float, float]] = {}
+    for lo, hi in bounds.values():
+        name_len = _struct.unpack_from("<I", body, lo + 4)[0]
+        name = body[lo + 8:lo + 8 + name_len].decode("ascii", "replace")
+        pos = locate_pivot_pair(body, lo, hi)
+        if pos is None:
+            refused += 1
+            continue
+        unique += 1
+        pair = _struct.unpack_from("<ff", body, pos)
+        found[name] = pair
+        for v in pair:
+            values += 1
+            if _f32(round(v / 0.05) * 0.05) == v:
+                quantised += 1
+
+    missing = [n for n, want in _INTERACTION_ANCHORS.items()
+               if found.get(n) is None
+               or any(abs(g - w) > 1e-6 for g, w in zip(found[n], want))]
+
+    ok = (unique > 0 and quantised == values and not missing)
+    detail = (f"{unique}/{len(bounds)} records resolve uniquely, "
+              f"{refused} refused (ambiguous or unframed), "
+              f"{quantised}/{values} located values quantised to 0.05, "
+              f"{len(_INTERACTION_ANCHORS) - len(missing)}"
+              f"/{len(_INTERACTION_ANCHORS)} anchors at their known ranges")
+    if missing:
+        detail += (f"   [{missing} no longer resolve to the ranges this "
+                   f"table is known to carry -- the scan is finding a "
+                   f"different pair of floats, and a Fast Pickup write "
+                   f"would land on an unrelated field]")
+    elif quantised != values:
+        detail += ("   [located values stopped being multiples of 0.05, "
+                   "which the locator never tested for -- the evidence "
+                   "that this is the range field has gone]")
+    elif unique == 0:
+        detail += ("   [nothing resolves: the 16-zero frame has moved, so "
+                   "every Fast Pickup intent will be refused]")
+    return ok, detail
+
+
 #: Knowledge records a character must have from the start. Used as the
 #: SEMANTIC anchor for knowledgeinfo's is_default offset -- see
 #: check_knowledgeinfo_is_default for why a structural check is not
@@ -801,6 +903,7 @@ _CHECKS = [
     ("stringinfo", "stringinfo", check_stringinfo_records),
     ("dropsetinfo", "dropsetinfo", check_dropset_records),
     ("knowledgeinfo", "knowledgeinfo", check_knowledgeinfo_is_default),
+    ("interactioninfo", "interactioninfo", check_interactioninfo_pivot_pair),
 ]
 
 #: Tables with a verified field order, checked through select_order.
@@ -868,6 +971,9 @@ _FIXTURE_GREEN = frozenset({
     # The unlock mods' table. Pinned on the SEMANTIC anchor, not just on
     # locating the byte -- see the check's docstring.
     ("vanilla115", "knowledgeinfo"),
+    # Fast Pickup's table. A positional scan, so the pin is on the five
+    # named records' known ranges, not on "something was found".
+    ("vanilla115", "interactioninfo"),
     ("vanilla116", "skill"), ("vanilla116", "storeinfo"),
     ("vanilla116", "iteminfo"), ("vanilla116", "iteminfo-native"),
     ("vanilla1161", "storeinfo"),
