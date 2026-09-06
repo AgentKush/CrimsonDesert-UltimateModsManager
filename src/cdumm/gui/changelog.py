@@ -21,6 +21,24 @@ _UNRELEASED_NOTES: list[str] = [
 
 CHANGELOG = [
     {
+        "version": "3.17.1",
+        "date": "2026-09-06",
+        "notes": [
+            "<b>Inspect Mod no longer calls a working mod unsupported.</b> Its report said \"No recognized mod format detected\" for any mod that edits more than one game table, even though importing the very same file worked. It was checking for an older single-target layout that almost no current mod uses. It now asks the same reader the importer uses, so the two can never disagree again, and it lists each table the mod touches with how many changes it makes. Reported by <b>woowoots</b>.",
+        ],
+    },
+    {
+        "version": "3.17.0",
+        "date": "2026-09-06",
+        "notes": [
+            "<b>Mods work again after the 4 September game update.</b> That patch renamed every game data table: what used to be <code>iteminfo.pabgb</code> is now <code>iteminfo.staticinfobody</code>, and there is not a single old-style name left in the game. Every mod on Nexus still asks for the old name, so CDUMM could not find a single target file. Imports were rejected with \"the target files couldn't be located in your game's PAZ archives\", and Apply finished having changed nothing while telling you your mods were outdated. Both names are now treated as the same file, so existing mods work untouched. Reported by <b>woowoots</b>, fixed by <b>Gleb Kogtev</b>.",
+            "<b>Shop mods apply again.</b> The same update also added eight bytes to every stock record, which pushed CDUMM onto the wrong reading of the shop table. It then refused most stores one at a time with messages that named the mod, so it read like the mod was broken when the game had changed underneath it. On Shop Smart. Shop H-Mart that was 16 of 17 stores silently dropped, which is why shops opened empty. All 17 apply now and read back byte for byte. Fixed by <b>Gleb Kogtev</b>.",
+            "<b>CDUMM also refuses outright when it does not recognise a build</b>, instead of picking the closest-looking layout and blaming your mods. The message now names the real cause.",
+            "<b>Turning a mod off no longer gets stuck.</b> Switching off a mod whose patches had all been skipped left Apply with nothing to do, so it errored with \"No mod changes to apply or revert\" and the card kept its pending badge forever. Fixed by <b>Gleb Kogtev</b>.",
+            "Reported by <b>woowoots</b> and <b>delichandelarosse</b>.",
+        ],
+    },
+    {
         "version": "3.16.7",
         "date": "2026-09-02",
         "notes": [

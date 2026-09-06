@@ -29,6 +29,7 @@ def test_partial_skip_populates_info_field_on_result():
     from cdumm.engine.snapshot_manager import SnapshotManager
     from cdumm.storage.database import Database
     from cdumm.archive.paz_parse import parse_pamt
+    from cdumm.archive.table_ext import to_legacy_name
     from cdumm.engine.json_patch_handler import _extract_from_paz
     import zipfile, json
 
@@ -39,7 +40,7 @@ def test_partial_skip_populates_info_field_on_result():
     pamt = game_dir / '0008' / '0.pamt'
     entries = parse_pamt(str(pamt), paz_dir=str(pamt.parent))
     iteminfo = next(e for e in entries
-                    if e.path == 'gamedata/iteminfo.pabgb')
+                    if to_legacy_name(e.path) == 'gamedata/iteminfo.pabgb')
     iteminfo_bytes = bytes(_extract_from_paz(iteminfo))
     file_a_offset = 100
     file_a_orig = iteminfo_bytes[file_a_offset:file_a_offset+4].hex()
@@ -103,6 +104,7 @@ def test_clean_import_no_skipped_files_keeps_info_none():
     from cdumm.engine.snapshot_manager import SnapshotManager
     from cdumm.storage.database import Database
     from cdumm.archive.paz_parse import parse_pamt
+    from cdumm.archive.table_ext import to_legacy_name
     from cdumm.engine.json_patch_handler import _extract_from_paz
     import zipfile, json
 
@@ -113,7 +115,7 @@ def test_clean_import_no_skipped_files_keeps_info_none():
     pamt = game_dir / '0008' / '0.pamt'
     entries = parse_pamt(str(pamt), paz_dir=str(pamt.parent))
     iteminfo = next(e for e in entries
-                    if e.path == 'gamedata/iteminfo.pabgb')
+                    if to_legacy_name(e.path) == 'gamedata/iteminfo.pabgb')
     iteminfo_bytes = bytes(_extract_from_paz(iteminfo))
     off = 100
     orig = iteminfo_bytes[off:off+4].hex()
