@@ -16,6 +16,29 @@ from pathlib import Path
 
 from cdumm.archive.table_ext import BODY_EXTS, header_path_for
 
+
+def _parse_format3_pairs(member: str, mod_path: Path):
+    """``[(target, intents), ...]`` for a Format 3 member of ``mod_path``,
+    or None when the importer would not accept it either.
+
+    The parser takes a path, so the member is spilled to a temp file.
+    Worth it: shape-testing the dict here is what let this report and
+    the importer disagree in the first place.
+    """
+    import tempfile
+
+    from cdumm.engine.format3_handler import parse_format3_mod_targets
+    try:
+        with zipfile.ZipFile(mod_path) as zf:
+            raw = zf.read(member)
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / Path(member).name
+            p.write_bytes(raw)
+            return parse_format3_mod_targets(p) or None
+    except Exception as e:  # noqa: BLE001 - a report must never crash
+        logger.debug("format3 diagnose parse failed for %s: %s", member, e)
+        return None
+
 logger = logging.getLogger(__name__)
 
 
@@ -138,18 +161,34 @@ def _diagnose_archive(mod_path: Path, game_dir: Path, db_path: Path,
                 detected.append("json_patch")
                 _s(f"Detected: JSON Patch mod ({jf})")
                 _diagnose_json_patch(data, jf, game_dir, sections)
-            elif (isinstance(data, dict)
-                    and data.get("format") == 3
-                    and isinstance(data.get("intents"), list)
-                    and isinstance(data.get("target"), str)):
-                detected.append("natt_format_3")
-                n_intents = len(data.get("intents", []))
-                target = data.get("target", "?")
-                _s(f"Detected: Format 3 mod ({jf}), "
-                   f"target {target}, {n_intents} intent(s)")
-                _s("  Note: Format 3 needs a field_schema/<table>.json "
-                   "mapping to apply. See field_schema/README.md "
-                   "next to CDUMM3.exe.")
+            elif isinstance(data, dict) and data.get("format") == 3:
+                # Ask the real parser instead of shape-testing here.
+                # This branch used to require a top-level ``target``
+                # string plus ``intents`` list, which is only the
+                # SINGULAR dialect. Every multi-target export (the
+                # plural ``targets`` shape almost all current mods
+                # ship) fell through to "No recognized mod format
+                # detected", so Inspect Mod called a perfectly
+                # importable mod unsupported: woowoots hit it on Dye
+                # Hard CD2.00.02 while the same file imported fine.
+                # Routing through parse_format3_mod_targets is what
+                # keeps this report and the importer from drifting
+                # apart again.
+                pairs = _parse_format3_pairs(jf, mod_path)
+                if pairs is not None:
+                    detected.append("natt_format_3")
+                    total = sum(len(i) for _t, i in pairs)
+                    _s(f"Detected: Format 3 mod ({jf}), "
+                       f"{len(pairs)} target(s), {total} intent(s)")
+                    for tname, tintents in pairs:
+                        _s(f"  {tname}: {len(tintents)} intent(s)")
+                    # Conditional now, not absolute: many tables have a
+                    # native writer and need no schema at all. Saying
+                    # otherwise sent authors chasing a file they did not
+                    # need (see #259, where that advice was unactionable).
+                    _s("  Note: a target CDUMM has no writer for needs a "
+                       "field_schema/<table>.json mapping. See "
+                       "field_schema/README.md next to CDUMM3.exe.")
             elif isinstance(data, dict) and "files_dir" in data:
                 detected.append("crimson_browser")
                 _s(f"Detected: Crimson Browser mod ({jf})")

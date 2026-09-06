@@ -63,6 +63,7 @@ def test_multi_file_mod_skips_one_failed_file_keeps_others():
     from cdumm.engine.snapshot_manager import SnapshotManager
     from cdumm.storage.database import Database
     from cdumm.archive.paz_parse import parse_pamt
+    from cdumm.archive.table_ext import to_legacy_name
     from cdumm.engine.json_patch_handler import _extract_from_paz
 
     game_dir = Path(r'E:\SteamLibrary\steamapps\common\Crimson Desert')
@@ -72,7 +73,7 @@ def test_multi_file_mod_skips_one_failed_file_keeps_others():
     pamt = game_dir / '0008' / '0.pamt'
     entries = parse_pamt(str(pamt), paz_dir=str(pamt.parent))
     iteminfo = next(e for e in entries
-                    if e.path == 'gamedata/iteminfo.pabgb')
+                    if to_legacy_name(e.path) == 'gamedata/iteminfo.pabgb')
     iteminfo_bytes = bytes(_extract_from_paz(iteminfo))
     # Pick any 4-byte window we can match exactly.
     file_a_offset = 100
@@ -84,7 +85,7 @@ def test_multi_file_mod_skips_one_failed_file_keeps_others():
     # multi-patch-group iteration.
     # Actually use a different game_file: vehicleinfo.pabgb in 0008.
     vehicleinfo = next((e for e in entries
-                        if e.path == 'gamedata/vehicleinfo.pabgb'), None)
+                        if to_legacy_name(e.path) == 'gamedata/vehicleinfo.pabgb'), None)
     if vehicleinfo is None:
         pytest.skip("vehicleinfo.pabgb not in 0008/")
 
