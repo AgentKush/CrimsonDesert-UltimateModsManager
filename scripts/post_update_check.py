@@ -1130,6 +1130,13 @@ _FIXTURE_GREEN = frozenset({
     # tiled": every entry here IS a colour group, so nothing legitimately
     # refuses.
     ("vanilla_b24994088", "dyecolorgroupinfo"),
+    # The 4 Sep 2026 build. Its stock record grew 8 bytes between
+    # sub_data and the effect_list count, and the const tripwire at
+    # record offset 42 did not fire -- the third consecutive shape
+    # change to land behind it (upstream dedeedd). Verified through the
+    # canary before pinning: 397 located + 39 provably empty = 436/436,
+    # 6,376 records, nothing not-found or ambiguous.
+    ("vanilla_b25116796", "storeinfo"),
 })
 
 #: Per-fixture pins for the ordered tables, measured 2026-08-26.
