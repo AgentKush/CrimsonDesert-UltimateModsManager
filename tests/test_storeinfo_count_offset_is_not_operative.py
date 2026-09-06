@@ -83,11 +83,28 @@ def _operative_shape(lay: StoreLayout) -> tuple:
 
     (#367 moved 1.16.1's three to 37/53/55 and flipped the flag to True,
     which is precisely a write-side change with no read-side effect.)
+
+    ``sub_gap_size`` joined the key for v3.17.1, and it is the fourth
+    revision of this key -- each one forced by a real layout that
+    defeated the previous one. The 4 Sep 2026 build put 8 zero bytes
+    between ``sub_data`` and the effect_list count; upstream models them
+    as a sized gap the reader consumes (``storeinfo_native_parser`` line
+    435 reads it, and the record-size computation adds it), so it is
+    operative by exactly the same argument that admitted ``vgap_size``.
+    Without it, ``CD b25116796`` and ``CD 1.16.1`` are indistinguishable
+    here -- their offsets, presence flags and interior width are all
+    identical -- while they read different bytes.
+
+    ``count_payload_offset`` stays out even though it also differs
+    between those two (45 vs 44). That is deliberate and is the subject
+    of this module's opening test: the count is located by anchor, not
+    by that offset, so moving it changes no byte the reader consumes.
     """
     return (lay.order_index_off is None,
             lay.is_restore_off is None,
             lay.low_price_threshold,
-            lay.vgap_size)
+            lay.vgap_size,
+            lay.sub_gap_size)
 
 
 @pytest.fixture(scope="module")
@@ -145,10 +162,19 @@ def test_no_two_layouts_share_a_shape():
     """Two candidates identical in every operative field score
     identically, and detection then has nothing to separate them.
 
-    This is keyed on presence AND interior width because #365 defeated
-    both weaker keys: CD 1.16.1's offset tuple is byte-identical to
-    CD 1.16's, so a number-keyed check misses it, and its optional-field
-    presence is identical too, so a presence-only key misses it as well.
+    This is keyed on presence, interior width AND the sub-data gap,
+    because each weaker key was defeated by a real layout:
+
+    * a number-keyed check misses CD 1.16.1, whose offset tuple is
+      byte-identical to CD 1.16's;
+    * a presence-only key misses it too, since its optional fields are
+      present in exactly the same combination;
+    * presence + interior width then missed CD b25116796, which matches
+      CD 1.16.1 on all four of those and differs only in the 8-byte gap
+      the 4 Sep 2026 build inserted.
+
+    The third revision failing on the fourth layout is why this test
+    exists rather than a comment saying the key looks sufficient.
     """
     shapes = [_operative_shape(lay) for lay in LAYOUTS]
     assert len(shapes) == len(set(shapes)), (
