@@ -19,6 +19,10 @@
 
 CDUMM ships frequent updates. The complete version history — every release back to the first commit — is in **[CHANGELOG.md](CHANGELOG.md)**; the [Releases](https://github.com/faisalkindi/CrimsonDesert-UltimateModsManager/releases) page has full notes and downloads (the in-app updater shows them too). Recent highlights, newest first:
 
+### v3.17 — the 4 September game update
+
+- **v3.17.0** — _September 6, 2026_ — **Mods work again after the 4 September update.** That patch renamed every game data table (`iteminfo.pabgb` is now `iteminfo.staticinfobody`) and no mod on Nexus uses the new name, so CDUMM found no target files at all: imports were rejected and Apply changed nothing while blaming your mods. Both namings are now the same file. The same update also added eight bytes to every shop stock record, which pushed CDUMM onto the wrong reading and silently dropped 16 of 17 stores in Shop Smart, so shops opened empty; the new layout is derived and pinned, and an unrecognised build is now refused outright instead of mis-read. Also: switching off a mod whose patches were all skipped no longer wedges Apply. Fixes by **Gleb Kogtev**, reported by **woowoots** and **delichandelarosse**. (#400, #393)
+
 ### v3.16 — the 26 August game update (2.0)
 
 - **v3.16.7** — _September 2, 2026_ — **Rescan then Apply no longer leaves the game unable to start.** Rescan deleted leftover mod folders but left them in the game's archive index, the snapshot recorded that, and every Apply restored the dead entry until the game refused to launch. Rescan cleans the index first now; Apply never resurrects an entry for a missing folder. **Linux / Steam Deck: CDUMM starts under any Wine/Proton version** (ICU bundled). (#393, #398)

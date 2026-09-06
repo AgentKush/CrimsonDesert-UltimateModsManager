@@ -5,6 +5,10 @@ Summaries are condensed; each version links to its full release notes. See the
 [Releases](https://github.com/faisalkindi/CrimsonDesert-UltimateModsManager/releases) page for complete notes and downloads (the in-app updater also shows them).
 
 
+## v3.17
+
+- **[v3.17.0](https://github.com/faisalkindi/CrimsonDesert-UltimateModsManager/releases/tag/v3.17.0)** -- _2026-09-06_ -- Mods work again after the 4 September game update, which renamed every data table to .staticinfobody and grew the shop stock record by eight bytes. Both namings are now aliases, the new shop layout is derived and pinned, unknown builds are refused instead of mis-read, and switching off a no-op mod no longer wedges Apply. Fixes by Gleb Kogtev.
+
 ## v3.16
 
 - **[v3.16.7](https://github.com/faisalkindi/CrimsonDesert-UltimateModsManager/releases/tag/v3.16.7)** -- _2026-09-02_ -- Rescan then Apply no longer leaves the game unable to start (stale index entry for a deleted mod folder was being restored every apply). Linux/Steam Deck: CDUMM starts under any Wine/Proton version (ICU bundled).
