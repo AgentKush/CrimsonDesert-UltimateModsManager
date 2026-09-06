@@ -21,6 +21,13 @@ _UNRELEASED_NOTES: list[str] = [
 
 CHANGELOG = [
     {
+        "version": "3.17.1",
+        "date": "2026-09-06",
+        "notes": [
+            "<b>Inspect Mod no longer calls a working mod unsupported.</b> Its report said \"No recognized mod format detected\" for any mod that edits more than one game table, even though importing the very same file worked. It was checking for an older single-target layout that almost no current mod uses. It now asks the same reader the importer uses, so the two can never disagree again, and it lists each table the mod touches with how many changes it makes. Reported by <b>woowoots</b>.",
+        ],
+    },
+    {
         "version": "3.17.0",
         "date": "2026-09-06",
         "notes": [

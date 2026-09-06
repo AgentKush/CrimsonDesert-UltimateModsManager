@@ -21,6 +21,7 @@ CDUMM ships frequent updates. The complete version history — every release bac
 
 ### v3.17 — the 4 September game update
 
+- **v3.17.1** — _September 6, 2026_ — **Inspect Mod no longer calls a working mod unsupported.** Its report said "No recognized mod format detected" for any mod editing more than one game table, while importing the same file worked fine. It now uses the importer's own reader and lists every table the mod touches with its change count. Reported by **woowoots**. (#400)
 - **v3.17.0** — _September 6, 2026_ — **Mods work again after the 4 September update.** That patch renamed every game data table (`iteminfo.pabgb` is now `iteminfo.staticinfobody`) and no mod on Nexus uses the new name, so CDUMM found no target files at all: imports were rejected and Apply changed nothing while blaming your mods. Both namings are now the same file. The same update also added eight bytes to every shop stock record, which pushed CDUMM onto the wrong reading and silently dropped 16 of 17 stores in Shop Smart, so shops opened empty; the new layout is derived and pinned, and an unrecognised build is now refused outright instead of mis-read. Also: switching off a mod whose patches were all skipped no longer wedges Apply. Fixes by **Gleb Kogtev**, reported by **woowoots** and **delichandelarosse**. (#400, #393)
 
 ### v3.16 — the 26 August game update (2.0)
