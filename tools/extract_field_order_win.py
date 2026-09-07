@@ -296,7 +296,17 @@ def sweep_bytes(blob: bytes, lo: int) -> Func:
                 if lo <= t < hi:
                     targets.add(t)
                     f.inbound.setdefault(t, []).append(ins.address)
-        if m in _UNCOND_END:
+        # A conditional branch ends a block too, so the instruction after
+        # it starts one. Without this leader an inline (non-outlined)
+        # error block is folded into whatever block precedes the field's
+        # own "jne ok", and hot_key then orders it by a branch that has
+        # nothing to do with the field. That is what swapped _itemDesc
+        # and _itemDesc2 on ItemInfo: _itemDesc's lea sits in the
+        # fall-through at 0x14147CE47, which was attributed to the block
+        # at 0x14147CE2D and keyed on an inbound edge at 0x14147CE5D,
+        # while _itemDesc2's outlined block keyed on 0x14147CE45 and
+        # sorted ahead of it.
+        if m in _UNCOND_END or m.startswith("j"):
             nxt = ins.address + ins.size
             if lo <= nxt < hi:
                 targets.add(nxt)
