@@ -1137,6 +1137,14 @@ _FIXTURE_GREEN = frozenset({
     # canary before pinning: 397 located + 39 provably empty = 436/436,
     # 6,376 records, nothing not-found or ambiguous.
     ("vanilla_b25116796", "storeinfo"),
+    # v3.17.2 added this build's iteminfo. buildid 25116796 put 4 more
+    # bytes in default_sub_item; upstream 671f5f4 fixed it inside the
+    # native parser rather than by adding a named layout, so the six
+    # layout names are unchanged and the pre-fix state cannot be
+    # simulated by dropping one. Verified through the canary before
+    # pinning: 6,813/6,813 structural, 0 opaque, round-trip byte-exact.
+    ("vanilla_b25116796", "iteminfo-native"),
+    ("vanilla_b25116796", "iteminfo"),
 })
 
 #: Per-fixture pins for the ordered tables, measured 2026-08-26.
@@ -1163,6 +1171,13 @@ _FIXTURE_ORDER_BASELINE: dict[tuple[str, str], tuple[str, float]] = {
     # this break. The 109 here is what it reads once #377's cd20 layout is
     # present, i.e. the healthy figure.
     ("vanilla_b24934353", "ItemInfo"): ("cd116", 109),
+    # 109 again, on the build whose default_sub_item grew 4 bytes. That
+    # is now the THIRD consecutive iteminfo shape change the ordered
+    # walk has read at exactly the same depth -- 24773079, 24934353 and
+    # 25116796 -- while the native parser needed work on two of them.
+    # The number is the healthy figure once the fix is in; it is pinned
+    # here for drift, not as evidence the walk saw anything.
+    ("vanilla_b25116796", "ItemInfo"): ("cd116", 109),
 }
 
 
