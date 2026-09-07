@@ -21,6 +21,13 @@ _UNRELEASED_NOTES: list[str] = [
 
 CHANGELOG = [
     {
+        "version": "3.17.2",
+        "date": "2026-09-07",
+        "notes": [
+            "<b>Item mods apply to 392 more items.</b> The 4 September game update added four bytes inside 392 item records, all of them the same kind of equipment entry. CDUMM could no longer read those records, so any mod touching one of them applied nothing and said nothing: no error, no warning, the item just came out unchanged. Nothing was ever damaged, the items simply stopped being editable. They read and apply normally again, and items on the previous game version are unaffected. Spotted by <b>Gleb Kogtev</b>.",
+        ],
+    },
+    {
         "version": "3.17.1",
         "date": "2026-09-06",
         "notes": [

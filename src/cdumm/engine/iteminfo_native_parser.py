@@ -376,7 +376,24 @@ def parse_iteminfo_from_bytes(
                             f"at 0x{rec_end:X})")
                     if r.pos < rec_end:
                         it["_tail_slack"] = bytes(data[r.pos:rec_end])
+                        # Leftover bytes mean the walk ended early, which
+                        # on buildid 25116796 is the same 4-byte
+                        # default_sub_item growth landing on a record
+                        # whose remaining fields happen to stay readable
+                        # 4 bytes out of step. Round-trip cannot catch
+                        # that (the slack carries the difference), so
+                        # take the padded read whenever it explains more
+                        # of the record.
+                        alt = _read_item_pad4_dsi(data, rec_start,
+                                                  rec_end, fields)
+                        if alt is not None and (
+                                len(alt.get("_tail_slack", b""))
+                                < len(it["_tail_slack"])):
+                            it = alt
                 except Exception:
+                    it = _read_item_pad4_dsi(data, rec_start, rec_end,
+                                             fields)
+                if it is None:
                     # GitHub #219: a record the schema can't decode yet
                     # (the 64 1.12 "*_Flag_I" guild flags). Carry it
                     # verbatim so the whole-table round-trip stays
@@ -1665,12 +1682,51 @@ def _read_DefaultSubItem(r: _Reader) -> dict:
     return {"type_id": type_id, "value": None}
 
 
+def _read_DefaultSubItem_pad4(r: _Reader) -> dict:
+    """The buildid 25116796 form: four zero bytes before ``unk_c``.
+
+    The 4 September 2026 update grew the *populated* default_sub_item
+    from 18 bytes to 22 on the ``type_id == 0`` shape, and on that shape
+    only. Derived, not assumed: 394 records grew between b24934353 and
+    b25116796, all by exactly 4 bytes, and every one of the 392 this
+    shape claims reads ``type_id == 0``; on the 305 whose bytes are
+    otherwise untouched the four new bytes are zero and sit at offset 17
+    of the field, with a non-zero byte on either side, so the placement
+    is not ambiguous inside a run of padding. 387 of the 392 stopped
+    decoding outright on the previous layout; the other 5 stayed
+    readable 4 bytes out of step, which is why the caller also retries
+    on leftover bytes and not only on a raised record.
+
+    The extra word is carried as ``unk_d`` rather than folded into
+    ``unk_b`` as a u64 so that ``_write_DefaultSubItem`` can tell the two
+    builds apart from the record alone. That matters because the two
+    shapes coexist within one table read: a b24934353 install keeps the
+    18-byte form and must keep round-tripping byte-exact.
+    """
+    type_id = r.u8()
+    if type_id < 14:
+        value = r.u32()
+        unk_a = r.i64()
+        unk_b = r.u32()
+        unk_d = r.u32()
+        unk_c = r.u8()
+        return {
+            "type_id": type_id, "value": value,
+            "unk_a": unk_a, "unk_b": unk_b, "unk_d": unk_d, "unk_c": unk_c,
+        }
+    return {"type_id": type_id, "value": None}
+
+
 def _write_DefaultSubItem(w: _Writer, v: dict) -> None:
     w.u8(v["type_id"])
     if v["type_id"] < 14:
         w.u32(v["value"])
         w.i64(v.get("unk_a", 0))
         w.u32(v.get("unk_b", 0))
+        # Present only on records read by _read_DefaultSubItem_pad4, so
+        # the writer reproduces whichever build's shape it was given.
+        if "unk_d" in v:
+            w.u32(v["unk_d"])
         w.u8(v.get("unk_c", 0))
 
 
@@ -2553,6 +2609,45 @@ def _record_roundtrips(data: bytes, start: int, end: int, fields) -> bool:
         return bytes(w.buf) == bytes(data[start:end])
     except Exception:
         return False
+
+
+def _fields_pad4_dsi(fields):
+    """``fields`` with the standalone default_sub_item read as 22 bytes."""
+    out = []
+    for spec in (fields or _ITEM_FIELDS):
+        if spec[0] == "default_sub_item":
+            out.append((spec[0], spec[1], _read_DefaultSubItem_pad4,
+                        spec[3]))
+        else:
+            out.append(spec)
+    return out
+
+
+def _read_item_pad4_dsi(data: bytes, start: int, end: int, fields):
+    """Re-read one record with the buildid 25116796 default_sub_item.
+
+    Returns the decoded record, or None when that shape does not explain
+    the bytes either -- so the caller's opaque carry still handles a
+    genuinely unknown record. Accepted only on a byte-exact round-trip
+    through the ORIGINAL ``fields``: the apply path serializes with those,
+    and ``unk_d`` on the record is what makes the standard writer emit the
+    four bytes back. Anything that needs the padded writer to reproduce it
+    would silently lose them on write, so it is refused here.
+    """
+    try:
+        r = _Reader(data, start, rec_end=end)
+        it = _read_item(r, fields=_fields_pad4_dsi(fields))
+        if r.pos > end:
+            return None
+        if r.pos < end:
+            it["_tail_slack"] = bytes(data[r.pos:end])
+        w = _Writer()
+        _write_item(w, it, fields=fields)
+        if bytes(w.buf) != bytes(data[start:end]):
+            return None
+        return it
+    except Exception:                                    # noqa: BLE001
+        return None
 
 
 def detect_iteminfo_layout(data: bytes, record_offsets):
