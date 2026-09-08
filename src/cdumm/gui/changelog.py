@@ -21,6 +21,13 @@ _UNRELEASED_NOTES: list[str] = [
 
 CHANGELOG = [
     {
+        "version": "3.17.4",
+        "date": "2026-09-08",
+        "notes": [
+            "<b>The Stage table no longer shows numbers it cannot stand behind.</b> Its layout was taken from someone else's parser years of game updates ago, and the game's own loader reads it differently: three fields the layout does not even list, and a field read as eight bytes where the layout says four. Everything past the fifth field was therefore lined up wrong, so the grid was showing 76 columns of numbers that looked real and were not, and a mod could write to them and land on the wrong byte. Those columns now read <i>(unverified)</i> and refuse writes until the table is worked out properly. The five fields the game confirms are unchanged. No other table is affected.",
+        ],
+    },
+    {
         "version": "3.17.3",
         "date": "2026-09-08",
         "notes": [
