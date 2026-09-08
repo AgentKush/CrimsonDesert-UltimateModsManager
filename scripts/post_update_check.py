@@ -936,7 +936,8 @@ def check_statusgroupinfo(body: bytes, header: bytes) -> tuple[bool, str]:
 #:
 #: Pinned deliberately, because the useful question is "did this CHANGE",
 #: not "is this complete". Several of these tables have never walked to the
-#: end -- StageInfo reaches 24 of 81 fields and RegionInfo stalls on
+#: end -- StageInfo reaches 24 of 81 fields (and per #412 only its first
+#: FIVE are at proven offsets) and RegionInfo stalls on
 #: ``_gimmickAliasPointerList`` -- and those are open modelling gaps, not
 #: patch damage. An absolute threshold would print three failures on a
 #: perfectly healthy build, and a check that is red every run is one people
@@ -947,6 +948,13 @@ def check_statusgroupinfo(body: bytes, header: bytes) -> tuple[bool, str]:
 #: knowing, since it means someone widened a layout and this line is stale.
 #:
 #: Verified 2026-08-11, fingerprint 2471644ba4ce9feb.
+#:
+#: That date is stale by design of circumstance, not neglect: these are
+#: LIVE-pass figures and re-verifying them needs a game install, which
+#: this branch does not have. At least four game builds have shipped
+#: since (24773079, 24934353, 24994088, 25116796). The fixture pass is
+#: the half that has been kept current; treat these numbers as last
+#: known good rather than as freshly measured.
 _ORDER_BASELINE: dict[str, tuple[str, float]] = {
     "ItemInfo": ("cd116", 109),
     "CharacterInfo": ("base", 14),
@@ -958,6 +966,22 @@ _ORDER_BASELINE: dict[str, tuple[str, float]] = {
     # (0% of records complete either way), is not editable, and no mod
     # targets it, so this is a modelling-gap shift rather than a
     # capability loss. Re-pinned so the canary guards the NEXT drop.
+    #
+    # v3.17.4 (#412) localised that gap, and it is worse than "never
+    # fully modelled": reading the deserializer on buildid 25116796,
+    # only FIVE fields are proven -- _isBlocked, _name, _stageDesc,
+    # _completeLog, _sequencerDesc. The exe then reads three fields the
+    # schema does not contain at all, so everything from _stageCategory
+    # on sits at an unproven offset. Upstream gated the table with
+    # `_verified_fields`, and format3_apply now refuses to write past
+    # the gate, which makes "not editable" enforced rather than merely
+    # true in practice.
+    #
+    # So the 24 below is NOT a depth worth having: it is nineteen fields
+    # past the last proven offset, i.e. the walk confidently reading
+    # bytes nobody has justified. It is kept only because a DROP still
+    # means something changed. Read it the way the iteminfo 109/109
+    # pins are read -- drift detection, not a health signal.
     "StageInfo": ("base", 24),
     "VehicleInfo": ("base", 20),
     "FieldInfo": ("base", 19),
