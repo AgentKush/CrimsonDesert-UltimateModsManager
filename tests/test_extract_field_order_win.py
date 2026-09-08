@@ -170,6 +170,97 @@ def test_hot_key_is_a_total_order_within_one_cold_block():
     assert func.hot_key(a) < func.hot_key(b)
 
 
+def _build_inline_function():
+    """Two consecutive fields whose error blocks are NOT outlined.
+
+    This is the shape that swapped ``_itemDesc`` and ``_itemDesc2`` on
+    the live exe. Both errors sit inline, so field 0's block is a
+    fall-through after its own ``jne`` while field 1's block is the
+    ``jne`` target and therefore has an inbound edge. Add one backward
+    branch into the entry block and field 0 keys on that branch, which
+    sits after field 1's key, and the two come out reversed::
+
+        1000  test al, al
+        1002  jne  1010            <- field 1's block gets this inbound
+        1004  lea  rax, [rip+..]   <- field 0's error message
+        100B  jmp  1030
+        1010  test al, al          <- field 1 starts here
+        1012  jne  1020
+        1014  lea  rax, [rip+..]   <- field 1's error message
+        101B  jmp  1030
+        1020  jmp  1000            <- the stale inbound edge on 0x1000
+        1030  ret
+
+    Returns ``(blob, base_va, [lea0, lea1])``.
+    """
+    base = _BASE
+    b = bytearray()
+    b += b"\x84\xc0"                                    # 1000 test al, al
+    b += b"u\x0c"                                        # 1002 jne 1010
+    b += b"H\x8d\x05" + struct.pack("<i", 0x900)        # 1004 lea rax
+    b += b"\xe9" + struct.pack("<i", 0x20)               # 100B jmp 1030
+    b += b"\x84\xc0"                                    # 1010 test al, al
+    b += b"u\x0c"                                        # 1012 jne 1020
+    b += b"H\x8d\x05" + struct.pack("<i", 0x900)        # 1014 lea rax
+    b += b"\xe9" + struct.pack("<i", 0x10)               # 101B jmp 1030
+    b += b"\xe9" + struct.pack("<i", -0x25)              # 1020 jmp 1000
+    b += b"\x90" * 11                                    # 1025 padding
+    b += b"\xc3"                                         # 1030 ret
+    return bytes(b), base, [base + 0x04, base + 0x14]
+
+
+def test_an_inline_error_block_starts_its_own_block():
+    """The leader that was missing: the instruction after a conditional.
+
+    Without it field 0's lea is folded into the entry block, picks up
+    whatever branches into that block, and sorts by an address that has
+    nothing to do with the field.
+    """
+    blob, base, leas = _build_inline_function()
+    func = sweep_bytes(blob, base)
+
+    # The bug is present in the input: something does branch back into
+    # the entry block, and that edge is later than field 1's key.
+    assert base in func.inbound, (
+        "the synthetic function no longer models the stale inbound edge "
+        "that made this misorder possible")
+    assert min(func.inbound[base]) > min(func.inbound[base + 0x10])
+
+    # Each lea now leads its own block, so neither inherits that edge.
+    assert func.block_start_of(leas[0]) == leas[0]
+    assert func.block_start_of(leas[1]) == leas[1]
+    assert leas[0] not in func.inbound and leas[1] not in func.inbound
+
+
+def test_hot_path_order_survives_two_inline_error_blocks():
+    """The user-visible half of the same fact: the order comes out right."""
+    blob, base, leas = _build_inline_function()
+    func = sweep_bytes(blob, base)
+    assert sorted(range(2), key=lambda i: func.hot_key(leas[i])) == [0, 1]
+
+
+def test_sweep_for_leas_falls_back_to_a_window_without_pdata():
+    """No exception directory means no function extents to start from.
+
+    The fallback has to still produce a usable block map, otherwise a
+    build that strips .pdata would silently degrade to naive ordering
+    with nothing saying so.
+    """
+    from extract_field_order_win import SWEEP_PAD, Image, Section, sweep_for_leas
+
+    blob, base, leas = _build_outlined_function(3)
+    pad = bytes(SWEEP_PAD)                    # zero fill either side
+    img = Image(data=pad + blob + pad,
+                base=base - SWEEP_PAD,
+                sections=(Section(name=".text", va=base - SWEEP_PAD,
+                                  vsize=len(blob) + 2 * SWEEP_PAD,
+                                  raw=0, rsize=len(blob) + 2 * SWEEP_PAD),))
+    assert img.pdata == (0, 0)
+    func = sweep_for_leas(img, leas)
+    assert func.addrs, "fallback produced no instructions at all"
+    assert sorted(range(3), key=lambda i: func.hot_key(leas[i])) == [0, 1, 2]
+
+
 # ── against the real binary (skips without a game install) ────────────────
 
 def _game_exe() -> Path | None:
