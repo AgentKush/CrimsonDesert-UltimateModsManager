@@ -21,6 +21,13 @@ _UNRELEASED_NOTES: list[str] = [
 
 CHANGELOG = [
     {
+        "version": "3.17.3",
+        "date": "2026-09-08",
+        "notes": [
+            "<b>Two data tables were showing two of their values under the wrong names.</b> In the quest gauge table the completion percentage and the gauge timer were swapped, and in the AI event table the interrupt flag and the delay type were. Both were mapped from the game's own code back in August by a tool that had a bug in how it ordered fields, and the check that was supposed to catch a bad order could not see this kind: the fields are the same total size either way, so the table still read cleanly end to end with the two swapped. It showed up as a percentage of 1113255523123200 and a yes/no flag with a value of 2. Corrected, and confirmed three ways against the game code, the declared field sizes and the real values. Anyone editing those two tables was writing to the wrong field; nothing else was affected.",
+        ],
+    },
+    {
         "version": "3.17.2",
         "date": "2026-09-07",
         "notes": [
