@@ -163,6 +163,10 @@ class Image:
     data: mmap.mmap
     base: int
     sections: tuple[Section, ...]
+    #: (va, size) of the .pdata exception directory, (0, 0) if absent.
+    pdata: tuple[int, int] = (0, 0)
+    #: cache for _pdata_map, which is expensive and asked for per class.
+    _pd: object = None
 
     def va_to_off(self, va: int) -> int | None:
         for s in self.sections:
@@ -197,8 +201,10 @@ def open_image(path: Path) -> Image:
                 raw=s.PointerToRawData,
                 rsize=s.SizeOfRawData)
         for s in pe.sections)
+    d = pe.OPTIONAL_HEADER.DATA_DIRECTORY[3]        # ENTRY_EXCEPTION
+    pdata = (base + d.VirtualAddress, d.Size) if d.VirtualAddress else (0, 0)
     pe.close()
-    return Image(data=mm, base=base, sections=secs)
+    return Image(data=mm, base=base, sections=secs, pdata=pdata)
 
 
 @dataclass(frozen=True)
@@ -262,6 +268,143 @@ class Func:
         """
         srcs = self.inbound.get(self.block_start_of(lea_va))
         return (min(srcs), lea_va) if srcs else (lea_va, lea_va)
+
+
+def _pdata_map(img: Image):
+    """``(starts, by_begin, root, ext)`` from the exception directory.
+
+    .pdata does not enumerate functions, it enumerates UNWIND ranges. A
+    function with outlined blocks has a primary RUNTIME_FUNCTION plus
+    continuations flagged UNW_FLAG_CHAININFO (0x4), each carrying a
+    trailing RUNTIME_FUNCTION pointing at its parent. Anchoring on the
+    nearest BeginAddress therefore bounds a FRAGMENT, not a function;
+    following the chain to its root and merging brings every fragment of
+    one function under a single extent.
+
+    UNWIND_INFO: byte0 = Version(3) | Flags(5), Flags & 4 == CHAININFO;
+    byte2 = CountOfCodes; the chained RUNTIME_FUNCTION follows the
+    unwind-code array, padded to an even count.
+
+    Lifted from ``tools/derive_table_layout.py``, which needed exactly
+    this and worked out the chain-following. Kept here rather than
+    imported the other way because that module already imports from this
+    one.
+    """
+    if img._pd is not None:
+        return img._pd
+    va, size = img.pdata
+    rf = []
+    off = img.va_to_off(va) if va else None
+    if off is not None:
+        blob = img.data[off:off + size]
+        for q in range(0, len(blob) - 11, 12):
+            b, e, u = struct.unpack_from("<III", blob, q)
+            if b and e > b:
+                rf.append((img.base + b, img.base + e,
+                           img.base + u if u else 0))
+    rf.sort()
+    by_begin = {b: (b, e, u) for b, e, u in rf}
+
+    def parent(u):
+        if not u:
+            return None
+        o = img.va_to_off(u)
+        if o is None or o + 4 > len(img.data):
+            return None
+        if not ((img.data[o] >> 3) & 0x4):
+            return None                       # not a chained fragment
+        n = img.data[o + 2]                   # CountOfCodes
+        c = o + 4 + 2 * ((n + 1) & ~1)
+        if c + 12 > len(img.data):
+            return None
+        pb, _pe, _pu = struct.unpack_from("<III", img.data, c)
+        return img.base + pb
+
+    root: dict[int, int] = {}
+
+    def resolve(b, seen=frozenset()):
+        if b in root:
+            return root[b]
+        if b in seen:
+            return b                          # cycle guard
+        ent = by_begin.get(b)
+        pa = parent(ent[2]) if ent else None
+        r = (resolve(pa, seen | {b})
+             if pa is not None and pa in by_begin else b)
+        root[b] = r
+        return r
+
+    for b, _e, _u in rf:
+        resolve(b)
+    ext: dict[int, list[int]] = {}
+    for b, e, _u in rf:
+        cur = ext.setdefault(root[b], [b, e])
+        cur[0] = min(cur[0], b)
+        cur[1] = max(cur[1], e)
+    img._pd = ([b for b, _e, _u in rf], by_begin, root, ext)
+    return img._pd
+
+
+def function_extent(img: Image, va: int) -> tuple[int, int] | None:
+    """``(lo, hi)`` of the whole function containing ``va``, or None."""
+    starts, by_begin, root, ext = _pdata_map(img)
+    i = bisect_right(starts, va) - 1
+    if i < 0:
+        return None
+    b, e, _u = by_begin[starts[i]]
+    if not (b <= va < e):
+        return None
+    lo, hi = ext[root[starts[i]]]
+    return (lo, hi)
+
+
+def sweep_for_leas(img: Image, leas: list[int]) -> Func:
+    """Sweep the real function(s) containing ``leas``, not a padded window.
+
+    ``capstone.Cs.disasm`` is a generator that STOPS at the first byte
+    sequence it cannot decode. A sweep starting at ``leas[0] - SWEEP_PAD``
+    begins mid-instruction, desyncs, hits an invalid opcode and truncates,
+    often before the first field lea. The block map is then empty, every
+    lea falls back to its own address, and the order silently degrades to
+    the naive lea-address order the hot-path rule exists to avoid. That is
+    not hypothetical: on this build ContentsPhaseInfo, StageInfo and
+    FactionOperationGroupInfo decoded 2, 4 and 1 instructions respectively
+    across their whole span.
+
+    Starting from the .pdata function start makes every instruction
+    boundary genuine. Falls back to the padded window only when a lea sits
+    outside .pdata, because a missing field is worse than an imprecise one.
+    """
+    spans, orphans = set(), []
+    for a in leas:
+        x = function_extent(img, a)
+        if x is None:
+            orphans.append(a)
+        else:
+            spans.add(x)
+    if not spans and not orphans:
+        orphans = list(leas)
+    parts = sorted(spans)
+    for a in orphans:
+        parts.append((a - SWEEP_PAD, a + SWEEP_PAD))
+    merged = Func(start=min(p[0] for p in parts),
+                  end=max(p[1] for p in parts))
+    seen: set[int] = set()
+    for lo, hi in sorted(parts):
+        off = img.va_to_off(lo)
+        if off is None:
+            continue
+        f = sweep_bytes(img.data[off:off + (hi - lo)], lo)
+        for a in f.addrs:
+            if a not in seen:
+                seen.add(a)
+                merged.addrs.append(a)
+        merged.block_starts += f.block_starts
+        for t, srcs in f.inbound.items():
+            merged.inbound.setdefault(t, []).extend(srcs)
+    merged.addrs.sort()
+    merged.block_starts = sorted(set(merged.block_starts))
+    return merged
 
 
 def sweep_function(img: Image, lo: int, hi: int) -> Func:
@@ -339,8 +482,7 @@ def extract_orders(path: Path, naive: bool = False
             def key(pair):
                 return (pair[1], pair[1])
         else:
-            func = sweep_function(
-                img, leas[0] - SWEEP_PAD, leas[-1] + SWEEP_PAD)
+            func = sweep_for_leas(img, leas)
 
             def key(pair, _f=func):
                 return _f.hot_key(pair[1])

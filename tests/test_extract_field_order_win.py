@@ -239,6 +239,28 @@ def test_hot_path_order_survives_two_inline_error_blocks():
     assert sorted(range(2), key=lambda i: func.hot_key(leas[i])) == [0, 1]
 
 
+def test_sweep_for_leas_falls_back_to_a_window_without_pdata():
+    """No exception directory means no function extents to start from.
+
+    The fallback has to still produce a usable block map, otherwise a
+    build that strips .pdata would silently degrade to naive ordering
+    with nothing saying so.
+    """
+    from extract_field_order_win import SWEEP_PAD, Image, Section, sweep_for_leas
+
+    blob, base, leas = _build_outlined_function(3)
+    pad = bytes(SWEEP_PAD)                    # zero fill either side
+    img = Image(data=pad + blob + pad,
+                base=base - SWEEP_PAD,
+                sections=(Section(name=".text", va=base - SWEEP_PAD,
+                                  vsize=len(blob) + 2 * SWEEP_PAD,
+                                  raw=0, rsize=len(blob) + 2 * SWEEP_PAD),))
+    assert img.pdata == (0, 0)
+    func = sweep_for_leas(img, leas)
+    assert func.addrs, "fallback produced no instructions at all"
+    assert sorted(range(3), key=lambda i: func.hot_key(leas[i])) == [0, 1, 2]
+
+
 # ── against the real binary (skips without a game install) ────────────────
 
 def _game_exe() -> Path | None:
