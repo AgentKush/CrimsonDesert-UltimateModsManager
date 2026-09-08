@@ -21,6 +21,13 @@ _UNRELEASED_NOTES: list[str] = [
 
 CHANGELOG = [
     {
+        "version": "3.17.5",
+        "date": "2026-09-09",
+        "notes": [
+            "<b>A launch failure caused by the \"Run as administrator\" flag now says so instead of blaming Steam.</b> If <code>CrimsonDesert.exe</code> has that compatibility flag set, Windows refuses to let CDUMM start it, and CDUMM was reporting it as Steam being unreachable. That sent people to check a Steam client that was running fine, and every launch method looked identical because they all failed the same way. The message now names the flag and where to clear it: right-click <code>CrimsonDesert.exe</code>, Properties, Compatibility, uncheck \"Run this program as an administrator\". Reported by <b>ombre03</b>.",
+        ],
+    },
+    {
         "version": "3.17.4",
         "date": "2026-09-08",
         "notes": [
