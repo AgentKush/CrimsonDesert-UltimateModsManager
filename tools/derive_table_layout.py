@@ -1631,9 +1631,21 @@ def main(argv: list[str] | None = None) -> int:
         # exactly the HouseInfo / FailMessageInfo bug: it can tile 100% of
         # records and still be wrong, because the strings in one build happen
         # to share a length.
+        # The shape IS expressible, and saying otherwise sends the next
+        # reader off to build support that already exists. `_apply` carries
+        # it as ('slist', n), and semantic/pabgb_types.consume_bytes walks
+        # CArray<T>, [T;N] and named sub-structs, so a per-element fixed
+        # prefix followed by a string has a descriptor. What is missing is
+        # that `candidates` never OFFERS an slist, so stage 2 cannot fit
+        # one. Measured 2026-09-08: adding slist to the candidate space
+        # changes nothing on its own (0 tables proven either way over
+        # stageinfo plus 11 other undecoded tables), because the tables
+        # that need it are blocked earlier -- stageinfo, for one, is
+        # missing three fields the exe reads (GitHub #409). Offering the
+        # shape is necessary but not sufficient; do not ship it alone.
         print(f"list elements that are VARIABLE-length ({len(variable)}) -- "
-              f"no constant width may be fitted for these; the shape is not "
-              f"in the walker's grammar, so the honest result is unresolved:")
+              f"no constant width may be fitted for these, and `candidates` "
+              f"offers no variable-element shape, so these stay unresolved:")
         for c, s in sorted(variable.items()):
             print(f"   sub_{c:X}  {s}")
 
