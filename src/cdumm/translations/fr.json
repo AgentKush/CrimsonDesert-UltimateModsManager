@@ -983,5 +983,6 @@
   "mod_list.click_to_update": "Cliquer pour mettre à jour",
   "tooltip.update_available_with_version": "Mise à jour disponible. Installé : {version}. Cliquer pour mettre à jour.",
   "settings.nexus_none_linked": "Aucun de vos {count} mods n'est lié à une page NexusMods, donc aucun ne peut être vérifié. Les mods importés depuis une archive téléchargée manuellement n'ont pas de lien Nexus ; réimportez-les via le téléchargement Nexus ou ajoutez le lien sur la carte du mod.",
-  "settings.nexus_up_to_date_partial": "{checked} mod(s) lié(s) sont à jour. {unlinked} mod(s) sans lien NexusMods n'ont pas pu être vérifiés."
+  "settings.nexus_up_to_date_partial": "{checked} mod(s) lié(s) sont à jour. {unlinked} mod(s) sans lien NexusMods n'ont pas pu être vérifiés.",
+  "main.launch_failed_needs_elevation": "Windows a refuse de lancer le jeu parce que CrimsonDesert.exe est configure pour s'executer en tant qu'administrateur. Clic droit sur CrimsonDesert.exe, Proprietes, onglet Compatibilite, decochez \"Executer ce programme en tant qu'administrateur\", puis relancez le jeu. Ce n'est pas un probleme Steam."
 }
