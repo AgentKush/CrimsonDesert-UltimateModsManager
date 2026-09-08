@@ -1090,7 +1090,16 @@ class Deriver:
                     and o[0].type == CS_OP_IMM):
                 targets.add(o[0].imm)
                 inbound[o[0].imm].append(i.address)
-            if i.mnemonic in _UNCOND_END:
+            # A conditional branch ends a block too, so the instruction
+            # after it leads one. Without this leader an inline (not
+            # outlined) error block folds into the block before the
+            # field's own "jne ok" and gets keyed on that block's inbound
+            # edges, which belong to something else entirely. That is what
+            # put _percent after _gaugeTime on QuestGaugeInfo and
+            # _isSequencerInterruptEvent before _eventDelayType on
+            # AIEventTableInfo in the 2026-08-13 derivation. Same fix as
+            # extract_field_order_win.sweep_bytes (GitHub #407).
+            if i.mnemonic in _UNCOND_END or i.mnemonic.startswith("j"):
                 targets.add(i.address + i.size)
         blocks = sorted(targets | {addrs[0]})
         set_addrs = set(addrs)
