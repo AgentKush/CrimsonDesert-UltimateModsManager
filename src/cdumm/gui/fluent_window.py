@@ -6933,7 +6933,24 @@ class CdummWindow(FluentWindow):
                 title=tr("main.game_launched"), content=tr("main.game_launched_msg"),
                 duration=3000, position=InfoBarPosition.TOP, parent=self)
             self._hide_for_game_launch()
-        except Exception:
+        except Exception as launch_exc:
+            # WinError 740 is "the requested operation requires
+            # elevation", raised by Popen when the exe carries the
+            # RUNASADMIN compatibility flag. It has nothing to do with
+            # Steam, so the Steam message below sends the user to check
+            # a client that is running fine (ombre03, GitHub #415, who
+            # tried every launch method in turn). The bug report already
+            # detects this flag; the launch path now names it too.
+            if getattr(launch_exc, "winerror", None) == 740:
+                logger.info(
+                    "Launch failed with WinError 740 (needs elevation); "
+                    "exe likely has the RUNASADMIN compatibility flag: %s",
+                    exe)
+                InfoBar.error(
+                    title=tr("infobar.launch_failed"),
+                    content=tr("main.launch_failed_needs_elevation"),
+                    duration=10000, position=InfoBarPosition.TOP, parent=self)
+                return
             if steam:
                 # Could not reach Steam. Spawning the bare exe here
                 # would silently fail under Themida + Denuvo and the

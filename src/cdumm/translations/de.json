@@ -943,6 +943,7 @@
   "tray.quit": "CDUMM beenden",
   "tray.hidden_msg": "Während des Spielens ausgeblendet. Klicke auf das Tray-Symbol, um CDUMM zurückzuholen.",
   "main.launch_failed_steam_not_running": "Steam ist nicht erreichbar. Stelle sicher, dass der Steam-Client läuft, und versuche dann erneut, das Spiel zu starten. Crimson Desert braucht die Steam-Laufzeitumgebung, ein direkter Start der Exe funktioniert daher nicht.",
+  "main.launch_failed_needs_elevation": "Windows hat den Start verweigert, weil CrimsonDesert.exe als Administrator ausgefuehrt werden soll. Rechtsklick auf CrimsonDesert.exe, Eigenschaften, Reiter Kompatibilitaet, dort \"Programm als Administrator ausfuehren\" abwaehlen und dann erneut Spiel starten. Das ist kein Steam-Problem.",
   "main.launch_failed_xbox_not_running": "Die Xbox-App ist nicht erreichbar. Stelle sicher, dass sie installiert und angemeldet ist, und versuche dann erneut, das Spiel zu starten.",
   "main.no_mods_in_file": "Keine Mods in der Datei gefunden.",
   "main.snapshot_failed": "Snapshot fehlgeschlagen",
