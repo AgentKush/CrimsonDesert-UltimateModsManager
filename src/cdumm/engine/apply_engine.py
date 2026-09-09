@@ -169,8 +169,9 @@ def invalidate_apply_fingerprint(
 # entries fired on overlapping DDS textures and produced a corrupt
 # Frankenstein file that froze the game on the loading screen.
 _BYTE_MERGEABLE_EXTS = frozenset({
-    # PABGB tables and their headers
-    "pabgb", "pabgh",
+    # PABGB tables and their headers, under both the pre- and
+    # post-2026-09-04 names (cdumm.archive.table_ext).
+    "pabgb", "pabgh", "staticinfobody", "staticinfoheader",
     # Pearl Abyss XML / sequencer formats
     "pac_xml", "pamb_xml", "paseq", "paac", "xml",
     # UI text formats
@@ -227,6 +228,9 @@ def _dirs_losing_pamt(deferred_file_deletions: "list[Path]") -> "set[str]":
     return out
 
 from cdumm.archive.papgt_manager import PapgtManager
+from cdumm.archive.table_ext import (
+    alias_paths, header_path_for, BODY_EXTS, HEADER_EXTS,
+)
 from cdumm.archive.transactional_io import TransactionalIO
 from cdumm.engine.delta_engine import (
     SPARSE_MAGIC, apply_delta_from_file,
@@ -740,9 +744,7 @@ def _make_format3_vanilla_extractor(
             body = get_vanilla_entry_content(file_path, target)
             if body is None:
                 return None
-            header_path = target
-            if header_path.endswith(".pabgb"):
-                header_path = header_path[:-len(".pabgb")] + ".pabgh"
+            header_path = header_path_for(target)
             header = extract_sibling_entry(pamt_dir, header_path)
             if header is None:
                 return None
@@ -1923,9 +1925,56 @@ class ApplyWorker(QObject):
             "SELECT 1 FROM mods WHERE enabled = 1 "
             "AND json_source IS NOT NULL AND json_source != '' "
             "LIMIT 1").fetchone() is not None
-        if not file_deltas and not revert_files and not has_enabled_json:
+        # _get_files_to_revert only tracks mod_type='paz' deltas, so it's
+        # blind to json_source mods entirely (they never write a
+        # mod_deltas row — their overlay is built fresh at mount time).
+        # Disabling every json_source mod at once made file_deltas,
+        # revert_files, AND has_enabled_json all empty, so Apply bailed
+        # out here before reaching Phase 4's orphan-cleanup, leaving the
+        # previous overlay (built by the mods that are now disabled)
+        # mounted forever (report 2026-08-26). If a CDUMM-managed overlay
+        # dir is still on disk, there's real cleanup work to do even with
+        # nothing to apply or revert -- don't bail, let the normal apply
+        # flow reach orphan-cleanup so it can remove it.
+        has_stale_overlay = any(
+            (d / "_cdumm_overlay.marker").exists()
+            for d in self._game_dir.iterdir()
+            if d.is_dir() and d.name.isdigit() and len(d.name) == 4
+            and int(d.name) >= 36
+        )
+        # The stale-overlay probe above only fires when the disabled mods
+        # actually managed to BUILD an overlay. A json_source mod whose
+        # patches all got skipped (APPLY_SILENT_FAILURE: "no PAMT entry
+        # for ...") is still snapshotted as applied=1 when that apply
+        # finishes, yet it left nothing on disk. Turning it off then gave
+        # empty file_deltas/revert_files/has_enabled_json AND no overlay
+        # dir, so Apply bailed with "No mod changes to apply or revert" —
+        # error, no finished() signal, so the GUI never re-snapshotted and
+        # the card kept its "Apply to Deactivate" badge forever, with
+        # every retry hitting the same error (report 2026-09-04).
+        # The DB's own applied-vs-enabled bookkeeping is the authority on
+        # whether the user has a pending change: if any paz mod's applied
+        # flag disagrees with its enabled flag, run the normal flow (it
+        # reaches orphan-cleanup, the PAPGT rebuild and a clean commit)
+        # so the state gets reconciled and the badge clears.
+        try:
+            has_pending_state_change = self._db.connection.execute(
+                "SELECT 1 FROM mods WHERE mod_type = 'paz' "
+                "AND COALESCE(applied, 0) != COALESCE(enabled, 0) "
+                "LIMIT 1").fetchone() is not None
+        except Exception as e:  # noqa: BLE001 - bookkeeping must never
+            # break apply (a pre-migration DB has no `applied` column)
+            logger.debug("applied/enabled sync check failed: %s", e)
+            has_pending_state_change = False
+        if (not file_deltas and not revert_files and not has_enabled_json
+                and not has_stale_overlay and not has_pending_state_change):
             self.error_occurred.emit("No mod changes to apply or revert.")
             return
+        if (not file_deltas and not revert_files and not has_enabled_json
+                and not has_stale_overlay):
+            logger.info(
+                "Nothing to write, but mod applied/enabled state is out of "
+                "sync — running apply to reconcile it")
 
         # Entry-level deltas (from script mods) require updating the PAMT
         # after PAZ composition. Track updates here for Phase 2.
@@ -3672,7 +3721,7 @@ class ApplyWorker(QObject):
                     from cdumm.semantic.engine import SemanticEngine
                     engine = SemanticEngine(self._db)
 
-                    header_entry_path = entry_path.replace(".pabgb", ".pabgh")
+                    header_entry_path = header_path_for(entry_path)
                     header_bytes = self._extract_sibling_entry(
                         pamt_dir, header_entry_path)
                     vanilla_content = self._get_vanilla_entry_content(
@@ -3887,7 +3936,8 @@ class ApplyWorker(QObject):
         if not hasattr(self, "_pamt_entries_cache"):
             self._pamt_entries_cache: dict[str, list] = {}
 
-        entry_basename = entry_path.rsplit("/", 1)[-1]
+        wanted_paths = set(alias_paths(entry_path.lower()))
+        wanted_names = {a.rsplit("/", 1)[-1] for a in wanted_paths}
         for base in [self._vanilla_dir, self._game_dir]:
             pamt_path = base / pamt_dir / "0.pamt"
             if not pamt_path.exists():
@@ -3908,11 +3958,14 @@ class ApplyWorker(QObject):
                 # (#61 fix only covered the other call site).
                 self._pamt_entries_cache[cache_key] = entries
             try:
+                # Alias-aware: a caller-derived "iteminfo.pabgh" must
+                # also match the post-update
+                # "gamedata/iteminfo.staticinfoheader" (table_ext).
                 for e in entries:
-                    if e.path == entry_path:
+                    if e.path.lower() in wanted_paths:
                         return _extract_from_paz(e)
                 for e in entries:
-                    if e.path.rsplit("/", 1)[-1] == entry_basename:
+                    if e.path.rsplit("/", 1)[-1].lower() in wanted_names:
                         return _extract_from_paz(e)
             except Exception as e:
                 # R2: same #62 visibility fix — log the real cause
@@ -3956,7 +4009,7 @@ class ApplyWorker(QObject):
         # xml_patch_handler.process_xml_patches_for_overlay, which does
         # structural merging; byte-merging its output would undo that.
         # Stick to last-wins (priority-ordered) for everything else.
-        _MERGEABLE_EXTS = (".pabgb", ".pabgh", ".pamt")
+        _MERGEABLE_EXTS = BODY_EXTS + HEADER_EXTS + (".pamt",)
         # CDUMM priority: lower number wins. Entries now carry a
         # 'priority' key in their meta (stamped at the JSON / XML
         # extend sites). Resolve ties by meta priority instead of
@@ -4123,7 +4176,8 @@ class ApplyWorker(QObject):
         from cdumm.engine.json_patch_handler import _extract_from_paz
 
         pamt_dir = file_path.split("/")[0]
-        entry_basename = entry_path.rsplit("/", 1)[-1]
+        wanted_paths = set(alias_paths(entry_path.lower()))
+        wanted_names = {a.rsplit("/", 1)[-1] for a in wanted_paths}
 
         if not hasattr(self, "_pamt_entries_cache"):
             self._pamt_entries_cache: dict[str, list] = {}
@@ -4144,16 +4198,20 @@ class ApplyWorker(QObject):
                     continue
                 self._pamt_entries_cache[cache_key] = entries
             try:
-                # Prefer exact path match.
+                # Prefer exact path match. Matching runs over the
+                # entry's alias set so a mod-declared
+                # "gamedata/iteminfo.pabgb" still resolves against the
+                # post-2026-09-04 "gamedata/iteminfo.staticinfobody"
+                # the live PAMT actually stores (table_ext).
                 for e in entries:
-                    if e.path == entry_path:
+                    if e.path.lower() in wanted_paths:
                         return _extract_from_paz(e)
                 # Fall back to basename match — mirrors
                 # _find_pamt_entry's behavior (json_patch_handler.py
                 # :1462) so callers passing a Format-3 basename
                 # target resolve correctly.
                 for e in entries:
-                    if e.path.rsplit("/", 1)[-1] == entry_basename:
+                    if e.path.rsplit("/", 1)[-1].lower() in wanted_names:
                         return _extract_from_paz(e)
             except Exception as e:
                 # GitHub #62 (UnLuckyLust, 2026-05-02): the prior
@@ -5060,6 +5118,17 @@ class ApplyWorker(QObject):
                 num = int(d)
                 if num > max_num:
                     max_num = num
+        # Never collide with dir numbers the live or vanilla PAPGT
+        # already claims. Crimson Desert 2.0 ships placeholder entries
+        # 0036-0040 (optional language-pack slots with NO dir on disk);
+        # squatting one hands the overlay the placeholder's
+        # is_optional=1 flags and the game silently never mounts it
+        # (GitHub #383). Both indexes are scanned because a pre-fix
+        # apply may have stripped the placeholders from the live one.
+        from cdumm.archive.papgt_manager import reserved_papgt_dir_numbers
+        for num in reserved_papgt_dir_numbers(self._game_dir, self._vanilla_dir):
+            if num > max_num:
+                max_num = num
         overlay_num = max_num + 1
         return f"{overlay_num:04d}"
 

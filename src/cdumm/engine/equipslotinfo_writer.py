@@ -77,10 +77,24 @@ def parse_entry_records(body: bytes, payload: int, entry_end: int,
     ``block`` is the opaque per-record block size for this game version
     (see :func:`derive_fixed_block`).
     """
+    # entry_end comes from the pabgh index, which can outrun the body if
+    # the table is truncated or the two files disagree. Bounds-checking
+    # only against entry_end therefore still lets struct.error escape,
+    # and this function's contract is to REFUSE, never to raise something
+    # the caller does not expect -- derive_fixed_block catches only
+    # EquipslotWriteRefused, so a leak there aborts the sweep instead of
+    # rejecting the candidate.
+    if entry_end > len(body):
+        raise EquipslotWriteRefused(
+            f"entry end {entry_end} is past the end of the table "
+            f"({len(body)} bytes)")
     u16 = lambda p: struct.unpack_from("<H", body, p)[0]
     u32 = lambda p: struct.unpack_from("<I", body, p)[0]
-    unk = u16(payload)
-    count = u32(payload + 2)
+    try:
+        unk = u16(payload)
+        count = u32(payload + 2)
+    except struct.error as e:
+        raise EquipslotWriteRefused(f"entry header is truncated: {e}") from e
     if not (0 <= count < 1000):
         raise EquipslotWriteRefused(
             f"implausible record count {count}")

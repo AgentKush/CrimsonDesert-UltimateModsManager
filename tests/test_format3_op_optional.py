@@ -92,8 +92,11 @@ def test_intent_with_unknown_op_keeps_its_value_for_validator(tmp_path):
 
 
 def test_missing_required_key_other_than_op_still_raises(tmp_path):
-    """'op' is the only key we relax. entry, key, field, new must
-    still be present , dropping any of them is malformed JSON."""
+    """'op' is the only key we relax unconditionally. field and new
+    must still be present, dropping either is malformed JSON. entry
+    and key are each individually optional (one locates the record,
+    #125 and its mirror case below), but dropping BOTH leaves no way
+    to find the record at all and must still raise."""
     base = {
         "format": 3,
         "target": "x.pabgb",
@@ -101,9 +104,35 @@ def test_missing_required_key_other_than_op_still_raises(tmp_path):
             {"entry": "x", "key": 1, "field": "y", "new": 0}
         ],
     }
-    # Strip 'entry' , should still raise.
+    # Strip 'field' , should still raise.
+    body = json.loads(json.dumps(base))
+    del body["intents"][0]["field"]
+    p = _write(tmp_path / "nofield.field.json", body)
+    with pytest.raises(ValueError, match="missing required key 'field'"):
+        parse_format3_mod(p)
+    # Strip both 'entry' and 'key' , no locator left, should still raise.
     body = json.loads(json.dumps(base))
     del body["intents"][0]["entry"]
-    p = _write(tmp_path / "noentry.field.json", body)
+    del body["intents"][0]["key"]
+    p = _write(tmp_path / "nolocator.field.json", body)
     with pytest.raises(ValueError, match="missing required key 'entry'"):
         parse_format3_mod(p)
+
+
+def test_missing_entry_alone_is_accepted_when_key_present(tmp_path):
+    """Mirror of GitHub #125: donr484's "Cheap Gold Bars" targets
+    iteminfo.pabgb by numeric key alone, with no entry name. Every
+    apply path resolves by key first and falls back to entry name
+    only when the key misses, so key-without-entry is just as valid a
+    locator as entry-without-key already was."""
+    body = {
+        "format": 3,
+        "target": "x.pabgb",
+        "intents": [
+            {"key": 1, "field": "y", "new": 0}
+        ],
+    }
+    p = _write(tmp_path / "nokey_entry.field.json", body)
+    _, intents = parse_format3_mod(p)
+    assert intents[0].entry == ""
+    assert intents[0].key == 1

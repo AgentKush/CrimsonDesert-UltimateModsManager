@@ -34,7 +34,7 @@ def _fluent_src() -> str:
 
 def test_post_apply_verify_does_not_append_version_mismatch():
     src = _fluent_src()
-    anchor = src.find("def _post_apply_verify")
+    anchor = src.find("def _compute_post_apply_issues")
     assert anchor != -1
     next_def = src.find("\n    def ", anchor + 20)
     body = src[anchor:next_def if next_def != -1 else anchor + 8000]
@@ -56,7 +56,7 @@ def test_post_apply_verify_still_reports_papgt_issues():
     """Regression: PAPGT/PAMT integrity checks must stay in the
     dialog — those ARE real crash risks."""
     src = _fluent_src()
-    anchor = src.find("def _post_apply_verify")
+    anchor = src.find("def _compute_post_apply_issues")
     assert anchor != -1
     next_def = src.find("\n    def ", anchor + 20)
     body = src[anchor:next_def if next_def != -1 else anchor + 8000]

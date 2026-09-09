@@ -117,7 +117,8 @@ class SetupDialog(MessageBoxBase):
             logger.info("Auto-detected game directory: %s", candidates[0])
 
     def _on_browse(self) -> None:
-        folder = QFileDialog.getExistingDirectory(self, tr("setup.browse_dialog_title"))
+        from cdumm.gui.file_dialogs import pick_directory
+        folder = pick_directory(self, tr("setup.browse_dialog_title"))
         if folder:
             self._path_edit.setText(folder)
 

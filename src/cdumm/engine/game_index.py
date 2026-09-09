@@ -24,8 +24,11 @@ import struct
 import time
 from typing import Any, Callable, Iterable
 
-# Data-table blob (.pabgb) + schema/header (.pabgh) extensions.
-TABLE_EXTS = (".pabgb", ".pabgh")
+from cdumm.archive.table_ext import BODY_EXTS, HEADER_EXTS
+
+# Data-table blob + schema/header extensions, under both the pre- and
+# post-2026-09-04 names (see cdumm.archive.table_ext).
+TABLE_EXTS = BODY_EXTS + HEADER_EXTS
 
 # The game's own verbose reflection-serialized formats — these embed a real
 # field / type / object name schema as text (readable via decode_reflection /
@@ -143,8 +146,9 @@ def write_stats(con: sqlite3.Connection, **extra: Any) -> dict:
     # One data table == one .pabgb blob (+ its .pabgh key index). Count the
     # blobs only, so the paired header file isn't tallied as a second table.
     distinct = con.execute(
-        "SELECT COUNT(DISTINCT name) FROM data_tables "
-        "WHERE name LIKE '%.pabgb'").fetchone()[0]
+        "SELECT COUNT(DISTINCT name) FROM data_tables WHERE "
+        + " OR ".join("name LIKE ?" for _ in BODY_EXTS),
+        tuple("%" + e for e in BODY_EXTS)).fetchone()[0]
     stats: dict[str, Any] = {
         "assets_total": total,
         "archives": archives,
@@ -259,7 +263,15 @@ def extract_asset(con: sqlite3.Connection, path: str, game_dir: str) -> bytes:
     paz = row["paz_file"]
     if not os.path.exists(paz):
         # Index may have been built on another machine / before a move.
-        paz = os.path.join(game_dir, row["archive"], os.path.basename(paz))
+        # Normalise separators first: a stored path is whatever the
+        # machine that built the index wrote, and os.path.basename on
+        # POSIX does not treat "\" as a separator -- so a Windows-built
+        # index re-resolved on the native Linux/macOS build kept the
+        # whole "E:\...\8.paz" string as the "filename" and the retry
+        # could never hit. PAZ names contain no backslash, so folding
+        # "\" to "/" is safe on either host.
+        paz = os.path.join(game_dir, row["archive"],
+                           os.path.basename(paz.replace("\\", "/")))
     if not os.path.exists(paz):
         raise FileNotFoundError(paz)
 

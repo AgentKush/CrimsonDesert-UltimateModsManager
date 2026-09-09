@@ -645,8 +645,15 @@
     }
   },
   "StageInfo": {
-    "_meta_note": "82 fields ported from NattKh stageinfo_parser.py. Field _sequencerDesc (#7) has an optional-object variant (flag=1) NattKh's parser can't decode; entries with that variant fail cleanly via the StageInfo_SequencerDescOptObj tagged variant.",
+    "_meta_note": "82 fields ported from NattKh stageinfo_parser.py. Field _sequencerDesc (#7) has an optional-object variant (flag=1) NattKh's parser can't decode; entries with that variant fail cleanly via the StageInfo_SequencerDescOptObj tagged variant. GATED 2026-09-08: _verified_fields added, covering only the five fields the exe read sequence confirms. The deserializer at 0x141488903 reads _isBlocked (1 byte, +0x10), then _name (+0x18), _stageDesc (+0x38) and _completeLog (+0x58) through reader 0x141231470, then _sequencerDesc (+0x78) through 0x14228E9D0 -- all matching this order. It then reads THREE fields this schema does not contain at all: _spawnFactionSpawnDataInfo (+0x168), _spawnFactionNodeInfo (+0x16A) and _disableFactionSpawnPartyNameHashList (+0x170). Only after those does it reach _stageCategory, and it reads EIGHT stream bytes for it where this schema declares u32. So every field from _stageCategory onward is misaligned, which is why the walk reaches 0% of 51,861 records complete and stalls on _closeCondition. Corroborating: the exe also puts _closeFilterByGroup (+0x188) before _stageDataType (+0x1A9, read as ONE byte, not the declared u32) before _fieldInfo (+0x21C, a sub-reader, not a scalar), against this order which has them at 20, 6 and 7. The gate stops the grid presenting those values as fact and stops a Format 3 mod writing to them at an offset that is not proven. Re-deriving the table needs the six variable-length list element readers that tools/derive_table_layout.py reports it cannot fit; see GitHub #409.",
     "_no_null_skip": true,
+    "_verified_fields": [
+      "_isBlocked",
+      "_name",
+      "_stageDesc",
+      "_completeLog",
+      "_sequencerDesc"
+    ],
     "_ordered_fields": [
       "_isBlocked",
       "_name",
@@ -2152,7 +2159,7 @@
     }
   },
   "AIEventTableInfo": {
-    "_meta_note": "Derived 2026-08-13 from game buildid 24613230 by tools/derive_table_layout.py, reflection class AIEventTableInfo. Field ORDER comes from the exe's reflection error strings ordered by the hot-path branch that reaches each error block. Field WIDTHS come from the sized reads in the deserializer; count-prefixed list ELEMENT widths come from the loop body via Deriver.list_element (validated against the 8 readers stage 2 had independently pinned from table data: 5 reproduced exactly, 2 correctly reported variable-length, 1 abstained, 0 contradictions). PROOF: the walk consumes every one of this table's 988 records to its exact last byte, and no other shape in the format's grammar does. KEYED BY FILE STEM 'aieventtableinfo' because that is what identify_table_from_path returns and what get_schema is asked for; the class name would resolve to a key the app never looks up on this table. _stringKey/_key are omitted because the entry header consumes them. _verified_fields is EMPTY on purpose: tiling proves the structure and each field's offset, NOT what any field means, so nothing here may be presented as fact or written to until its values are cross-checked.",
+    "_meta_note": "Derived 2026-08-13 from game buildid 24613230 by tools/derive_table_layout.py, reflection class AIEventTableInfo. Field ORDER comes from the exe's reflection error strings ordered by the hot-path branch that reaches each error block. Field WIDTHS come from the sized reads in the deserializer; count-prefixed list ELEMENT widths come from the loop body via Deriver.list_element (validated against the 8 readers stage 2 had independently pinned from table data: 5 reproduced exactly, 2 correctly reported variable-length, 1 abstained, 0 contradictions). PROOF: the walk consumes every one of this table's 988 records to its exact last byte, and no other shape in the format's grammar does. KEYED BY FILE STEM 'aieventtableinfo' because that is what identify_table_from_path returns and what get_schema is asked for; the class name would resolve to a key the app never looks up on this table. _stringKey/_key are omitted because the entry header consumes them. _verified_fields is EMPTY on purpose: tiling proves the structure and each field's offset, NOT what any field means, so nothing here may be presented as fact or written to until its values are cross-checked. CORRECTED 2026-09-08: _eventDelayType and _isSequencerInterruptEvent were in the wrong order here. The derivation ordered fields by the hot-path branch reaching each error block, and that rule was missing a basic-block leader at the fall-through of a conditional branch, so an inline error block was attributed to the preceding block and keyed on an inbound edge belonging to something else (see GitHub #407). The byte-consumption proof quoted above cannot catch this: both orders consume the same total, so the walk still ends on the record's last byte either way. Three independent checks agree on the corrected order: the deserializer reads 8 bytes into +0x38 guarded at 0x1414651F3 with _eventDelayType's message and 1 byte into +0x41 with _isSequencerInterruptEvent's, matching the declared u64 and u8; corrected, _isSequencerInterruptEvent reads 0 or 1 on all 1003 records and _eventDelayType reads 0, 1 or 2, while the old order gave the boolean a value of 2 and the enum 72057594037927936, which is 1 shifted into the top byte.",
     "_no_null_skip": true,
     "_ordered_fields": [
       "_isBlocked",
@@ -2161,8 +2168,8 @@
       "_reactionLevel",
       "_allowTypeFlag",
       "_eventType",
-      "_isSequencerInterruptEvent",
       "_eventDelayType",
+      "_isSequencerInterruptEvent",
       "_isTargetMustExist",
       "_isMustHandled"
     ],
@@ -2457,7 +2464,7 @@
     }
   },
   "QuestGaugeInfo": {
-    "_meta_note": "Derived 2026-08-13 from game buildid 24613230 by tools/derive_table_layout.py, reflection class QuestGaugeInfo. Field ORDER comes from the exe's reflection error strings ordered by the hot-path branch that reaches each error block. Field WIDTHS come from the sized reads in the deserializer; count-prefixed list ELEMENT widths come from the loop body via Deriver.list_element (validated against the 8 readers stage 2 had independently pinned from table data: 5 reproduced exactly, 2 correctly reported variable-length, 1 abstained, 0 contradictions). PROOF: the walk consumes every one of this table's 509 records to its exact last byte, and no other shape in the format's grammar does. KEYED BY FILE STEM 'questgaugeinfo' because that is what identify_table_from_path returns and what get_schema is asked for; the class name would resolve to a key the app never looks up on this table. _stringKey/_key are omitted because the entry header consumes them. _verified_fields is EMPTY on purpose: tiling proves the structure and each field's offset, NOT what any field means, so nothing here may be presented as fact or written to until its values are cross-checked.",
+    "_meta_note": "Derived 2026-08-13 from game buildid 24613230 by tools/derive_table_layout.py, reflection class QuestGaugeInfo. Field ORDER comes from the exe's reflection error strings ordered by the hot-path branch that reaches each error block. Field WIDTHS come from the sized reads in the deserializer; count-prefixed list ELEMENT widths come from the loop body via Deriver.list_element (validated against the 8 readers stage 2 had independently pinned from table data: 5 reproduced exactly, 2 correctly reported variable-length, 1 abstained, 0 contradictions). PROOF: the walk consumes every one of this table's 509 records to its exact last byte, and no other shape in the format's grammar does. KEYED BY FILE STEM 'questgaugeinfo' because that is what identify_table_from_path returns and what get_schema is asked for; the class name would resolve to a key the app never looks up on this table. _stringKey/_key are omitted because the entry header consumes them. _verified_fields is EMPTY on purpose: tiling proves the structure and each field's offset, NOT what any field means, so nothing here may be presented as fact or written to until its values are cross-checked. CORRECTED 2026-09-08: _percent and _gaugeTime were in the wrong order here. The derivation ordered fields by the hot-path branch reaching each error block, and that rule was missing a basic-block leader at the fall-through of a conditional branch, so an inline error block was attributed to the preceding block and keyed on an inbound edge belonging to something else (see GitHub #407). The byte-consumption proof quoted above cannot catch this: both orders consume the same total, so the walk still ends on the record's last byte either way. Three independent checks agree on the corrected order: the deserializer reads 8 bytes into +0x78 guarded at 0x14148320D with _percent's message and 4 bytes into +0x80 with _gaugeTime's, matching the declared u64 and u32; _percent then reads 0 to 1000000 over 10 values with 1000000 as the ceiling, the shape of a fixed-point percent, and _gaugeTime reads 259200, exactly 72 hours; under the old order _percent held 1113255523123200.",
     "_no_null_skip": true,
     "_ordered_fields": [
       "_isBlocked",
@@ -2469,8 +2476,8 @@
       "_excludeStageInfoList",
       "_factionInfoList",
       "_factionNodeInfoList",
-      "_gaugeTime",
       "_percent",
+      "_gaugeTime",
       "_gaugeType",
       "_progressDataList"
     ],

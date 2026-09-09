@@ -167,6 +167,43 @@ def test_v3_1_intent_without_key_uses_entry_as_lookup(tmp_path):
     assert intents[0].field == "cost"
 
 
+def test_v3_1_intent_without_entry_uses_key_as_lookup(tmp_path):
+    """donr484's "Cheap Gold Bars" (targeting iteminfo.pabgb by numeric
+    key 53 alone, no entry) is #125's mirror case: the parser accepted
+    entry-without-key but still rejected key-without-entry with
+    'targets[0] (iteminfo.pabgb) intents intent #0 is missing required
+    key entry'. Every apply path resolves by key first and only falls
+    back to entry name when the key misses, so a key-only intent is
+    just as resolvable as an entry-only one.
+
+    Accept missing entry when key is present, default entry to "".
+    """
+    doc = {
+        "format": 3,
+        "format_minor": 1,
+        "modinfo": {"title": "no-entry probe", "version": "1.0"},
+        "targets": [{
+            "file": "iteminfo.pabgb",
+            "intents": [{
+                "key": 53,
+                "field": "price_list[0].price.price",
+                "op": "set",
+                "new": 1,
+            }],
+        }],
+    }
+    p = tmp_path / "no_entry.json"
+    p.write_text(json.dumps(doc), encoding="utf-8")
+    pairs = parse_format3_mod_targets(p)
+    assert len(pairs) == 1
+    target, intents = pairs[0]
+    assert target == "iteminfo.pabgb"
+    assert len(intents) == 1
+    assert intents[0].entry == ""
+    assert intents[0].key == 53
+    assert intents[0].field == "price_list[0].price.price"
+
+
 def test_v3_1_intent_with_explicit_key_still_validates(tmp_path):
     """Old behavior preserved: when key IS present, it must be an
     integer (no bools, no strings). Backwards-compat guard for the

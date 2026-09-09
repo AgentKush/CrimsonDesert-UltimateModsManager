@@ -19,7 +19,6 @@ outside the mod tree.
 from __future__ import annotations
 
 import logging
-import sys
 from pathlib import Path
 
 import pytest
@@ -67,18 +66,22 @@ class TestRglobFollow:
             self, tmp_path: Path) -> None:
         """Guard rail: if a future stdlib/refactor makes plain rglob find
         these again, _rglob_follow is still correct — but this test
-        documents *why* the helper exists. On 3.13+ the plain default
-        misses the file; on <=3.12 it would find it. Either way
-        _rglob_follow must find it (covered above)."""
+        documents *why* the helper exists.
+
+        Plain rglob misses the file on EVERY version CDUMM supports, not
+        just 3.13+. Before 3.13 the ``**`` selector descended with
+        ``is_dir(follow_symlinks=False)``; 3.13 kept that behaviour and
+        merely gave it a name (``recurse_symlinks=False``). This test
+        previously asserted the opposite for <=3.12 and failed the
+        moment it was run off Windows CI — the helper's version guard
+        had been a no-op the whole time, so the reported bug was still
+        live on 3.10-3.12."""
         files_dir = _make_files_with_symlinked_dir(tmp_path)
         plain = [f for f in files_dir.rglob("*") if f.is_file()]
-        if sys.version_info >= (3, 13):
-            assert plain == [], (
-                "expected the 3.13+ rglob default to miss files behind "
-                "symlinked dirs — if this fails the stdlib behaviour "
-                "changed and the helper's version guard can be revisited")
-        else:
-            assert any(f.name == "texture.paz" for f in plain)
+        assert plain == [], (
+            "expected the rglob default to miss files behind symlinked "
+            "dirs on every supported version — if this fails the stdlib "
+            "behaviour changed and _rglob_walk can be revisited")
 
     def test_plain_folder_unaffected(self, tmp_path: Path) -> None:
         """No symlinks: helper behaves like ordinary rglob."""

@@ -662,6 +662,7 @@
   "tools.rescan.requested": "Pemindaian Ulang Diminta",
   "tools.rescan.requested_desc": "Penyegaran snapshot telah dimulai. Ini mungkin memerlukan waktu tergantung ukuran berkas game.",
   "tools.rescan.enable_hint": "Centang kotak di atas untuk mengaktifkan",
+  "tools.rescan.complete": "Pemindaian ulang selesai!",
   "tools.stat.never": "Belum Pernah",
   "tools.error": "Galat: {detail}",
   "tools.progress.checking": "Memeriksa {name}...",
@@ -980,5 +981,7 @@
   "activity.msg_removed_stale_appdata": "Menghapus AppData kedaluwarsa ({size_mb} MB)",
   "stats.outdated": "Usang",
   "mod_list.click_to_update": "Klik untuk memperbarui",
-  "tooltip.update_available_with_version": "Pembaruan tersedia. Terpasang: {version}. Klik untuk memperbarui."
+  "tooltip.update_available_with_version": "Pembaruan tersedia. Terpasang: {version}. Klik untuk memperbarui.",
+  "settings.nexus_none_linked": "Tidak ada dari {count} mod Anda yang tertaut ke halaman NexusMods, jadi tidak ada yang bisa diperiksa. Mod yang diimpor dari arsip unduhan manual tidak punya tautan Nexus; impor ulang lewat unduhan Nexus atau tambahkan tautannya di kartu mod.",
+  "settings.nexus_up_to_date_partial": "{checked} mod tertaut sudah terbaru. {unlinked} mod tanpa tautan NexusMods tidak dapat diperiksa."
 }

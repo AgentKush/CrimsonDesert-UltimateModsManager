@@ -11,7 +11,7 @@ import math
 import os
 from pathlib import Path
 
-from PySide6.QtCore import QEasingCurve, QThread, Qt, Signal, Slot
+from PySide6.QtCore import QEasingCurve, QThread, QTimer, Qt, Signal, Slot
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QFileDialog,
@@ -2072,6 +2072,11 @@ class RescanPage(ToolPageBase):
         self._run_btn.setEnabled(False)
         self._run_btn.setToolTip(tr("tools.rescan.enable_hint"))
 
+        # See _start_completion_poll: this page hands the actual work
+        # off to the main window (it owns the SnapshotWorker QProcess)
+        # and has no direct callback for when that work finishes.
+        self._rescan_poll_timer: QTimer | None = None
+
     def set_managers(self, **kwargs) -> None:
         super().set_managers(**kwargs)
         self._refresh_stats()
@@ -2109,6 +2114,7 @@ class RescanPage(ToolPageBase):
             return
 
         self._clear_results()
+        self._set_running(True)
         self._set_status(tr("tools.rescan.initiating"))
         self._add_result_card(
             tr("tools.rescan.requested"),
@@ -2117,3 +2123,38 @@ class RescanPage(ToolPageBase):
 
         # Signal parent to do the actual rescan
         self.rescan_requested.emit(True)
+        self._start_completion_poll()
+
+    def _start_completion_poll(self) -> None:
+        """This page only emits ``rescan_requested`` -- the actual
+        SnapshotWorker QProcess is owned and run by the main window,
+        so there's no direct callback here for when that work
+        finishes. Poll the main window's busy flag instead, the same
+        technique RecoveryFlow already uses to track the same
+        QProcess (see recovery_flow.py's ``_main_window_active_worker``).
+
+        Without this the page was stuck showing "Initiating rescan..."
+        forever even after the snapshot genuinely completed (the
+        success toast fired and the snapshot was real) -- report
+        2026-08-26, the run button never re-enabled and the status
+        text never updated because this page never learned the work
+        was done.
+        """
+        if self._rescan_poll_timer is not None:
+            self._rescan_poll_timer.stop()
+        timer = QTimer(self)
+        timer.setInterval(500)
+        timer.timeout.connect(self._check_rescan_poll)
+        self._rescan_poll_timer = timer
+        timer.start()
+
+    def _check_rescan_poll(self) -> None:
+        worker = getattr(self.window(), "_active_worker", None)
+        if worker is not None:
+            return
+        if self._rescan_poll_timer is not None:
+            self._rescan_poll_timer.stop()
+            self._rescan_poll_timer = None
+        self._refresh_stats()
+        self._set_running(False)
+        self._set_status(tr("tools.rescan.complete"), "#A3BE8C")

@@ -89,11 +89,27 @@ _oglw_dll = os.path.join(_pyside6_dir, 'Qt6OpenGLWidgets.dll')
 if os.path.isfile(_oglw_dll):
     _qt3d_binaries.append((_oglw_dll, 'PySide6'))
 
+# ICU (GitHub #398, NonDScript on Bazzite/Proton). Qt6Core.dll hard-imports
+# icuuc.dll, a Windows system component (present since Win10 1703) that Wine
+# prefixes before 11.5 do not ship -- so the frozen exe died at startup with
+# "Library icuuc.dll ... not found" then "QtWidgets ... not found". Bundle
+# FaithLife-Community's Unicode-licensed ICU 72.1 build (unversioned exports,
+# the Windows-compatible ABI; https://github.com/FaithLife-Community/icu) next
+# to Qt6Core.dll. Only ucnv_* is used by Qt, which needs no icudtl.dat, and all
+# 20 imports resolve (checked with pefile). On real Windows the app-local copy
+# takes precedence; behaviour is unchanged. License text ships alongside.
+_icu_dir = os.path.join('vendor', 'icu')
+_icu_binaries = [(os.path.join(_icu_dir, f), 'PySide6')
+                 for f in ('icu.dll', 'icuuc.dll', 'icuin.dll')
+                 if os.path.isfile(os.path.join(_icu_dir, f))]
+_icu_datas = ([(os.path.join(_icu_dir, 'LICENSE-ICU.txt'), 'PySide6')]
+              if os.path.isfile(os.path.join(_icu_dir, 'LICENSE-ICU.txt')) else [])
+
 
 a = Analysis(
     ['src/cdumm/main.py'],
     pathex=['src'],
-    binaries=_xxhash_binaries + _native_binaries + _crimson_rs_binaries + _qflw_binaries + _qt3d_binaries,
+    binaries=_xxhash_binaries + _native_binaries + _crimson_rs_binaries + _qflw_binaries + _qt3d_binaries + _icu_binaries,
     datas=[('cdumm.ico', '.'), ('asi_loader/winmm.dll', 'asi_loader'),
            ('src/cdumm/translations', 'cdumm/translations'),
            ('schemas/pabgb_complete_schema.json', 'schemas'),
@@ -101,6 +117,7 @@ a = Analysis(
            ('schemas/NOTICE', 'schemas'),
            ('field_schema/README.md', 'field_schema'),
            ('field_schema/skill.json', 'field_schema'),
+           ('field_schema/storeinfo.json', 'field_schema'),
            ('assets/fonts/Oxanium-VariableFont_wght.ttf', 'assets/fonts'),
            ('assets/cdumm-logo.png', 'assets'),
            ('assets/cdumm-logo-light.png', 'assets'),
@@ -111,7 +128,7 @@ a = Analysis(
            ('assets/store-steam-white.svg', 'assets'),
            ('assets/store-xbox-white.svg', 'assets'),
            ('assets/store-epic-white.svg', 'assets'),
-           ] + _crimson_rs_datas + _qfw_datas + _qflw_datas + _certifi_datas,
+           ] + _crimson_rs_datas + _qfw_datas + _qflw_datas + _certifi_datas + _icu_datas,
     hiddenimports=[
         # stdlib C-extension that PyInstaller occasionally fails to pick
         # up on a --clean build, crashing the exe with "No module named

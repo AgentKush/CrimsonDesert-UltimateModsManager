@@ -14,10 +14,11 @@ The handler:
 4. Returns the modified PAZ directory for standard CDUMM delta import
 """
 
+import fnmatch
 import json
 import logging
+import os
 import shutil
-import sys
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -38,25 +39,58 @@ def _rglob_follow(root: Path, pattern: str = "*"):
     """``root.rglob(pattern)`` that recurses into symlinked directories
     on every supported Python version.
 
-    Python 3.13 changed ``Path.rglob`` to default ``recurse_symlinks=
-    False`` — it no longer descends into symlinked subdirectories. The
-    frozen Windows build (and the pre-3.13 behaviour this module was
-    written against) DID follow them. On a native Linux run under
-    Python 3.13+, any mod file that lives behind a symlinked directory
-    is silently skipped: ``has_files`` reads False, no PAZ is built,
-    and the mod imports as a stray PATHC instead. Reported by RoGreat
-    on a Nix-packaged build (PR #123), where symlinked paths are
-    pervasive.
+    Mod files that live behind a symlinked directory are otherwise
+    silently skipped: ``has_files`` reads False, no PAZ is built, and
+    the mod imports as a stray PATHC instead. Reported by RoGreat on a
+    Nix-packaged build (PR #123), where symlinked paths are pervasive.
 
-    Restoring the follow-symlinks behaviour is safe here because every
-    caller that reads file contents re-checks ``f.resolve()`` stays
-    within the mod's files_dir before reading (the symlink-escape
-    guard), so a malicious symlink pointing outside the tree is still
-    refused — it just no longer takes legitimate files down with it.
+    ``Path.rglob`` cannot do this before 3.13. The ``**`` selector has
+    descended with ``is_dir(follow_symlinks=False)`` for as long as
+    pathlib has had one, so a symlinked subdirectory is skipped on 3.10
+    through 3.12 exactly as it is on 3.13+ under the ``recurse_symlinks
+    =False`` default. The version check this function used to carry
+    assumed the opposite and left the reported bug live on every
+    version CDUMM actually shipped on -- ``requires-python`` is >=3.10,
+    and LINUX.md's recommended native mode builds a venv from whatever
+    the distro provides. So walk the tree instead of delegating, on all
+    versions: one code path, and it cannot silently become a no-op
+    again.
+
+    ``os.walk(followlinks=True)`` has no cycle protection of its own, so
+    directories are tracked by resolved path and a repeat prunes that
+    branch -- otherwise ``a/link -> a`` recurses until the path length
+    blows up.
+
+    Following symlinks is safe here because every caller that reads file
+    contents re-checks that ``f.resolve()`` stays within the mod's
+    files_dir before reading (the symlink-escape guard), so a malicious
+    symlink pointing outside the tree is still refused -- it just no
+    longer takes legitimate files down with it.
     """
-    if sys.version_info >= (3, 13):
-        return root.rglob(pattern, recurse_symlinks=True)
-    return root.rglob(pattern)
+    return _rglob_walk(root, pattern)
+
+
+def _rglob_walk(root: Path, pattern: str):
+    """Yield every entry under ``root`` matching ``pattern``, descending
+    through symlinked directories. Directories are yielded alongside
+    files, matching ``rglob`` semantics -- callers filter with
+    ``is_file()``."""
+    seen: set[Path] = set()
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=True):
+        here = Path(dirpath)
+        try:
+            key = here.resolve()
+        except OSError:
+            key = here
+        if key in seen:
+            # Already walked this directory by another path: prune rather
+            # than recurse, which is what stops a symlink cycle.
+            dirnames[:] = []
+            continue
+        seen.add(key)
+        for name in (*dirnames, *filenames):
+            if fnmatch.fnmatch(name, pattern):
+                yield here / name
 
 
 def fix_xml_format(

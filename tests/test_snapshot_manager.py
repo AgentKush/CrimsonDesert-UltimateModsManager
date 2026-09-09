@@ -15,13 +15,16 @@ def _create_fake_game_dir(tmp_path: Path) -> Path:
         (d / "0.pamt").write_bytes(b"PAMT_DATA_" + dir_name.encode())
         (d / "0.paz").write_bytes(b"PAZ_DATA_" + dir_name.encode() + b"\x00" * 100)
 
-    # Create PAPGT. Byte 8 encodes the entry count; real vanilla has 33
-    # entries. snapshot_manager aborts with "appears modded" if it sees
-    # more than 35, so the fixture writes a valid vanilla-like count.
+    # Create PAPGT. Byte 8 encodes the entry count; snapshot_manager's
+    # structural check requires the declared entry table + string-table
+    # size field to actually fit in the file (real corruption detection,
+    # independent of any particular vanilla entry count), so an
+    # entry_count of 0 keeps this fixture trivially valid without having
+    # to build real 12-byte entries + a string table.
     meta = game_dir / "meta"
     meta.mkdir()
     (meta / "0.papgt").write_bytes(
-        b"\x00" * 8 + bytes([33]) + b"\x00" * 51
+        b"\x00" * 8 + bytes([0]) + b"\x00" * 51
     )
 
     # Create game exe for validation

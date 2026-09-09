@@ -662,6 +662,7 @@
   "tools.rescan.requested": "再スキャンをリクエストしました",
   "tools.rescan.requested_desc": "スナップショットの更新を開始しました。ゲームファイルのサイズによっては時間がかかる場合があります。",
   "tools.rescan.enable_hint": "上のチェックボックスをオンにしてください",
+  "tools.rescan.complete": "再スキャン完了！",
   "tools.stat.never": "なし",
   "tools.error": "エラー：{detail}",
   "tools.progress.checking": "{name} を確認中...",
@@ -980,5 +981,7 @@
   "activity.msg_removed_stale_appdata": "古い AppData を削除しました ({size_mb} MB)",
   "stats.outdated": "古い",
   "mod_list.click_to_update": "クリックで更新",
-  "tooltip.update_available_with_version": "アップデートあり。インストール済み: {version}。クリックで更新。"
+  "tooltip.update_available_with_version": "アップデートあり。インストール済み: {version}。クリックで更新。",
+  "settings.nexus_none_linked": "{count} 個のModのいずれも NexusMods のページにリンクされていないため、更新を確認できません。手動でダウンロードしたアーカイブから取り込んだModには Nexus リンクがありません。Nexus 経由で再インポートするか、Modカードでリンクを追加してください。",
+  "settings.nexus_up_to_date_partial": "リンク済みの {checked} 個のModは最新です。{unlinked} 個は NexusMods リンクがないため確認できませんでした。"
 }

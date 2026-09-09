@@ -170,6 +170,33 @@ def worker_command(extra_args: list[str]) -> tuple[str, list[str]]:
     return sys.executable, ["-m", "cdumm.main", *extra_args]
 
 
+def python_script_command() -> list[str] | None:
+    """Return the argv prefix that runs a mod's ``.py`` script, or None
+    when no interpreter can be found.
+
+    Script-import used a hardcoded ``["py", "-3"]``. ``py`` is the
+    Windows Python Launcher and ships with the Windows installer only,
+    so on the native macOS / Linux path (LINUX.md's recommended mode)
+    the spawn raised FileNotFoundError, the handler swallowed it as
+    "Script execution failed", and every ``.py`` mod imported as a
+    no-op diff. Same class of bug as :func:`worker_command`, and the
+    frozen-build caveat is the same: under PyInstaller
+    ``sys.executable`` is CDUMM itself, not an interpreter, so handing
+    it a script path would re-launch the app.
+
+    Windows keeps the launcher -- it picks a real Python 3 even when
+    none is on PATH, which is the case on most players' machines.
+    Everywhere else: the running interpreter when CDUMM is run from
+    source, otherwise whatever ``python3`` the system has.
+    """
+    if IS_WINDOWS:
+        return ["py", "-3"]
+    if not getattr(sys, "frozen", False):
+        return [sys.executable]
+    found = shutil.which("python3") or shutil.which("python")
+    return [found] if found else None
+
+
 def subprocess_no_window_kwargs() -> dict:
     """Return ``subprocess.Popen``/``subprocess.run`` kwargs that
     suppress the brief console window flash on Windows.
@@ -186,3 +213,42 @@ def subprocess_no_window_kwargs() -> dict:
         return {}
     flag = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
     return {"creationflags": flag}
+
+
+_IS_WINE: bool | None = None
+
+
+def is_wine() -> bool:
+    """True when this Windows build is running under Wine / Proton.
+
+    Canonical check: Wine's ntdll exports ``wine_get_version``; real
+    Windows never does. Cached after the first call. Always False on
+    native macOS / Linux builds — those don't run inside a prefix.
+
+    Used to widen game auto-detection to the host filesystem (Proton
+    always maps ``Z:`` to ``/``, so the host's Steam libraries are
+    reachable as ``Z:/home/...``) and to swap file pickers to the Qt
+    dialog that can show hidden dot-folders (GitHub #386, NonDScript
+    on Bazzite: the native Wine picker cannot enter ``.local``).
+    """
+    global _IS_WINE
+    if _IS_WINE is None:
+        detected = False
+        if IS_WINDOWS:
+            try:
+                import ctypes
+                kernel32 = ctypes.windll.kernel32
+                kernel32.GetProcAddress.restype = ctypes.c_void_p
+                kernel32.GetProcAddress.argtypes = (
+                    ctypes.c_void_p, ctypes.c_char_p)
+                kernel32.GetModuleHandleW.restype = ctypes.c_void_p
+                ntdll = kernel32.GetModuleHandleW("ntdll.dll")
+                if ntdll:
+                    detected = bool(
+                        kernel32.GetProcAddress(ntdll, b"wine_get_version"))
+            except Exception as e:  # noqa: BLE001 - ctypes failure = not Wine
+                logger.debug("is_wine detection failed: %s", e)
+        _IS_WINE = detected
+        if detected:
+            logger.info("Running under Wine/Proton (wine_get_version present)")
+    return _IS_WINE

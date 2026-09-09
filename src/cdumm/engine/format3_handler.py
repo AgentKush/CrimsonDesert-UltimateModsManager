@@ -46,6 +46,9 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+from cdumm.archive.table_ext import (
+    is_body_path, strip_body_ext, strip_table_ext,
+)
 from cdumm.engine.characterinfo_writer import (
     SUPPORTED_FIELDS as _CHARACTERINFO_FIELDS,
 )
@@ -368,8 +371,19 @@ def _parse_intents_block(
         # the apply path's _match_record_keys treats a no-condition match as
         # "all records" (all([]) is True) -- so accept it here rather than
         # rejecting the whole mod.
+        #
+        # GitHub #125 made entry-without-key valid (real v3.1 exports treat
+        # entry as the primary locator and leave key unpopulated). donr484's
+        # "Cheap Gold Bars" (targeting iteminfo.pabgb by numeric key alone,
+        # no entry) is the mirror case the fix never covered: key-without-
+        # entry is just as valid a locator -- Format3Intent already defaults
+        # a missing entry to "" (line ~429) and every apply path (storeinfo,
+        # iteminfo, ...) resolves by key first and only falls back to entry
+        # name when the key misses. So entry is required only when NEITHER
+        # a match selector NOR a key locates the record.
         required_keys = (
-            ("field",) if raw_match is not None else ("entry", "field")
+            ("field",) if raw_match is not None or "key" in raw
+            else ("entry", "field")
         )
         for required in required_keys:
             if required not in raw:
@@ -383,6 +397,13 @@ def _parse_intents_block(
         # for the target -- rather than the missing-``new`` check taking the
         # whole mod down (the parser's lenient-on-op contract, #66).
         _op = str(raw.get("op", "set"))
+        # DMM's ``array_append`` exports carry the element under
+        # ``value`` rather than ``new`` (AerowynX's Expanded Vendor
+        # Inventory Rebuilt V3, #191: 3,201 store appends and 400 dye
+        # appends, every one shaped that way). Accept it as ``new``.
+        if _op == "array_append" and "new" not in raw and "value" in raw:
+            raw = dict(raw)
+            raw["new"] = raw["value"]
         if _op == "scale":
             if "factor" not in raw:
                 raise ValueError(
@@ -489,9 +510,7 @@ def _apply_field_aliases(
     replaced with a fresh dataclasses.replace() copy rather than
     mutated in place.
     """
-    tname = target.lower()
-    if not (tname == "iteminfo.pabgb"
-            or tname.endswith("/iteminfo.pabgb")):
+    if not is_body_path(target) or strip_table_ext(target) != "iteminfo":
         return
     import dataclasses
     for i, intent in enumerate(intents):
@@ -637,15 +656,21 @@ def parse_format3_mod(path: Path) -> tuple[str, list[Format3Intent]]:
 
 
 def _table_name_from_target(target: str) -> str:
-    """Strip ``.pabgb`` and normalize to the schema's lowercase key.
+    """Strip the table body extension and lowercase.
 
     ``parser.has_schema`` looks up by the lowercase filename stem —
-    same convention CDUMM uses everywhere else.
+    same convention CDUMM uses everywhere else. Both the mod-declared
+    ``.pabgb`` name and the post-2026-09-04 ``.staticinfobody`` the
+    game now ships strip to the same key (cdumm.archive.table_ext).
+
+    Deliberately keeps any leading directory: a path-qualified target
+    comes back as ``gamedata/iteminfo``. Two callers in
+    ``format3_apply`` are built around that and re-derive the bare
+    name themselves (see the comments at the ``array_append`` and
+    ``match`` routers), so stripping the path here would silently
+    change which intents those routers expand.
     """
-    name = target
-    if name.lower().endswith(".pabgb"):
-        name = name[: -len(".pabgb")]
-    return name.lower()
+    return strip_body_ext(target)
 
 
 _SUPPORTED_OPS = frozenset({"set"})
@@ -824,7 +849,20 @@ def _classify_delete(intent: Format3Intent) -> str | None:
 # ``array_append`` can add one element while preserving every existing
 # element's bytes. dropsetinfo.drops is verified byte-exact on all 14,575
 # vanilla records. Add a (table, field) here only after proving the same.
-APPENDABLE_LIST_FIELDS = frozenset({("dropsetinfo", "drops")})
+APPENDABLE_LIST_FIELDS = frozenset({
+    ("dropsetinfo", "drops"),
+    # Whole-table writers that build the appended element themselves
+    # (#191, Expanded Vendor Inventory Rebuilt V3 + its Dye Addon).
+    ("storeinfo", "stock_data_list"),
+    ("npcinfo", "dye_color_group_data_list"),
+    ("npcinfo", "dye_texture_set_data_list"),
+    ("dyecolorgroupinfo", "dye_color_data_list"),
+})
+
+# storeinfo per-slot edits: ``stock_data_list[N].raw_c`` (quantity) and
+# ``stock_data_list[N].sub_data`` (null to clear) on an EXISTING vanilla
+# slot N. Handled by the storeinfo whole-table writer (#191).
+_STOREINFO_SLOT_RE = re.compile(r"^stock_data_list\[\d+\]\.(raw_c|sub_data)$")
 
 
 def _classify_array_append(
@@ -1088,6 +1126,24 @@ LIST_WRITERS: dict[tuple[str, str], str] = {
         "storeinfo_writer.build_storeinfo_changes",
     ("storeinfo", "_exchangeItemInfoListForSell"):
         "storeinfo_writer.build_storeinfo_changes",
+    # npcinfo dye lists (GitHub #393, donr484's Dye Hard): whole-table
+    # writer that rebuilds a Dyer's two dye lists (which grow) plus the
+    # companion .pabgh. Dispatched via the whole-table branch in
+    # format3_apply; registered here so validation accepts the fields.
+    ("npcinfo", "dye_color_group_data_list"):
+        "npcinfo_writer.build_npcinfo_changes",
+    ("npcinfo", "_dyeColorGroupDataList"):
+        "npcinfo_writer.build_npcinfo_changes",
+    ("npcinfo", "dye_texture_set_data_list"):
+        "npcinfo_writer.build_npcinfo_changes",
+    ("npcinfo", "_dyeTextureSetDataList"):
+        "npcinfo_writer.build_npcinfo_changes",
+    # dyecolorgroupinfo colour lists (#191, Expanded Vendor Inventory
+    # Rebuilt V3 Dye Addon): list at payload start, grows, .pabgh shift.
+    ("dyecolorgroupinfo", "dye_color_data_list"):
+        "dyecolorgroupinfo_writer.build_dyecolorgroupinfo_changes",
+    ("dyecolorgroupinfo", "_dyeColorDataList"):
+        "dyecolorgroupinfo_writer.build_dyecolorgroupinfo_changes",
     # Equipslotinfo whole-table writer (GitHub #190): rewrites a
     # record's etl_hashes list + the companion .pabgh. The wildcard
     # key matches 'entries[N].etl_hashes' for any N via the indexed-
@@ -1210,7 +1266,7 @@ def _diagnose_unsupported_intent(
         # those at validation , the apply-time helper does the real
         # resolution and emits zero-bytes-cleanly when an item is
         # behind an unknown variant tag.
-        tn = (table_name or "").lower().replace(".pabgb", "")
+        tn = strip_body_ext(table_name or "")
         if tn == "buffinfo" and (field or "").startswith(
                 "buff_data_list["):
             return None
@@ -1256,6 +1312,8 @@ def _diagnose_unsupported_intent(
         if tn == "multichangeinfo" and (field or "").startswith(
                 "fixed_material_data_list["):
             return None
+        if tn == "storeinfo" and _STOREINFO_SLOT_RE.match(field or ""):
+            return None
         # GitHub #150 (Female Animations): characterinfo
         # upper_chart.group_lookup / lower_chart.group_lookup are
         # resolved by the clean-room characterinfo writer.
@@ -1281,7 +1339,7 @@ def _diagnose_unsupported_intent(
     if isinstance(new_value, list) and new_value and isinstance(
             new_value[0], dict):
         # Table-specific list-writer registered? Allow.
-        tn = (table_name or "").lower().replace(".pabgb", "")
+        tn = strip_body_ext(table_name or "")
         if (tn, field) in LIST_WRITERS:
             return None
         return (
@@ -1414,9 +1472,11 @@ def _classify_intent(
     # resolve, so a typo in the nested path produces a clean
     # "0 byte changes" warning rather than a misleading
     # "add a field_schema entry" instruction the author can't act on.
-    tn_norm = (table_name or "").lower().replace(".pabgb", "")
+    tn_norm = strip_body_ext(table_name or "")
     if tn_norm == "buffinfo" and intent.field.startswith(
             "buff_data_list["):
+        return None
+    if tn_norm == "storeinfo" and _STOREINFO_SLOT_RE.match(intent.field):
         return None
 
     # interactioninfo (Fast Pickup - Increase Range): the pivot list is
